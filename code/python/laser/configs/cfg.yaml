@@ -1,0 +1,83 @@
+# Problem
+prob:
+  name: knapsack
+  size: "7_40"
+  split: val
+  num_objs: 7
+  num_vars: 40
+  order: MinWt
+  layer_norm_const: 100
+  state_norm_const: 1000
+
+
+# Knapsack
+knapsack:
+  sizes:
+    - "7_40"
+
+# Training
+train:
+  epochs: 1
+  from_pid: 0
+  to_pid: 1
+  inst_per_step: 1
+  neg_pos_ratio: 1
+  batch_size: 512
+  shuffle: true
+  verbose: false
+  checkpoint_dir: train_log
+
+
+# Validation
+val:
+  from_pid: 1000
+  to_pid: 1001
+  inst_per_step: 1
+  neg_pos_ratio: -1
+  batch_size: 512
+  shuffle: false
+  every: 1
+  checkpoint_dir: val_log
+
+
+# Prediction task
+# classification or regression
+pred_task: classification
+
+# Model
+mdl:
+  # Instance encoder
+  ie:
+    in_dim: 8
+    out_dim: 16
+    hidden_dim: 32
+  # Context encoder
+  ce:
+    in_dim: 9
+    out_dim: 16
+    hidden_dim: 32
+  # Parent encoder
+  pe:
+    in_dim: 2
+    out_dim: 16
+    hidden_dim: 32
+  # Node encoder
+  ne:
+    - 32
+    - 16
+
+
+# Optimizer
+opt:
+  name: Adam
+  lr: 0.001
+
+# Loss function
+loss:
+  name: BCELoss
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
