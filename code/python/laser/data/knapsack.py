@@ -67,12 +67,17 @@ def read_instance(archive, inst):
 
 
 def get_instance_data(problem, size, split, pid):
+    # TODO: At the moment the all the instances should be mapped to 1000-1009 of the validation set.
+    #  It should be removed this as soon as possible.
     if problem == 'knapsack':
         prefix = 'kp_7'
 
     archive = resource_path / f"instances/{problem}/{size}.zip"
     # archive = ROOTPATH / f'resources/instances/knapsack/{size}.zip'
-    inst = f'{size}/{split}/{prefix}_{size}_{pid}.dat'
+    # TODO: Change this to the respective split instead of val
+    # inst = f'{size}/{split}/{prefix}_{size}_{pid}.dat'
+    pid_val = (pid % 10) + 1000
+    inst = f'{size}/val/{prefix}_{size}_{pid_val}.dat'
     data = read_instance(archive, inst)
     return data
 
@@ -135,13 +140,31 @@ class BDDDataLoader:
 
     def _get_knapsack_bdd_dataset(self,
                                   split="val",
-                                  pid=1000,
-                                  wt_layer_scheme='linear'):
+                                  pid=1000):
         rng = random.Random(100)
         # Load bdd
         bdd = get_bdd_data(self.cfg.prob.name, self.cfg.prob.size, split, pid)
+        lidxs = [lidx / self.cfg.prob.num_vars for lidx in range(self.cfg.prob.num_vars)]
+
         # Set layer weights
-        layer_weight = [(self.cfg.prob.num_vars - lidx) / self.cfg.prob.num_vars for lidx in range(len(bdd))]
+        if self.cfg.train.layer_penalty == "const":
+            layer_weight = [1 for _ in self.cfg.prob.num_vars]
+        elif self.cfg.train.layer_penalty == "linear":
+            layer_weight = [1 - lidx for lidx in lidxs]
+        elif self.cfg.train.layer_penalty == "exponential":
+            layer_weight = [np.exp(-0.5 * lidx) for lidx in lidxs]
+        elif self.cfg.prob.wt_layer == "linearE":
+            layer_weight = [(np.exp(-0.5) - 1) * lidx + 1
+                            for lidx in lidxs]
+        elif self.cfg.prob.wt_layer == "quadratic":
+            layer_weight = [(np.exp(-0.5) - 1) * (lidx ** 2) + 1
+                            for lidx in lidxs]
+        elif self.cfg.prob.wt_layer == "sigmoidal":
+            layer_weight = [(1 + np.exp(-0.5)) / (1 + np.exp(lidx - 0.5))
+                            for lidx in lidxs]
+        else:
+            raise ValueError("Invalid layer penalty scheme!")
+
         # Get instance features
         data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, split, pid)
         order = get_order(self.cfg.prob.name, self.cfg.prob.order, data)
@@ -156,6 +179,8 @@ class BDDDataLoader:
         wt_layer, wt_label = [], []
         labels = []
         for lidx, layer in enumerate(bdd):
+            if lidx > self.cfg[split].dataset_upto_layer:
+                break
             _node_feat, _parents_feat = [], []
             _wt_layer, _wt_label = [], []
             _labels = []
