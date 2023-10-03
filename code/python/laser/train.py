@@ -10,9 +10,21 @@ from torchmetrics.classification import StatScores
 
 from laser.data import dataloader_factory
 from laser.model import model_factory
-from laser.utils import checkpoint, update_scores, calculate_accuracy, print_result
+from laser.utils import calculate_accuracy
+from laser.utils import checkpoint
+from laser.utils import get_context_features
+from laser.utils import print_result
+from laser.utils import update_scores
 
 statscores = StatScores(task='binary', multidim_average='samplewise')
+
+train_dataloader_dict = {}
+val_dataloader_dict = {}
+
+def set_seed(seed):
+    random.seed = seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
 
 
 def init_optimizer(cfg, model):
@@ -26,25 +38,8 @@ def init_loss_fn(cfg):
     return nn.BCELoss()
 
 
-def get_context_features(layer_idxs, inst_feat, num_objs, num_vars):
-    max_lidx = np.max(layer_idxs)
-    context = []
-    for inst_idx, lidx in enumerate(layer_idxs):
-        _inst_feat = inst_feat[inst_idx, :lidx, :]
-
-        ranks = (torch.arange(lidx).reshape(-1, 1) + 1) / num_vars
-        _context = torch.concat((_inst_feat, ranks), axis=1)
-
-        ranks_pad = torch.zeros(max_lidx - _inst_feat.shape[0], num_objs + 2)
-        _context = torch.concat((_context, ranks_pad), axis=0)
-
-        context.append(_context)
-    context = torch.stack(context)
-
-    return context
-
-
-def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_const=100):
+def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_const=100,
+               flag_layer_penalty=False, flag_label_penalty=False):
     model.train()
     scores = None
 
@@ -53,13 +48,21 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
         nf, pf, inst_feat, wtlayer, wtlabel, label = (batch['nf'], batch['pf'], batch['if'],
                                                       batch['wtlayer'], batch['wtlabel'], batch['label'])
 
-        # Get layer ids of the nodes in the current batch
+        # Get layer ids of the nodes in the current batch and predict
         lidxs_t = nf[:, 1] * layer_norm_const
         lidxs = list(map(int, lidxs_t.numpy()))
         context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars)
-
         preds = model(inst_feat, context_feat, nf, pf)
+
+        # Weighted loss
+        weight = None
+        if flag_layer_penalty:
+            weight = wtlayer
+        if flag_label_penalty:
+            weight = wtlabel if weight is None else weight * wtlabel
+        loss_fn = nn.BCELoss(weight=weight.reshape(-1, 1))
         loss_batch = loss_fn(preds, label)
+
         opt.zero_grad()
         loss_batch.backward()
         opt.step()
@@ -71,8 +74,7 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
     return scores.numpy()
 
 
-def train_loop(cfg, epoch, model, loss_fn, optimizer, layer_norm_const=100, verbose=True):
-    rng = random.Random(100)
+def train_loop(cfg, epoch, model, loss_fn, optimizer, dataloader):
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
@@ -84,20 +86,23 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer, layer_norm_const=100, verb
                                     cfg.train.inst_per_step)):
         # Train over n instance
         _to_pid = pid + cfg.train.inst_per_step
-        dataloader_cls = dataloader_factory.get(cfg.prob.name)
-        dataloader = dataloader_cls(cfg)
-        train_dataloader = dataloader.get("train", pid, _to_pid)
+        if pid not in train_dataloader_dict:
+            train_dataloader_dict[pid] = dataloader.get("train", pid, _to_pid)
+        train_dataloader = train_dataloader_dict.get(pid)
+
         scores = train_step(model,
                             loss_fn,
                             optimizer,
                             train_dataloader,
                             cfg.prob.num_objs,
                             cfg.prob.num_vars,
-                            layer_norm_const=layer_norm_const)
+                            layer_norm_const=cfg.prob.layer_norm_const,
+                            flag_layer_penalty=cfg.train.flag_layer_penalty,
+                            flag_label_penalty=cfg.train.flag_label_penalty)
         scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
 
         # Print after each batch of instances is processed
-        if verbose:
+        if cfg.train.verbose:
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             print_result(epoch,
                          "Train",
@@ -134,7 +139,7 @@ def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
     return scores.numpy()
 
 
-def val_loop(cfg, epoch, model, layer_norm_const=100):
+def val_loop(cfg, epoch, model, dataloader):
     rng = random.Random(100)
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
@@ -144,14 +149,15 @@ def val_loop(cfg, epoch, model, layer_norm_const=100):
                                     cfg.val.to_pid,
                                     cfg.val.inst_per_step)):
         _to_pid = pid + cfg.val.inst_per_step
-        dataloader_cls = dataloader_factory.get(cfg.prob.name)
-        dataloader = dataloader_cls(cfg)
-        val_dataloader = dataloader.get("val", pid, _to_pid)
+        if pid not in val_dataloader_dict:
+            val_dataloader_dict[pid] = dataloader.get("val", pid, _to_pid)
+        val_dataloader = val_dataloader_dict.get(pid)
+
         scores = val_step(model,
                           val_dataloader,
                           cfg.prob.num_objs,
                           cfg.prob.num_vars,
-                          layer_norm_const=layer_norm_const)
+                          layer_norm_const=cfg.prob.layer_norm_const)
         scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
 
     return scores_df, tp, fp, tn, fn
@@ -165,6 +171,9 @@ def main(cfg):
     optimizer = init_optimizer(cfg, model)
     loss_fn = init_loss_fn(cfg)
 
+    dataloader_cls = dataloader_factory.get(cfg.prob.name)
+    dataloader = dataloader_cls(cfg)
+
     best_acc = 0
     for epoch in range(cfg.train.epochs):
         train_result = train_loop(cfg,
@@ -172,8 +181,7 @@ def main(cfg):
                                   model,
                                   loss_fn,
                                   optimizer,
-                                  layer_norm_const=cfg.prob.layer_norm_const,
-                                  verbose=cfg.train.verbose)
+                                  dataloader)
         scores_df, tp, fp, tn, fn = train_result
 
         # Log training accuracy metrics
@@ -183,13 +191,14 @@ def main(cfg):
                      acc=acc,
                      correct=correct,
                      total=total)
-        checkpoint(cfg.train.checkpoint_dir,
+        checkpoint(cfg,
+                   "train",
                    epoch=epoch,
                    model=model,
                    scores_df=scores_df)
 
         if (epoch + 1) % cfg.val.every == 0:
-            val_result = val_loop(cfg, epoch, model, layer_norm_const=cfg.prob.layer_norm_const)
+            val_result = val_loop(cfg, epoch, model, dataloader)
             scores_df, tp, fp, tn, fn = val_result
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             is_best = acc > best_acc
@@ -203,11 +212,15 @@ def main(cfg):
                          correct=correct,
                          total=total,
                          is_best=is_best)
-            if is_best:
-                checkpoint(cfg.val.checkpoint_dir,
-                           epoch=epoch,
-                           model=model,
-                           scores_df=scores_df)
+
+            checkpoint(cfg,
+                       "val",
+                       epoch=epoch,
+                       model=model,
+                       scores_df=scores_df,
+                       is_best=is_best)
+
+        print()
 
 
 if __name__ == "__main__":

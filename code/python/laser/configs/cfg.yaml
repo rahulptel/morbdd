@@ -1,44 +1,59 @@
-# Problem
 prob:
   name: knapsack
-  size: "7_40"
-  split: val
+  size: ${num_objs}_${num_vars}
   num_objs: 7
   num_vars: 40
   order: MinWt
   layer_norm_const: 100
   state_norm_const: 1000
 
-
-# Knapsack
-knapsack:
-  sizes:
-    - "7_40"
-
-# Training
 train:
-  epochs: 1
+  epochs: 50
   from_pid: 0
-  to_pid: 1
-  inst_per_step: 1
+  to_pid: 10
+  inst_per_step: 10
   neg_pos_ratio: 1
   batch_size: 512
   shuffle: true
   verbose: false
-  checkpoint_dir: train_log
+  log_dir: train_log
+  dataset_upto_layer: 10
+  flag_layer_penalty: true
+  # layer in [0, 1], 0 for root and 1 for terminal
+  # const:        1
+  # linear:       1 - layer
+  # linearE:      e^(-0.5 - 1) * layer + 1
+  # exponential:  e^(-0.5 - layer)
+  # quadratic:    e^(-0.5 - 1) * layer^2 + 1
+  # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
+  layer_penalty: exponential
+  flag_label_penalty: false
 
-
-# Validation
 val:
   from_pid: 1000
-  to_pid: 1001
-  inst_per_step: 1
+  to_pid: 1010
+  inst_per_step: 10
+  neg_pos_ratio: 1
+  batch_size: 512
+  shuffle: false
+  log_dir: val_log
+  dataset_upto_layer: ${train.dataset_upto_layer}
+  every: 1
+
+
+test:
+  from_pid: 1000
+  to_pid: 1010
+  inst_per_step: 10
+  # -1 to use all negative samples
   neg_pos_ratio: -1
   batch_size: 512
   shuffle: false
-  every: 1
-  checkpoint_dir: val_log
-
+  log_dir: test_log
+  dataset_upto_layer: ${train.dataset_upto_layer}
+  best: true
+  epoch: false
+  epoch_idx: 0
 
 # Prediction task
 # classification or regression
@@ -76,6 +91,7 @@ opt:
 loss:
   name: BCELoss
 
+seed: 789541
 
 hydra:
   output_subdir: null
