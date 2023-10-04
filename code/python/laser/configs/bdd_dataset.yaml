@@ -1,0 +1,20 @@
+prob: knapsack
+num_objs: 7
+num_vars: 40
+size: ${num_objs}_${num_vars}
+split: train
+from_pid: 0
+to_pid: 1
+
+# 1: Knapsack
+problem_type: 1
+# Don't change this
+preprocess: 0
+# 0: Exact
+# 1: Restricted
+bdd_type: 0
+# To be used when constructing restricted BDD.
+# Set it to zero for exact.
+maxwidth: 0
+# MinWt | MaxRatio
+order_type: MinWt
