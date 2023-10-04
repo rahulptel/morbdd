@@ -6,20 +6,22 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import ConcatDataset
+from torch.utils.data import DataLoader
 from torchmetrics.classification import StatScores
 
-from laser.data import dataloader_factory
 from laser.model import model_factory
 from laser.utils import calculate_accuracy
 from laser.utils import checkpoint
 from laser.utils import get_context_features
+from laser.utils import get_dataset
 from laser.utils import print_result
 from laser.utils import update_scores
 
 statscores = StatScores(task='binary', multidim_average='samplewise')
 
-train_dataloader_dict = {}
-val_dataloader_dict = {}
+dataset_dict = {}
+
 
 def set_seed(seed):
     random.seed = seed
@@ -74,26 +76,32 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
     return scores.numpy()
 
 
-def train_loop(cfg, epoch, model, loss_fn, optimizer, dataloader):
+def train_loop(cfg, epoch, model, loss_fn, optimizer):
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
     scores_df = pd.DataFrame(scores, columns=["layer", "TP", "FP", "TN", "FN", "Support"])
     scores_df["layer"] = list(map(int, scores_df["layer"]))
 
-    for idx, pid in enumerate(range(cfg.train.from_pid,
-                                    cfg.train.to_pid,
-                                    cfg.train.inst_per_step)):
-        # Train over n instance
-        _to_pid = pid + cfg.train.inst_per_step
-        if pid not in train_dataloader_dict:
-            train_dataloader_dict[pid] = dataloader.get("train", pid, _to_pid)
-        train_dataloader = train_dataloader_dict.get(pid)
+    pids = list(range(cfg.train.from_pid, cfg.train.to_pid))
+    random.shuffle(pids)
+    idx = 0
+    while idx < len(pids):
+        to_pid = int(np.max(idx + cfg.train.inst_per_step, len(pids)))
+        _pids = pids[idx: to_pid]
+
+        datasets = []
+        for pid in _pids:
+            if pid not in dataset_dict:
+                dataset_dict[pid] = get_dataset(cfg.prob.name, "train", pid)
+            datasets.append(dataset_dict[pid])
+        dataset = ConcatDataset(datasets)
+        dataloader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True)
 
         scores = train_step(model,
                             loss_fn,
                             optimizer,
-                            train_dataloader,
+                            dataloader,
                             cfg.prob.num_objs,
                             cfg.prob.num_vars,
                             layer_norm_const=cfg.prob.layer_norm_const,
@@ -111,6 +119,8 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer, dataloader):
                          correct=correct,
                          total=total,
                          inst_per_step=cfg.train.inst_per_step)
+
+        idx += cfg.train.inst_per_step
 
     return scores_df, tp, fp, tn, fn
 
@@ -139,26 +149,35 @@ def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
     return scores.numpy()
 
 
-def val_loop(cfg, epoch, model, dataloader):
+def val_loop(cfg, epoch, model):
     rng = random.Random(100)
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
     scores_df = pd.DataFrame(scores, columns=["layer", "TP", "FP", "TN", "FN", "Support"])
-    for idx, pid in enumerate(range(cfg.val.from_pid,
-                                    cfg.val.to_pid,
-                                    cfg.val.inst_per_step)):
-        _to_pid = pid + cfg.val.inst_per_step
-        if pid not in val_dataloader_dict:
-            val_dataloader_dict[pid] = dataloader.get("val", pid, _to_pid)
-        val_dataloader = val_dataloader_dict.get(pid)
+
+    pids = list(range(cfg.train.from_pid, cfg.train.to_pid))
+    random.shuffle(pids)
+    idx = 0
+    while idx < len(pids):
+        to_pid = int(np.max(idx + cfg.train.inst_per_step, len(pids)))
+        _pids = pids[idx: to_pid]
+
+        datasets = []
+        for pid in _pids:
+            if pid not in dataset_dict:
+                dataset_dict[pid] = get_dataset(cfg.prob.name, "val", pid)
+            datasets.append(dataset_dict[pid])
+        dataset = ConcatDataset(datasets)
+        dataloader = DataLoader(dataset, batch_size=cfg.val.batch_size, shuffle=True)
 
         scores = val_step(model,
-                          val_dataloader,
+                          dataloader,
                           cfg.prob.num_objs,
                           cfg.prob.num_vars,
                           layer_norm_const=cfg.prob.layer_norm_const)
         scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
+        idx += cfg.train.inst_per_step
 
     return scores_df, tp, fp, tn, fn
 
@@ -171,17 +190,13 @@ def main(cfg):
     optimizer = init_optimizer(cfg, model)
     loss_fn = init_loss_fn(cfg)
 
-    dataloader_cls = dataloader_factory.get(cfg.prob.name)
-    dataloader = dataloader_cls(cfg)
-
     best_acc = 0
     for epoch in range(cfg.train.epochs):
         train_result = train_loop(cfg,
                                   epoch,
                                   model,
                                   loss_fn,
-                                  optimizer,
-                                  dataloader)
+                                  optimizer)
         scores_df, tp, fp, tn, fn = train_result
 
         # Log training accuracy metrics
@@ -198,7 +213,7 @@ def main(cfg):
                    scores_df=scores_df)
 
         if (epoch + 1) % cfg.val.every == 0:
-            val_result = val_loop(cfg, epoch, model, dataloader)
+            val_result = val_loop(cfg, epoch, model)
             scores_df, tp, fp, tn, fn = val_result
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             is_best = acc > best_acc
