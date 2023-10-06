@@ -56,6 +56,9 @@ def main(cfg):
         archive = resource_path / f"sols/{cfg.prob}/{cfg.size}.zip"
         file = f"{cfg.size}/{cfg.split}/{pid}.json"
         sol = read_from_zip(archive, file, format="json")
+        # Ignore instances not solved within time limit
+        if sol is None:
+            continue
 
         # Extract BDD before reduction
         print("\tExtracting non-reduced BDD...")
