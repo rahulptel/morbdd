@@ -38,14 +38,18 @@ class KnapsackBDDDataset(Dataset):
 
 
 def read_from_zip(archive, file, format="raw"):
-    zf = zipfile.ZipFile(archive)
-    raw_data = zf.open(file, "r")
+    try:
+        zf = zipfile.ZipFile(archive)
+        raw_data = zf.open(file, "r")
+    except:
+        raw_data = None
 
     data = None
-    if format == "raw":
-        data = raw_data
-    elif format == "json":
-        data = json.load(raw_data)
+    if raw_data is not None:
+        if format == "raw":
+            data = raw_data
+        elif format == "json":
+            data = json.load(raw_data)
 
     return data
 
@@ -247,11 +251,11 @@ def convert_bdd_to_tensor_data(problem,
         # Get node and parent features
         node_feat, parents_feat = [], []
         wt_layer, wt_label = [], []
-        labels = []
+        scores, labels = [], []
         for lidx, layer in enumerate(_bdd):
             _node_feat, _parents_feat = [], []
             _wt_layer, _wt_label = [], []
-            _labels = []
+            _scores, _labels = [], []
             num_pos = np.sum([1 for node in layer if node['l'] == 1])
             for nidx, node in enumerate(layer):
                 # Append to global
@@ -267,6 +271,7 @@ def convert_bdd_to_tensor_data(problem,
                                                             state_norm_const))
                     wt_layer.append(layer_weight[lidx])
                     wt_label.append(1)
+                    scores.append(node["score"])
                     labels.append(1)
                     # Append to local
                 else:
@@ -281,6 +286,7 @@ def convert_bdd_to_tensor_data(problem,
                                                              state_norm_const))
                     _wt_layer.append(layer_weight[lidx])
                     _wt_label.append(1 / neg_pos_ratio)
+                    _scores.append(0)
                     _labels.append(0)
 
             # Select samples from local to append to the global
@@ -290,6 +296,7 @@ def convert_bdd_to_tensor_data(problem,
                 parents_feat.extend(_parents_feat)
                 wt_layer.extend(_wt_layer)
                 wt_label.extend(_wt_label)
+                scores.extend(_scores)
                 labels.extend(_labels)
             else:
                 neg_idxs = list(range(len(_labels)))
@@ -303,6 +310,7 @@ def convert_bdd_to_tensor_data(problem,
                     parents_feat.append(_parents_feat[nidx])
                     wt_layer.append(_wt_layer[nidx])
                     wt_label.append(_wt_label[nidx])
+                    scores.append(_scores[nidx])
                     labels.append(_labels[nidx])
 
         # Pad parents
@@ -319,7 +327,8 @@ def convert_bdd_to_tensor_data(problem,
                     "if": np.array(inst_feat).T,
                     "wtlayer": np.array(wt_layer),
                     "wtlabel": np.array(wt_label),
-                    "label": np.array(labels).reshape(-1, 1)}
+                    "label": np.array(labels).reshape(-1, 1),
+                    "score": np.array(scores).reshape(-1, 1)}
         bdd_data = {k: np2tensor(v) for k, v in bdd_data.items()}
 
         return bdd_data
