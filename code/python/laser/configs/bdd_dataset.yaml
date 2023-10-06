@@ -1,3 +1,4 @@
+# Problem parameters
 prob: knapsack
 num_objs: 7
 num_vars: 40
@@ -6,6 +7,7 @@ split: train
 from_pid: 0
 to_pid: 1
 
+# C++ lib parameters
 # 1: Knapsack
 problem_type: 1
 # Don't change this
@@ -18,3 +20,28 @@ bdd_type: 0
 maxwidth: 0
 # MinWt | MaxRatio
 order_type: MinWt
+
+# Dataset parameters
+neg_pos_ratio_all:
+  train: 1
+  val: 1
+  test: -1
+# layer in [0, 1], 0 for root and 1 for terminal
+# const:        1
+# linear:       1 - layer
+# linearE:      e^(-0.5 - 1) * layer + 1
+# exponential:  e^(-0.5 - layer)
+# quadratic:    e^(-0.5 - 1) * layer^2 + 1
+# sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
+layer_penalty: exponential
+state_norm_const: 1000
+layer_norm_const: 100
+neg_pos_ratio: ${neg_pos_ratio_all[${split}]}
+min_samples: 0
+seed: 789541
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
