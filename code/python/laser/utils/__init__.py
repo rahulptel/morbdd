@@ -14,10 +14,12 @@ ONE_ARC = 1
 
 
 class KnapsackBDDDataset(Dataset):
-    def __init__(self, size, split, pid):
+    def __init__(self, size=None, split=None, pid=None, neg_pos_ratio=None, min_samples=None):
         super(KnapsackBDDDataset, self).__init__()
 
-        data = torch.load(resource_path / f"datasets/knapsack/{size}/{split}/{pid}.pt")
+        dtype = f"npr{neg_pos_ratio}ms{min_samples}"
+        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}.zip")
+        data = torch.load(zf.open(f"{split}/{dtype}/{pid}.pt"))
         self.node_feat = data["nf"]
         self.parent_feat = data["pf"]
         self.inst_feat = data["if"]
@@ -345,12 +347,21 @@ def convert_bdd_to_tensor_data(problem,
     torch.save(data, file_path)
 
 
-def get_dataset(problem, split, pid):
+def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
     def get_dataset_knapsack():
-        return KnapsackBDDDataset(split=split, pid=pid)
+        return KnapsackBDDDataset(size=size,
+                                  split=split,
+                                  pid=pid,
+                                  neg_pos_ratio=neg_pos_ratio,
+                                  min_samples=min_samples)
 
+    dataset = None
     if problem == "knapsack":
-        get_dataset_knapsack()
+        dataset = get_dataset_knapsack()
+
+    assert dataset is not None
+
+    return dataset
 
 
 def get_dataloader(dataset, batch_size, shuffle=True):
@@ -362,13 +373,15 @@ def update_scores(scores_df, scores, tp, fp, tn, fn):
     fp += scores[:, 2].sum()
     tn += scores[:, 3].sum()
     fn += scores[:, 4].sum()
-    for i in range(scores.shape[0]):
-        layer = int(scores[i][0])
-        scores_df.loc[layer, "TP"] += scores[i][1]
-        scores_df.loc[layer, "FP"] += scores[i][2]
-        scores_df.loc[layer, "TN"] += scores[i][3]
-        scores_df.loc[layer, "FN"] += scores[i][4]
-        scores_df.loc[layer, "Support"] += scores[i][5]
+    for layer in range(40):
+        _scores = scores[scores[:, 0] == layer]
+        if _scores.shape[0] > 0:
+            _sum = _scores.sum(axis=0)
+            scores_df.loc[layer, "TP"] += _sum[1]
+            scores_df.loc[layer, "FP"] += _sum[2]
+            scores_df.loc[layer, "TN"] += _sum[3]
+            scores_df.loc[layer, "FN"] += _sum[4]
+            scores_df.loc[layer, "Support"] += _sum[5]
 
     return scores_df, tp, fp, tn, fn
 
@@ -386,13 +399,15 @@ def print_result(epoch,
                  correct=None,
                  total=None,
                  inst_per_step=None,
-                 is_best=None):
+                 is_best=None,
+                 pre_space='\t\t'):
     is_best_str = " -- BEST ACC" if is_best else ""
+    print(f"{pre_space}------------------------------------------------")
     if pid is not None and inst_per_step is not None:
-        print(f"\tEpoch: {epoch}, Inst: {pid}-{pid + inst_per_step}, "
-              f"{split} acc: {acc:.2f}, {correct}, {total}")
+        print(f"{pre_space}Inst: {pid}-{pid + inst_per_step}, "
+              f"Acc: {acc:.2f}, Correct: {correct}, Total: {total}")
     else:
-        print(f"\tEpoch: {epoch}, {split} acc: {acc:.2f}, {correct}, {total} {is_best_str}")
+        print(f"{pre_space}Acc: {acc:.2f}, Correct: {correct}, Total: {total} {is_best_str}")
 
 
 def get_log_dir_name(cfg):
