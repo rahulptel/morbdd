@@ -194,15 +194,20 @@ def get_parent_features(problem, node, bdd, lidx, state_norm_const):
             parent_state = 0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / state_norm_const
             parents_feat.append([ONE_ARC, parent_state])
 
-        for p in node['zp']:
+        for _ in node['zp']:
             # Parent state will be the same as the current state for zero-arc
             parent_state = node['s'][0] / state_norm_const
             parents_feat.append([ZERO_ARC, parent_state])
 
         return parents_feat
 
+    parent_features = None
     if problem == "knapsack":
-        get_parent_features_knapsack()
+        parent_features = get_parent_features_knapsack()
+
+    assert parent_features is not None
+
+    return parent_features
 
 
 def np2tensor(data):
@@ -210,6 +215,7 @@ def np2tensor(data):
 
 
 def convert_bdd_to_tensor_data(problem,
+                               bdd=None,
                                num_objs=None,
                                num_vars=None,
                                split=None,
@@ -219,13 +225,14 @@ def convert_bdd_to_tensor_data(problem,
                                state_norm_const=1000,
                                layer_norm_const=100,
                                neg_pos_ratio=1,
+                               min_samples=0,
                                random_seed=100):
     size = f"{num_objs}_{num_vars}"
 
     def convert_bdd_to_tensor_dataset_knapsack():
         rng = random.Random(random_seed)
         # Load bdd
-        bdd = get_bdd_data(problem, size, split, pid)
+        _bdd = get_bdd_data(problem, size, split, pid) if bdd is None else bdd
         layer_weight = get_layer_weights(layer_penalty, num_vars)
 
         # Get instance features
@@ -241,7 +248,7 @@ def convert_bdd_to_tensor_data(problem,
         node_feat, parents_feat = [], []
         wt_layer, wt_label = [], []
         labels = []
-        for lidx, layer in enumerate(bdd):
+        for lidx, layer in enumerate(_bdd):
             _node_feat, _parents_feat = [], []
             _wt_layer, _wt_label = [], []
             _labels = []
@@ -253,8 +260,9 @@ def convert_bdd_to_tensor_data(problem,
                     node_feat.append([node['s'][0] / state_norm_const,
                                       (lidx + 1) / layer_norm_const])
                     # Extract parent feature
-                    parents_feat.append(get_parent_features(node,
-                                                            bdd,
+                    parents_feat.append(get_parent_features(problem,
+                                                            node,
+                                                            _bdd,
                                                             lidx,
                                                             state_norm_const))
                     wt_layer.append(layer_weight[lidx])
@@ -268,7 +276,7 @@ def convert_bdd_to_tensor_data(problem,
                     # Extract parent feature
                     _parents_feat.append(get_parent_features(problem,
                                                              node,
-                                                             bdd,
+                                                             _bdd,
                                                              lidx,
                                                              state_norm_const))
                     _wt_layer.append(layer_weight[lidx])
@@ -286,7 +294,10 @@ def convert_bdd_to_tensor_data(problem,
             else:
                 neg_idxs = list(range(len(_labels)))
                 rng.shuffle(neg_idxs)
-                num_neg_samples = len(_labels) if len(_labels) < num_pos else num_pos
+                num_neg_samples = np.max([neg_pos_ratio * num_pos,
+                                          min_samples])
+                num_neg_samples = np.min([num_neg_samples,
+                                          len(_labels)])
                 for nidx in neg_idxs[:num_neg_samples]:
                     node_feat.append(_node_feat[nidx])
                     parents_feat.append(_parents_feat[nidx])
@@ -318,7 +329,8 @@ def convert_bdd_to_tensor_data(problem,
         data = convert_bdd_to_tensor_dataset_knapsack()
 
     assert data is not None
-    file_path = resource_path / "datasets" / problem / size / split
+    sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
+    file_path = resource_path / "tensors" / problem / size / split / sampling_type
     file_path.mkdir(parents=True, exist_ok=True)
     file_path /= f"{pid}.pt"
     torch.save(data, file_path)
