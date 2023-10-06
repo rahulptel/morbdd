@@ -1,4 +1,5 @@
 import random
+import sys
 
 import hydra
 import numpy as np
@@ -21,6 +22,8 @@ from laser.utils import update_scores
 statscores = StatScores(task='binary', multidim_average='samplewise')
 
 dataset_dict = {}
+val_dataset = None
+val_dataloader = None
 
 
 def set_seed(seed):
@@ -40,13 +43,30 @@ def init_loss_fn(cfg):
     return nn.BCELoss()
 
 
+def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples):
+    datasets = []
+    for pid in pids:
+        if pid not in dataset_dict:
+            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples)
+        if dataset_dict[pid] is not None:
+            # print("Reading dataset ", pid)
+            datasets.append(dataset_dict[pid])
+
+    return datasets
+
+
 def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_const=100,
                flag_layer_penalty=False, flag_label_penalty=False):
     model.train()
     scores = None
 
+    num_batches = len(dataloader)
     # Train over this instance
     for bid, batch in enumerate(dataloader):
+        sys.stdout.write("\r")
+        sys.stdout.write(f"\t\tProgress: {((bid + 1) / num_batches) * 100:.2f}%")
+        sys.stdout.flush()
+
         nf, pf, inst_feat, wtlayer, wtlabel, label = (batch['nf'], batch['pf'], batch['if'],
                                                       batch['wtlayer'], batch['wtlabel'], batch['label'])
 
@@ -72,11 +92,13 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
         score = statscores(preds.clone().detach(), label)
         layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
         scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
+    print()
 
     return scores.numpy()
 
 
 def train_loop(cfg, epoch, model, loss_fn, optimizer):
+    print("\tTrain loop...")
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
@@ -84,20 +106,22 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
     scores_df["layer"] = list(map(int, scores_df["layer"]))
 
     pids = list(range(cfg.train.from_pid, cfg.train.to_pid))
+    num_pids = len(pids)
     random.shuffle(pids)
     idx = 0
-    while idx < len(pids):
-        to_pid = int(np.max(idx + cfg.train.inst_per_step, len(pids)))
+    while idx < num_pids:
+        to_pid = int(np.min([idx + cfg.train.inst_per_step, num_pids]))
         _pids = pids[idx: to_pid]
 
-        datasets = []
-        for pid in _pids:
-            if pid not in dataset_dict:
-                dataset_dict[pid] = get_dataset(cfg.prob.name, "train", pid)
-            datasets.append(dataset_dict[pid])
+        datasets = get_split_datasets(_pids, cfg.prob.name, cfg.prob.size, "train",
+                                      cfg.train.neg_pos_ratio,
+                                      cfg.train.min_samples)
+        if len(datasets) == 0:
+            continue
         dataset = ConcatDataset(datasets)
         dataloader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True)
-
+        print(f"\t\tDataset size: {len(dataset)}")
+        print(f"\t\tNumber of batches: {len(dataloader)}")
         scores = train_step(model,
                             loss_fn,
                             optimizer,
@@ -114,7 +138,7 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             print_result(epoch,
                          "Train",
-                         pid=pid,
+                         pid=idx,
                          acc=acc,
                          correct=correct,
                          total=total,
@@ -128,10 +152,14 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
 def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
     model.eval()
     scores = None
-
+    num_batches = len(dataloader)
     with torch.no_grad():
         # Train over this instance
         for bid, batch in enumerate(dataloader):
+            sys.stdout.write("\r")
+            sys.stdout.write(f"\t\tProgress: {((bid + 1) / num_batches) * 100:.2f}%")
+            sys.stdout.flush()
+
             nf, pf, inst_feat, wtlayer, wtlabel, label = (batch['nf'], batch['pf'], batch['if'],
                                                           batch['wtlayer'], batch['wtlabel'], batch['label'])
 
@@ -145,39 +173,37 @@ def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
             score = statscores(preds.clone().detach(), label)
             layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
             scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
+    print()
 
     return scores.numpy()
 
 
 def val_loop(cfg, epoch, model):
+    print("\tValidation loop...")
+    global val_dataloader, val_dataset
+
     rng = random.Random(100)
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
     scores_df = pd.DataFrame(scores, columns=["layer", "TP", "FP", "TN", "FN", "Support"])
 
-    pids = list(range(cfg.train.from_pid, cfg.train.to_pid))
-    random.shuffle(pids)
-    idx = 0
-    while idx < len(pids):
-        to_pid = int(np.max(idx + cfg.train.inst_per_step, len(pids)))
-        _pids = pids[idx: to_pid]
+    pids = list(range(cfg.val.from_pid, cfg.val.to_pid))
+    if val_dataloader is None:
+        datasets = get_split_datasets(pids, cfg.prob.name, cfg.prob.size, "val",
+                                      cfg.val.neg_pos_ratio,
+                                      cfg.val.min_samples)
+        val_dataset = ConcatDataset(datasets)
+        val_dataloader = DataLoader(val_dataset, batch_size=cfg.val.batch_size, shuffle=False)
 
-        datasets = []
-        for pid in _pids:
-            if pid not in dataset_dict:
-                dataset_dict[pid] = get_dataset(cfg.prob.name, "val", pid)
-            datasets.append(dataset_dict[pid])
-        dataset = ConcatDataset(datasets)
-        dataloader = DataLoader(dataset, batch_size=cfg.val.batch_size, shuffle=True)
-
-        scores = val_step(model,
-                          dataloader,
-                          cfg.prob.num_objs,
-                          cfg.prob.num_vars,
-                          layer_norm_const=cfg.prob.layer_norm_const)
-        scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
-        idx += cfg.train.inst_per_step
+    print(f"\t\tDataset size: {len(val_dataset)}")
+    print(f"\t\tNumber of batches: {len(val_dataloader)}")
+    scores = val_step(model,
+                      val_dataloader,
+                      cfg.prob.num_objs,
+                      cfg.prob.num_vars,
+                      layer_norm_const=cfg.prob.layer_norm_const)
+    scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
 
     return scores_df, tp, fp, tn, fn
 
@@ -192,6 +218,7 @@ def main(cfg):
 
     best_acc = 0
     for epoch in range(cfg.train.epochs):
+        print(f"Epoch {epoch}")
         train_result = train_loop(cfg,
                                   epoch,
                                   model,
