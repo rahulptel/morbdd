@@ -14,18 +14,17 @@ ONE_ARC = 1
 
 
 class KnapsackBDDDataset(Dataset):
-    def __init__(self, size=None, split=None, pid=None, neg_pos_ratio=None, min_samples=None):
+    def __init__(self, size=None, split=None, pid=None, dtype=None, device=None):
         super(KnapsackBDDDataset, self).__init__()
 
-        dtype = f"npr{neg_pos_ratio}ms{min_samples}"
         zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}.zip")
         data = torch.load(zf.open(f"{split}/{dtype}/{pid}.pt"))
-        self.node_feat = data["nf"]
-        self.parent_feat = data["pf"]
-        self.inst_feat = data["if"]
-        self.wt_layer = data["wtlayer"]
-        self.wt_label = data["wtlabel"]
-        self.labels = data["label"]
+        self.node_feat = data["nf"].to(device)
+        self.parent_feat = data["pf"].to(device)
+        self.inst_feat = data["if"].to(device)
+        self.wt_layer = data["wtlayer"].to(device)
+        self.wt_label = data["wtlabel"].to(device)
+        self.labels = data["label"].to(device)
 
     def __len__(self):
         return len(self.labels)
@@ -96,16 +95,16 @@ def get_instance_data(problem, size, split, pid):
     return data
 
 
-def get_context_features(layer_idxs, inst_feat, num_objs, num_vars):
+def get_context_features(layer_idxs, inst_feat, num_objs, num_vars, device):
     max_lidx = np.max(layer_idxs)
     context = []
     for inst_idx, lidx in enumerate(layer_idxs):
         _inst_feat = inst_feat[inst_idx, :lidx, :]
 
         ranks = (torch.arange(lidx).reshape(-1, 1) + 1) / num_vars
-        _context = torch.concat((_inst_feat, ranks), axis=1)
+        _context = torch.concat((_inst_feat, ranks.to(device)), axis=1)
 
-        ranks_pad = torch.zeros(max_lidx - _inst_feat.shape[0], num_objs + 2)
+        ranks_pad = torch.zeros(max_lidx - _inst_feat.shape[0], num_objs + 2).to(device)
         _context = torch.concat((_context, ranks_pad), axis=0)
 
         context.append(_context)
@@ -347,19 +346,22 @@ def convert_bdd_to_tensor_data(problem,
     torch.save(data, file_path)
 
 
-def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
+def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):
     def get_dataset_knapsack():
-        return KnapsackBDDDataset(size=size,
-                                  split=split,
-                                  pid=pid,
-                                  neg_pos_ratio=neg_pos_ratio,
-                                  min_samples=min_samples)
+        dtype = f"npr{neg_pos_ratio}ms{min_samples}"
+        zf = zipfile.Path(resource_path / f"tensors/knapsack/{size}/{split}.zip")
+        if zf.joinpath(f"{split}/{dtype}/{pid}.pt").exists():
+            return KnapsackBDDDataset(size=size,
+                                      split=split,
+                                      pid=pid,
+                                      dtype=dtype,
+                                      device=device)
+        else:
+            return None
 
     dataset = None
     if problem == "knapsack":
         dataset = get_dataset_knapsack()
-
-    assert dataset is not None
 
     return dataset
 

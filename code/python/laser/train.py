@@ -18,6 +18,7 @@ from laser.utils import get_context_features
 from laser.utils import get_dataset
 from laser.utils import print_result
 from laser.utils import update_scores
+import time
 
 statscores = StatScores(task='binary', multidim_average='samplewise')
 
@@ -32,6 +33,16 @@ def set_seed(seed):
     np.random.seed(seed)
 
 
+def set_device(device_type):
+    if device_type == "gpu" and torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    print("Training on ", device)
+
+    return device
+
+
 def init_optimizer(cfg, model):
     opt_cls = getattr(optim, cfg.opt.name)
     opt = opt_cls(model.parameters(), lr=cfg.opt.lr)
@@ -43,11 +54,11 @@ def init_loss_fn(cfg):
     return nn.BCELoss()
 
 
-def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples):
+def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, device):
     datasets = []
     for pid in pids:
         if pid not in dataset_dict:
-            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples)
+            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
         if dataset_dict[pid] is not None:
             # print("Reading dataset ", pid)
             datasets.append(dataset_dict[pid])
@@ -55,7 +66,7 @@ def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples):
     return datasets
 
 
-def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_const=100,
+def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, device, layer_norm_const=100,
                flag_layer_penalty=False, flag_label_penalty=False):
     model.train()
     scores = None
@@ -72,8 +83,8 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
 
         # Get layer ids of the nodes in the current batch and predict
         lidxs_t = nf[:, 1] * layer_norm_const
-        lidxs = list(map(int, lidxs_t.numpy()))
-        context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars)
+        lidxs = list(map(int, lidxs_t.cpu().numpy()))
+        context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars, device)
         preds = model(inst_feat, context_feat, nf, pf)
 
         # Weighted loss
@@ -94,10 +105,10 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, layer_norm_c
         scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
     print()
 
-    return scores.numpy()
+    return scores.cpu().numpy()
 
 
-def train_loop(cfg, epoch, model, loss_fn, optimizer):
+def train_loop(cfg, epoch, model, loss_fn, optimizer, device):
     print("\tTrain loop...")
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
@@ -115,7 +126,8 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
 
         datasets = get_split_datasets(_pids, cfg.prob.name, cfg.prob.size, "train",
                                       cfg.train.neg_pos_ratio,
-                                      cfg.train.min_samples)
+                                      cfg.train.min_samples,
+                                      device=device)
         if len(datasets) == 0:
             continue
         dataset = ConcatDataset(datasets)
@@ -128,6 +140,7 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
                             dataloader,
                             cfg.prob.num_objs,
                             cfg.prob.num_vars,
+                            device,
                             layer_norm_const=cfg.prob.layer_norm_const,
                             flag_layer_penalty=cfg.train.flag_layer_penalty,
                             flag_label_penalty=cfg.train.flag_label_penalty)
@@ -149,7 +162,7 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer):
     return scores_df, tp, fp, tn, fn
 
 
-def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
+def val_step(model, dataloader, num_objs, num_vars, device, layer_norm_const=100):
     model.eval()
     scores = None
     num_batches = len(dataloader)
@@ -165,8 +178,8 @@ def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
 
             # Get layer ids of the nodes in the current batch
             lidxs_t = nf[:, 1] * layer_norm_const
-            lidxs = list(map(int, lidxs_t.numpy()))
-            context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars)
+            lidxs = list(map(int, lidxs_t.cpu().numpy()))
+            context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars, device)
 
             preds = model(inst_feat, context_feat, nf, pf)
 
@@ -175,10 +188,10 @@ def val_step(model, dataloader, num_objs, num_vars, layer_norm_const=100):
             scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
     print()
 
-    return scores.numpy()
+    return scores.cpu().numpy()
 
 
-def val_loop(cfg, epoch, model):
+def val_loop(cfg, epoch, model, device):
     print("\tValidation loop...")
     global val_dataloader, val_dataset
 
@@ -192,7 +205,7 @@ def val_loop(cfg, epoch, model):
     if val_dataloader is None:
         datasets = get_split_datasets(pids, cfg.prob.name, cfg.prob.size, "val",
                                       cfg.val.neg_pos_ratio,
-                                      cfg.val.min_samples)
+                                      cfg.val.min_samples, device)
         val_dataset = ConcatDataset(datasets)
         val_dataloader = DataLoader(val_dataset, batch_size=cfg.val.batch_size, shuffle=False)
 
@@ -202,6 +215,7 @@ def val_loop(cfg, epoch, model):
                       val_dataloader,
                       cfg.prob.num_objs,
                       cfg.prob.num_vars,
+                      device,
                       layer_norm_const=cfg.prob.layer_norm_const)
     scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
 
@@ -210,21 +224,30 @@ def val_loop(cfg, epoch, model):
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="cfg.yaml")
 def main(cfg):
+    # Set device
+    device = set_device(cfg.device)
+
     # Get model, optimizer and loss function
     model_cls = model_factory.get("ParetoStatePredictor")
     model = model_cls(cfg.mdl)
+    model.to(device)
+
     optimizer = init_optimizer(cfg, model)
     loss_fn = init_loss_fn(cfg)
 
     best_acc = 0
     for epoch in range(cfg.train.epochs):
+        ep_start = time.time()
         print(f"Epoch {epoch}")
         train_result = train_loop(cfg,
                                   epoch,
                                   model,
                                   loss_fn,
-                                  optimizer)
+                                  optimizer,
+                                  device)
         scores_df, tp, fp, tn, fn = train_result
+        train_end = time.time()
+        print("\t\tTraining time ", train_end - ep_start)
 
         # Log training accuracy metrics
         acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
@@ -240,7 +263,11 @@ def main(cfg):
                    scores_df=scores_df)
 
         if (epoch + 1) % cfg.val.every == 0:
-            val_result = val_loop(cfg, epoch, model)
+            val_start = time.time()
+            val_result = val_loop(cfg, epoch, model, device)
+            val_end = time.time()
+            print("\t\tValidation time ", val_end - val_start)
+
             scores_df, tp, fp, tn, fn = val_result
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             is_best = acc > best_acc
@@ -262,7 +289,9 @@ def main(cfg):
                        scores_df=scores_df,
                        is_best=is_best)
 
-        print()
+        ep_end = time.time()
+
+        print("\tEpoch time: ", ep_end - ep_start)
 
 
 if __name__ == "__main__":

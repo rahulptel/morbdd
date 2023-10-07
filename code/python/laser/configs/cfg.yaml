@@ -1,23 +1,23 @@
 prob:
   name: knapsack
-  size: ${num_objs}_${num_vars}
   num_objs: 7
   num_vars: 40
+  size: ${prob.num_objs}_${prob.num_vars}
   order: MinWt
   layer_norm_const: 100
   state_norm_const: 1000
 
 train:
-  epochs: 50
+  epochs: 3
   from_pid: 0
   to_pid: 10
   inst_per_step: 10
   neg_pos_ratio: 1
+  min_samples: 0
   batch_size: 512
   shuffle: true
   verbose: false
   log_dir: train_log
-  dataset_upto_layer: 10
   flag_layer_penalty: true
   # layer in [0, 1], 0 for root and 1 for terminal
   # const:        1
@@ -32,25 +32,24 @@ train:
 val:
   from_pid: 1000
   to_pid: 1010
-  inst_per_step: 10
   neg_pos_ratio: 1
+  min_samples: 0
   batch_size: 512
   shuffle: false
   log_dir: val_log
-  dataset_upto_layer: ${train.dataset_upto_layer}
   every: 1
 
 
 test:
-  from_pid: 1000
-  to_pid: 1010
+  from_pid: 1100
+  to_pid: 1200
   inst_per_step: 10
   # -1 to use all negative samples
   neg_pos_ratio: -1
+  min_samples: 0
   batch_size: 512
   shuffle: false
   log_dir: test_log
-  dataset_upto_layer: ${train.dataset_upto_layer}
   best: true
   epoch: false
   epoch_idx: 0
@@ -58,7 +57,7 @@ test:
 # Prediction task
 # classification or regression
 pred_task: classification
-
+device: cpu
 # Model
 mdl:
   # Instance encoder
