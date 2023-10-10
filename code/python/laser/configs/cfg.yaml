@@ -8,13 +8,13 @@ prob:
   state_norm_const: 1000
 
 train:
-  epochs: 3
+  epochs: 500
   from_pid: 0
-  to_pid: 10
-  inst_per_step: 10
+  to_pid: 100
+  inst_per_step: 100
   neg_pos_ratio: 1
   min_samples: 0
-  batch_size: 512
+  batch_size: 1024
   shuffle: true
   verbose: false
   log_dir: train_log
@@ -28,17 +28,17 @@ train:
   # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
   layer_penalty: exponential
   flag_label_penalty: false
+  label_penalty:
 
 val:
   from_pid: 1000
-  to_pid: 1010
-  neg_pos_ratio: 1
-  min_samples: 0
-  batch_size: 512
+  to_pid: 1025
+  neg_pos_ratio: ${train.neg_pos_ratio}
+  min_samples: ${train.min_samples}
+  batch_size: 1024
   shuffle: false
   log_dir: val_log
   every: 1
-
 
 test:
   from_pid: 1100
@@ -53,6 +53,17 @@ test:
   best: true
   epoch: false
   epoch_idx: 0
+
+deploy:
+  split: train
+  from_pid: 0
+  to_pid: 1
+  neg_pos_ratio: -1
+  min_samples: 0
+  batch_size: 1024
+  threshold: 0.5
+  best: true
+  epoch: false
 
 # Prediction task
 # classification or regression
@@ -79,7 +90,6 @@ mdl:
   ne:
     - 32
     - 16
-
 
 # Optimizer
 opt:

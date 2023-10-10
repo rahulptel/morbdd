@@ -1,5 +1,6 @@
 import random
 import sys
+import time
 
 import hydra
 import numpy as np
@@ -17,30 +18,15 @@ from laser.utils import checkpoint
 from laser.utils import get_context_features
 from laser.utils import get_dataset
 from laser.utils import print_result
+from laser.utils import set_device
 from laser.utils import update_scores
-import time
+from laser.utils import get_split_datasets
 
 statscores = StatScores(task='binary', multidim_average='samplewise')
 
 dataset_dict = {}
 val_dataset = None
 val_dataloader = None
-
-
-def set_seed(seed):
-    random.seed = seed
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-
-
-def set_device(device_type):
-    if device_type == "gpu" and torch.cuda.is_available():
-        device = torch.device("cuda:0")
-    else:
-        device = torch.device("cpu")
-    print("Training on ", device)
-
-    return device
 
 
 def init_optimizer(cfg, model):
@@ -52,18 +38,6 @@ def init_optimizer(cfg, model):
 
 def init_loss_fn(cfg):
     return nn.BCELoss()
-
-
-def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, device):
-    datasets = []
-    for pid in pids:
-        if pid not in dataset_dict:
-            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
-        if dataset_dict[pid] is not None:
-            # print("Reading dataset ", pid)
-            datasets.append(dataset_dict[pid])
-
-    return datasets
 
 
 def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, device, layer_norm_const=100,
@@ -82,7 +56,7 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, device, laye
                                                       batch['wtlayer'], batch['wtlabel'], batch['label'])
 
         # Get layer ids of the nodes in the current batch and predict
-        lidxs_t = nf[:, 1] * layer_norm_const
+        lidxs_t = torch.round(nf[:, 1] * layer_norm_const)
         lidxs = list(map(int, lidxs_t.cpu().numpy()))
         context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars, device)
         preds = model(inst_feat, context_feat, nf, pf)
@@ -101,6 +75,7 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, device, laye
         opt.step()
 
         score = statscores(preds.clone().detach(), label)
+        score = score if len(score.shape) > 1 else score.unsqueeze(0)
         layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
         scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
     print()
@@ -110,6 +85,7 @@ def train_step(model, loss_fn, opt, dataloader, num_objs, num_vars, device, laye
 
 def train_loop(cfg, epoch, model, loss_fn, optimizer, device):
     print("\tTrain loop...")
+    global dataset_dict
     tp, fp, tn, fn = 0, 0, 0, 0
     scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
                              np.zeros((cfg.prob.num_vars, 5))), axis=1)
@@ -124,10 +100,11 @@ def train_loop(cfg, epoch, model, loss_fn, optimizer, device):
         to_pid = int(np.min([idx + cfg.train.inst_per_step, num_pids]))
         _pids = pids[idx: to_pid]
 
-        datasets = get_split_datasets(_pids, cfg.prob.name, cfg.prob.size, "train",
-                                      cfg.train.neg_pos_ratio,
-                                      cfg.train.min_samples,
-                                      device=device)
+        datasets, dataset_dict = get_split_datasets(_pids, cfg.prob.name, cfg.prob.size, "train",
+                                                    cfg.train.neg_pos_ratio,
+                                                    cfg.train.min_samples,
+                                                    dataset_dict,
+                                                    device=device)
         if len(datasets) == 0:
             continue
         dataset = ConcatDataset(datasets)
@@ -167,7 +144,6 @@ def val_step(model, dataloader, num_objs, num_vars, device, layer_norm_const=100
     scores = None
     num_batches = len(dataloader)
     with torch.no_grad():
-        # Train over this instance
         for bid, batch in enumerate(dataloader):
             sys.stdout.write("\r")
             sys.stdout.write(f"\t\tProgress: {((bid + 1) / num_batches) * 100:.2f}%")
@@ -177,13 +153,14 @@ def val_step(model, dataloader, num_objs, num_vars, device, layer_norm_const=100
                                                           batch['wtlayer'], batch['wtlabel'], batch['label'])
 
             # Get layer ids of the nodes in the current batch
-            lidxs_t = nf[:, 1] * layer_norm_const
+            lidxs_t = torch.round(nf[:, 1] * layer_norm_const)
             lidxs = list(map(int, lidxs_t.cpu().numpy()))
             context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars, device)
 
             preds = model(inst_feat, context_feat, nf, pf)
 
             score = statscores(preds.clone().detach(), label)
+            score = score if len(score.shape) > 1 else score.unsqueeze(0)
             layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
             scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
     print()
@@ -192,6 +169,7 @@ def val_step(model, dataloader, num_objs, num_vars, device, layer_norm_const=100
 
 
 def val_loop(cfg, epoch, model, device):
+    global dataset_dict
     print("\tValidation loop...")
     global val_dataloader, val_dataset
 
@@ -203,9 +181,11 @@ def val_loop(cfg, epoch, model, device):
 
     pids = list(range(cfg.val.from_pid, cfg.val.to_pid))
     if val_dataloader is None:
-        datasets = get_split_datasets(pids, cfg.prob.name, cfg.prob.size, "val",
-                                      cfg.val.neg_pos_ratio,
-                                      cfg.val.min_samples, device)
+        datasets, dataset_dict = get_split_datasets(pids, cfg.prob.name, cfg.prob.size, "val",
+                                                    cfg.val.neg_pos_ratio,
+                                                    cfg.val.min_samples,
+                                                    dataset_dict,
+                                                    device)
         val_dataset = ConcatDataset(datasets)
         val_dataloader = DataLoader(val_dataset, batch_size=cfg.val.batch_size, shuffle=False)
 

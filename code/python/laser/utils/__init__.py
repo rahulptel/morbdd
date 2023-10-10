@@ -412,28 +412,46 @@ def print_result(epoch,
         print(f"{pre_space}Acc: {acc:.2f}, Correct: {correct}, Total: {total} {is_best_str}")
 
 
-def get_log_dir_name(cfg):
-    checkpoint_str = f"{cfg.prob.name}-{cfg.prob.size}/"
+def get_log_dir_name(name,
+                     size,
+                     flag_layer_penalty,
+                     layer_penalty,
+                     flag_label_penalty,
+                     label_penalty,
+                     neg_pos_ratio,
+                     order,
+                     layer_norm_const,
+                     state_norm_const):
+    checkpoint_str = f"{name}-{size}/"
 
-    if cfg.train.flag_layer_penalty:
-        checkpoint_str += f"{cfg.train.layer_penalty}-"
-    if cfg.train.flag_label_penalty:
-        checkpoint_str += f"{int(cfg.train.label_penalty * 10)}-"
+    if flag_layer_penalty:
+        checkpoint_str += f"{layer_penalty}-"
+    if flag_label_penalty:
+        checkpoint_str += f"{int(label_penalty * 10)}-"
 
-    checkpoint_str += f"{cfg.train.neg_pos_ratio}-"
-    if cfg.val.neg_pos_ratio < 0:
-        checkpoint_str += f"n{int(-1 * cfg.val.neg_pos_ratio)}-"
+    checkpoint_str += f"{neg_pos_ratio}-"
+    if neg_pos_ratio < 0:
+        checkpoint_str += f"n{int(-1 * neg_pos_ratio)}-"
     else:
-        checkpoint_str += f"{cfg.val.neg_pos_ratio}-"
+        checkpoint_str += f"{neg_pos_ratio}-"
 
-    checkpoint_str += f"{cfg.prob.order}-{cfg.prob.layer_norm_const}-{cfg.prob.state_norm_const}/"
+    checkpoint_str += f"{order}-{layer_norm_const}-{state_norm_const}/"
 
     return checkpoint_str
 
 
 def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None):
     checkpoint_dir = resource_path / "experiments/"
-    checkpoint_str = get_log_dir_name(cfg)
+    checkpoint_str = get_log_dir_name(cfg.prob.name,
+                                      cfg.prob.size,
+                                      cfg.train.flag_layer_penalty,
+                                      cfg.train.layer_penalty,
+                                      cfg.train.flag_label_penalty,
+                                      cfg.train.label_penalty,
+                                      cfg.train.neg_pos_ratio,
+                                      cfg.prob.order,
+                                      cfg.prob.layer_norm_const,
+                                      cfg.prob.state_norm_const)
     checkpoint_str += f"{cfg[split].log_dir}"
     checkpoint_dir /= checkpoint_str
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
@@ -474,7 +492,16 @@ def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None)
 
 def checkpoint_test(cfg, scores_df):
     checkpoint_dir = resource_path / "experiments/"
-    checkpoint_str = get_log_dir_name(cfg)
+    checkpoint_str = get_log_dir_name(cfg.prob.name,
+                                      cfg.prob.size,
+                                      cfg.train.flag_layer_penalty,
+                                      cfg.train.layer_penalty,
+                                      cfg.train.flag_label_penalty,
+                                      cfg.train.label_penalty,
+                                      cfg.train.neg_pos_ratio,
+                                      cfg.prob.order,
+                                      cfg.prob.layer_norm_const,
+                                      cfg.prob.state_norm_const)
     checkpoint_str += f"{cfg.test.log_dir}"
     checkpoint_dir /= checkpoint_str
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
@@ -496,3 +523,31 @@ def checkpoint_test(cfg, scores_df):
 
 def handle_timeout(sig, frame):
     raise TimeoutError('Timeout')
+
+
+def set_seed(seed):
+    random.seed = seed
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+
+def set_device(device_type):
+    if device_type == "gpu" and torch.cuda.is_available():
+        device = torch.device("cuda:0")
+    else:
+        device = torch.device("cpu")
+    print("Training on ", device)
+
+    return device
+
+
+def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, dataset_dict, device):
+    datasets = []
+    for pid in pids:
+        if pid not in dataset_dict:
+            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
+        if dataset_dict[pid] is not None:
+            # print("Reading dataset ", pid)
+            datasets.append(dataset_dict[pid])
+
+    return datasets, dataset_dict
