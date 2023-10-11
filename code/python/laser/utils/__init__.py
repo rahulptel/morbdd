@@ -541,13 +541,20 @@ def set_device(device_type):
     return device
 
 
-def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, dataset_dict, device):
+def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, device, dataset_dict=None):
     datasets = []
-    for pid in pids:
-        if pid not in dataset_dict:
-            dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
-        if dataset_dict[pid] is not None:
-            # print("Reading dataset ", pid)
-            datasets.append(dataset_dict[pid])
+    if dataset_dict is not None:
+        for pid in pids:
+            if pid not in dataset_dict:
+                dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
+            if dataset_dict[pid] is not None:
+                # print("Reading dataset ", pid)
+                datasets.append(dataset_dict[pid])
+            datasets.append(get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device))
+    else:
+        for pid in pids:
+            dataset = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
+            if dataset is not None:
+                datasets.append(dataset)
 
     return datasets, dataset_dict

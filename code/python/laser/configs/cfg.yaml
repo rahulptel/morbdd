@@ -8,7 +8,7 @@ prob:
   state_norm_const: 1000
 
 train:
-  epochs: 500
+  epochs: 50
   from_pid: 0
   to_pid: 100
   inst_per_step: 100
@@ -29,6 +29,7 @@ train:
   layer_penalty: exponential
   flag_label_penalty: false
   label_penalty:
+  num_processes: 4
 
 val:
   from_pid: 1000
@@ -38,7 +39,7 @@ val:
   batch_size: 1024
   shuffle: false
   log_dir: val_log
-  every: 1
+  every: 5
 
 test:
   from_pid: 1100
