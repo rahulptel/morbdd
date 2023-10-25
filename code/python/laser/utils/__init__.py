@@ -174,6 +174,18 @@ def get_order(problem, order_type, data):
     return order
 
 
+def get_featurizer(problem, cfg):
+    featurizer = None
+    if problem == "knapsack":
+        from laser.featurizer import KnapsackFeaturizer
+
+        featurizer = KnapsackFeaturizer(cfg)
+
+    assert featurizer is not None
+
+    return featurizer
+
+
 def get_instance_features(problem, data, state_norm_const=None):
     def get_knapsack_instance_features():
         _feat = np.concatenate((np.array(data['value']), np.array(data['weight']).reshape(1, -1)), axis=0)
@@ -402,7 +414,7 @@ def print_result(epoch,
                  total=None,
                  inst_per_step=None,
                  is_best=None,
-                 pre_space='\t\t'):
+                 pre_space='\t'):
     is_best_str = " -- BEST ACC" if is_best else ""
     print(f"{pre_space}------------------------------------------------")
     if pid is not None and inst_per_step is not None:
