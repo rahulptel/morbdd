@@ -10,13 +10,27 @@ from operator import itemgetter
 from laser.featurizer import KnapsackFeaturizer
 import os
 import hydra
+from laser import resource_path
 
 
-@hydra.main(version_base="1.2", config_path="configs", config_name="train_xgb")
+def get_dmatrix_filename(cfg, split):
+    # file_path = resource_path / f"xgb_dataset/{cfg.prob}/{cfg.size}"
+    name = f"{split}-{cfg[split].from_pid}-{cfg[split].to_pid}"
+    if cfg.flag_layer_penalty:
+        name += f"-{cfg.layer_penalty}"
+    if cfg.flag_label_penalty:
+        name += f"-{cfg.label_penalty}"
+    name += ".buffer"
+
+    return name
+
+
+@hydra.main(version_base="1.2", config_path="./configs", config_name="train_xgb.yaml")
 def main(cfg):
-    dtrain = xgb.DMatrix("train.buffer")
-    dval = xgb.DMatrix("val.buffer")
+    dtrain = xgb.DMatrix(get_dmatrix_filename(cfg, "train"))
+    dval = xgb.DMatrix(get_dmatrix_filename(cfg, "val"))
     dtest = None
+    print(dtrain.num_row())
 
     evals = []
     for eval in cfg.evals:
@@ -42,7 +56,10 @@ def main(cfg):
                     num_boost_round=cfg.num_round,
                     evals=evals,
                     early_stopping_rounds=cfg.early_stopping_rounds)
+    print(bst.best_iteration)
+
+    bst.dump_model("xgb_model.txt")
 
 
 if __name__ == '__main__':
-    pass
+    main()

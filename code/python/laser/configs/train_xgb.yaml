@@ -1,8 +1,25 @@
 device: cpu
-nthread: 1
+nthread: 16
+
+prob: knapsack
+num_objs: 7
+num_vars: 40
+size: ${num_objs}_${num_vars}
+
+train:
+  from_pid: 0
+  to_pid: 100
+val:
+  from_pid: 1000
+  to_pid: 1100
+
+
 # Integers from 1 to 10
 train_val_inst_ratio: 1
+flag_label_penalty: false
 neg_pos_ratio: 1
+label_penalty: ${neg_pos_ratio}
+flag_layer_penalty: true
 # layer in [0, 1], 0 for root and 1 for terminal
 # const:        1
 # linear:       1 - layer
@@ -15,13 +32,13 @@ layer_penalty: exponential
 # regression: [0, 1]
 # regression+: [-1, 1+fraction_pos]
 label: binary
-max_depth: 2
-eta: 0.3
+max_depth: 5
+eta: 0.1
 evaluation_metric: error
 objective: binary:logistic
 evals:
   - train
   - val
 
-num_round: 10
-early_stopping_rounds: 5
+num_round: 100
+early_stopping_rounds: 20
