@@ -6,6 +6,9 @@ size: ${num_objs}_${num_vars}
 split: train
 from_pid: 0
 to_pid: 1
+# Tensor: PyTorch Dataset
+# DMatrix: XGBoost Dataset
+dtype: DMatrix
 
 # C++ lib parameters
 # 1: Knapsack

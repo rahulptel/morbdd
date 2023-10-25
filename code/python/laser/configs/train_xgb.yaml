@@ -1,0 +1,27 @@
+device: cpu
+nthread: 1
+# Integers from 1 to 10
+train_val_inst_ratio: 1
+neg_pos_ratio: 1
+# layer in [0, 1], 0 for root and 1 for terminal
+# const:        1
+# linear:       1 - layer
+# linearE:      e^(-0.5 - 1) * layer + 1
+# exponential:  e^(-0.5 - layer)
+# quadratic:    e^(-0.5 - 1) * layer^2 + 1
+# sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
+layer_penalty: exponential
+# binary: 0, 1
+# regression: [0, 1]
+# regression+: [-1, 1+fraction_pos]
+label: binary
+max_depth: 2
+eta: 0.3
+evaluation_metric: error
+objective: binary:logistic
+evals:
+  - train
+  - val
+
+num_round: 10
+early_stopping_rounds: 5
