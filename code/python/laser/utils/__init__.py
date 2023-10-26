@@ -38,6 +38,12 @@ class KnapsackBDDDataset(Dataset):
                 'label': self.labels[i]}
 
 
+class MockConfig:
+    norm_const = 1000
+    raw = False
+    context = True
+
+
 def read_from_zip(archive, file, format="raw"):
     try:
         zf = zipfile.ZipFile(archive)
@@ -356,6 +362,136 @@ def convert_bdd_to_tensor_data(problem,
     file_path.mkdir(parents=True, exist_ok=True)
     file_path /= f"{pid}.pt"
     torch.save(data, file_path)
+
+
+def convert_bdd_to_xgb_data(problem,
+                            bdd=None,
+                            num_objs=None,
+                            num_vars=None,
+                            split=None,
+                            pid=None,
+                            layer_penalty=None,
+                            order_type=None,
+                            state_norm_const=1000,
+                            layer_norm_const=100,
+                            neg_pos_ratio=1,
+                            min_samples=0,
+                            random_seed=100):
+    size = f"{num_objs}_{num_vars}"
+
+    def convert_bdd_to_xgb_data_knapsack():
+        rng = random.Random(random_seed)
+        layer_weight = get_layer_weights(layer_penalty, num_vars)
+
+        # Read instance
+        inst_data = get_instance_data(problem, size, split, pid)
+        order = get_order(problem, order_type, inst_data)
+        # Extract instance and variable features
+        featurizer_conf = MockConfig()
+        featurizer = get_featurizer(problem, featurizer_conf)
+        features = featurizer.get(inst_data)
+        # Instance features
+        inst_features = features["inst"][0]
+        # Variable features. Reordered features based on ordering
+        features["var"] = features["var"][order]
+        num_var_features = features["var"].shape[1]
+
+        features_lst, labels_lst, weights_lst = [], [], []
+        for lidx, layer in enumerate(bdd):
+            _features_lst, _labels_lst, _weights_lst = [], [], []
+            num_pos = np.sum([1 for node in layer if node['l'] == 1])
+
+            # Parent variable features
+            _parent_var_feat = -1 * np.ones(num_var_features) \
+                if lidx == 0 \
+                else features["var"][lidx - 1]
+
+            for node in layer:
+                # Node features
+                norm_state = node["s"][0] / state_norm_const
+                state_to_capacity = node["s"][0] / inst_data["capacity"]
+                _node_feat = np.array([norm_state, state_to_capacity, (lidx + 1) / layer_norm_const])
+
+                # Parent node features
+                _parent_node_feat = []
+                if lidx == 0:
+                    _parent_node_feat.extend([1, -1, -1, -1, -1, -1])
+                else:
+                    # 1 implies parent of the one arc
+                    _parent_node_feat.append(1)
+                    if len(node["op"]) > 1:
+                        prev_layer = lidx - 1
+                        prev_node_idx = node["op"][0]
+                        prev_state = bdd[prev_layer][prev_node_idx]["s"][0]
+                        _parent_node_feat.append(prev_state / state_norm_const)
+                        _parent_node_feat.append(prev_state / inst_data["capacity"])
+                    else:
+                        _parent_node_feat.append(-1)
+                        _parent_node_feat.append(-1)
+
+                    # -1 implies parent of the zero arc
+                    _parent_node_feat.append(-1)
+                    if len(node["zp"]) > 0:
+                        _parent_node_feat.append(norm_state)
+                        _parent_node_feat.append(state_to_capacity)
+                    else:
+                        _parent_node_feat.append(-1)
+                        _parent_node_feat.append(-1)
+                _parent_node_feat = np.array(_parent_node_feat)
+
+                if node["l"] > 0:
+                    # Features
+                    features_lst.append(np.concatenate((inst_features,
+                                                        _parent_var_feat,
+                                                        _parent_node_feat,
+                                                        features["var"][lidx],
+                                                        _node_feat)))
+                    labels_lst.append(node["l"])
+                    weights_lst.append(layer_weight[lidx])
+                else:
+                    # Features
+                    _features_lst.append(np.concatenate((inst_features,
+                                                         _parent_var_feat,
+                                                         _parent_node_feat,
+                                                         features["var"][lidx],
+                                                         _node_feat)))
+                    _labels_lst.append(node["l"])
+                    _weights_lst.append(layer_weight[lidx])
+
+            # Select samples from local to append to the global
+            if neg_pos_ratio == -1:
+                # Select all negative samples
+                features_lst.extend(_features_lst)
+                labels_lst.extend(_labels_lst)
+                weights_lst.extend(_weights_lst)
+            else:
+                neg_idxs = list(range(len(_labels_lst)))
+                rng.shuffle(neg_idxs)
+                num_neg_samples = np.max([int(neg_pos_ratio * num_pos),
+                                          min_samples])
+                num_neg_samples = np.min([num_neg_samples,
+                                          len(_labels_lst)])
+                for nidx in neg_idxs[:num_neg_samples]:
+                    features_lst.append(_features_lst[nidx])
+                    labels_lst.append(_labels_lst[nidx])
+                    weights_lst.append(_weights_lst[nidx])
+
+        return features_lst, labels_lst, weights_lst
+
+    data = None
+    if problem == "knapsack":
+        data = convert_bdd_to_xgb_data_knapsack()
+
+    assert data is not None
+    # sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
+    # file_path = resource_path / "xgb_data" / problem / size / split / sampling_type
+    # file_path.mkdir(parents=True, exist_ok=True)
+    # file_path /= f"{pid}.pt"
+    # torch.save(data, file_path)
+    data = (np.array(data[0]), np.array(data[1]).reshape(-1, 1), np.array(data[2]).reshape(-1, 1))
+    data = np.hstack(data)
+
+    return data
 
 
 def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):
