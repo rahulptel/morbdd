@@ -1,44 +1,60 @@
 device: cpu
 nthread: 16
 
-prob: knapsack
-num_objs: 7
-num_vars: 40
-size: ${num_objs}_${num_vars}
-
-train:
-  from_pid: 0
-  to_pid: 100
-val:
-  from_pid: 1000
-  to_pid: 1100
-
-
-# Integers from 1 to 10
-train_val_inst_ratio: 1
-flag_label_penalty: false
-neg_pos_ratio: 1
-label_penalty: ${neg_pos_ratio}
-flag_layer_penalty: true
-# layer in [0, 1], 0 for root and 1 for terminal
-# const:        1
-# linear:       1 - layer
-# linearE:      e^(-0.5 - 1) * layer + 1
-# exponential:  e^(-0.5 - layer)
-# quadratic:    e^(-0.5 - 1) * layer^2 + 1
-# sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
-layer_penalty: exponential
-# binary: 0, 1
-# regression: [0, 1]
-# regression+: [-1, 1+fraction_pos]
-label: binary
 max_depth: 5
-eta: 0.1
-evaluation_metric: error
+eta: 0.3
 objective: binary:logistic
+num_round: 10
+early_stopping_rounds: 20
 evals:
   - train
   - val
+eval_metric:
+  - error
+  - auc
+  - logloss
+seed: 789541
 
-num_round: 100
-early_stopping_rounds: 20
+
+prob:
+  name: knapsack
+  num_objs: 7
+  num_vars: 40
+  size: ${prob.num_objs}_${prob.num_vars}
+  order: MinWt
+  layer_norm_const: 100
+  state_norm_const: 1000
+
+train:
+  from_pid: 0
+  to_pid: 10
+  neg_pos_ratio: 1
+  min_samples: 0
+  flag_layer_penalty: true
+  # layer in [0, 1], 0 for root and 1 for terminal
+  # const:        1
+  # linear:       1 - layer
+  # linearE:      e^(-0.5 - 1) * layer + 1
+  # exponential:  e^(-0.5 - layer)
+  # quadratic:    e^(-0.5 - 1) * layer^2 + 1
+  # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
+  layer_penalty: exponential
+  flag_label_penalty: false
+  label_penalty:
+  num_processes: 4
+
+val:
+  from_pid: 1000
+  to_pid: 1010
+  neg_pos_ratio: ${train.neg_pos_ratio}
+  min_samples: ${train.min_samples}
+
+
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+

@@ -1,3 +1,4 @@
+import io
 import json
 import random
 import zipfile
@@ -502,6 +503,27 @@ def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):
                                       pid=pid,
                                       dtype=dtype,
                                       device=device)
+        else:
+            return None
+
+    dataset = None
+    if problem == "knapsack":
+        dataset = get_dataset_knapsack()
+
+    return dataset
+
+
+def get_xgb_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
+    def get_dataset_knapsack():
+        dtype = f"npr{neg_pos_ratio}ms{min_samples}"
+        zf = zipfile.Path(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+        np_file = zf.joinpath(f"{split}/{dtype}/{pid}.npy")
+        if np_file.exists():
+            zf = zipfile.ZipFile(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+            with zf.open(f"{split}/{dtype}/{pid}.npy", "r") as fp:
+                data = io.BytesIO(fp.read())
+                np_array = np.load(data)
+                return np_array
         else:
             return None
 
