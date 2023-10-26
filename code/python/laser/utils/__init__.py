@@ -2,7 +2,6 @@ import json
 import random
 import zipfile
 from operator import itemgetter
-
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -483,15 +482,14 @@ def convert_bdd_to_xgb_data(problem,
         data = convert_bdd_to_xgb_data_knapsack()
 
     assert data is not None
-    # sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    # file_path = resource_path / "xgb_data" / problem / size / split / sampling_type
-    # file_path.mkdir(parents=True, exist_ok=True)
-    # file_path /= f"{pid}.pt"
-    # torch.save(data, file_path)
     data = (np.array(data[0]), np.array(data[1]).reshape(-1, 1), np.array(data[2]).reshape(-1, 1))
     data = np.hstack(data)
 
-    return data
+    sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
+    file_path = resource_path / "xgb_data" / problem / size / split / sampling_type
+    file_path.mkdir(parents=True, exist_ok=True)
+    file_path /= f"{pid}.npy"
+    np.save(open(file_path, "wb"), data)
 
 
 def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):
