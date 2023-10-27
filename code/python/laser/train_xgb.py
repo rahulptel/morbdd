@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import zipfile
 
@@ -63,35 +64,29 @@ def get_dmatrix_filename(cfg, split):
     return name
 
 
+def get_iterator(cfg, dtype, split):
+    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/{split}.zip")
+    valid_names = [f"{i}.npy" for i in range(cfg[split].from_pid, cfg[split].to_pid)]
+    filenames = [p.name for p in zf_path.joinpath(f'{split}/{dtype}').iterdir() if p.name in valid_names]
+    print("Iterator on ", split, ": len - ", len(filenames))
+    it = Iterator(cfg.prob.name,
+                  cfg.prob.size,
+                  split,
+                  cfg[split].neg_pos_ratio,
+                  cfg[split].min_samples,
+                  filenames)
+
+    return it
+
+
 @hydra.main(version_base="1.2", config_path="./configs", config_name="train_xgb.yaml")
 def main(cfg):
     dtype = f"npr{cfg.train.neg_pos_ratio}ms{cfg.train.min_samples}"
-    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/train.zip")
-    filenames_train = [p.name for p in zf_path.joinpath(f'train/{dtype}').iterdir()]
-    it_train = Iterator(cfg.prob.name,
-                        cfg.prob.size,
-                        "train",
-                        cfg.train.neg_pos_ratio,
-                        cfg.train.min_samples,
-                        filenames_train)
-    dtrain = xgb.DMatrix(it_train)
-
-    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/val.zip")
-    filenames_val = [p.name for p in zf_path.joinpath(f'val/{dtype}').iterdir()]
-    it_val = Iterator(cfg.prob.name,
-                      cfg.prob.size,
-                      "val",
-                      cfg.val.neg_pos_ratio,
-                      cfg.val.min_samples,
-                      filenames_val)
-    dval = xgb.DMatrix(it_val)
+    dtrain = xgb.DMatrix(get_iterator(cfg, dtype, "train"))
+    dval = xgb.DMatrix(get_iterator(cfg, dtype, "val"))
 
     print("Number of training samples: ", dtrain.num_row())
     print("Number of validation samples: ", dval.num_row())
-
-    c = ["auc", "error", "logloss"]
-    print(type(list(cfg.eval_metric)), list(cfg.eval_metric), type(c), c)
-
     print("Setting up training...")
     evals_result = {}
     evals = []
@@ -114,10 +109,13 @@ def main(cfg):
                     evals=evals,
                     early_stopping_rounds=cfg.early_stopping_rounds,
                     evals_result=evals_result)
-    print(bst.best_iteration)
-    bst.dump_model("xgb_model.txt")
+    mdl_path = resource_path / "pretrained/xgb"
+    mdl_path.mkdir(parents=True, exist_ok=True)
+    mdl_path = mdl_path / f"model_{cfg.train.from_pid}_{cfg.train.to_pid}.txt"
+    bst.dump_model(mdl_path)
 
-    print(evals_result)
+    metrics_path = mdl_path.parent / f"metrics_{cfg.train.from_pid}_{cfg.train.to_pid}.json"
+    json.dump(evals_result, open(metrics_path, "w"))
 
 
 if __name__ == '__main__':
