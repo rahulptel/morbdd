@@ -8,6 +8,8 @@ from laser.utils import get_featurizer
 from laser.utils import MockConfig
 from laser.utils import read_from_zip
 from laser.utils import label_bdd
+import pandas as pd
+import multiprocessing as mp
 
 
 def convert_bdd_to_xgb_data_deploy(problem,
@@ -111,14 +113,55 @@ def load_model(cfg):
     return model
 
 
-@hydra.main(version_base="1.2", config_path="./configs", config_name="cfg.yaml")
-def main(cfg):
-    model = load_model(cfg)
+def score_bdd_nodes_using_preds(bdd, preds):
+    it = 0
+    for lidx, layer in enumerate(bdd):
+        for node in layer:
+            node["pred"] = np.round(preds[it], 1)
+            it += 1
 
+    return bdd
+
+
+def check_connectedness(pid, bdd):
+    disconnected_layer = 2
+    is_connected = False
+    for lidx, layer in enumerate(bdd):
+        is_connected = False
+        for node in layer:
+            if is_connected is False:
+                if lidx == 0:
+                    if node["pred"] >= 0.5:
+                        is_connected = True
+                        break
+                else:
+                    if node["pred"] >= 0.5:
+                        if len(node["op"]):
+                            prev_one = node["op"][0]
+                            if bdd[lidx - 1][prev_one]["pred"] >= 0.5:
+                                is_connected = True
+                                break
+                        if len(node["zp"]):
+                            prev_zero = node["zp"][0]
+                            if bdd[lidx - 1][prev_zero]["pred"] >= 0.5:
+                                is_connected = True
+                                break
+
+        if is_connected is False:
+            disconnected_layer = lidx + 1
+            print(f"Instance {pid} is not connected!, Layer {disconnected_layer}")
+            break
+
+    return is_connected, disconnected_layer
+
+
+def worker(rank, cfg):
+    model = load_model(cfg)
     pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
     pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
-
-    for pid in range(cfg.deploy.from_pid, cfg.deploy.to_pid):
+    disconnected_layers = []
+    for pid in range(cfg.deploy.from_pid + rank, cfg.deploy.to_pid, cfg.deploy.num_processes):
+        print("Started processing ", pid)
         # Load BDD
         archive = resource_path / f"bdds/{cfg.prob.name}/{cfg.prob.size}.zip"
         file = f"{cfg.prob.size}/{cfg.deploy.split}/{pid}.json"
@@ -140,30 +183,51 @@ def main(cfg):
 
         # Predict
         dfeatures = xgb.DMatrix(features)
-        preds = model.predict(dfeatures)
+        preds = model.predict(dfeatures, iteration_range=(0, model.best_iteration + 1))
 
         # Get prediction stats
-        layers = features[:, -1] * cfg.prob.layer_norm_const
-        pred_stats_per_layer = []
-        for l in np.unique(layers):
-            tp = (preds[(layers == l) & (labels > 0)] >= 0.5).sum()
-            fp = (preds[(layers == l) & (labels <= 0)] >= 0.5).sum()
-            tn = (preds[(layers == l) & (labels <= 0)] < 0.5).sum()
-            fn = (preds[(layers == l) & (labels > 0)] < 0.5).sum()
+        layers = np.round(features[:, -1] * cfg.prob.layer_norm_const)
+        for l in list(map(int, np.unique(layers))):
+            tp = (np.round(preds[(layers == l) & (labels > 0)], 1) >= 0.5).sum()
+            fp = (np.round(preds[(layers == l) & (labels <= 0)], 1) >= 0.5).sum()
+            tn = (np.round(preds[(layers == l) & (labels <= 0)], 1) < 0.5).sum()
+            fn = (np.round(preds[(layers == l) & (labels > 0)], 1) < 0.5).sum()
             pred_stats_per_layer[l][1] += tp
             pred_stats_per_layer[l][2] += fp
             pred_stats_per_layer[l][3] += tn
             pred_stats_per_layer[l][4] += fn
 
-        # Get layer wise pareto states
-        it = 0
-        for layer in bdd:
-            for node in layer:
-                node["pred"] = preds[it]
-                it += 1
+        bdd = score_bdd_nodes_using_preds(bdd, preds)
+        is_connected, disconnected_layer = check_connectedness(pid, bdd)
+        if not is_connected:
+            disconnected_layers.append(disconnected_layer)
 
         # Run BDD builder
-        pass
+        # pass
+
+    return pred_stats_per_layer, disconnected_layers
+
+
+@hydra.main(version_base="1.2", config_path="./configs", config_name="cfg.yaml")
+def main(cfg):
+    pool = mp.Pool(processes=cfg.deploy.num_processes)
+    results = []
+    for rank in range(cfg.deploy.num_processes):
+        results.append(pool.apply_async(worker, args=(rank, cfg)))
+
+    results = [r.get() for r in results]
+
+    pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
+    pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
+    disconnected_layers = []
+    for r in results:
+        pred_stats_per_layer[:, 1:] += r[0][:, 1:]
+        disconnected_layers.extend(r[1])
+
+    print("Disconnected instances: ", len(disconnected_layers))
+    print("Mean disconnected layer: ", np.mean(disconnected_layers))
+    df = pd.DataFrame(pred_stats_per_layer, columns=["layer", "tp", "fp", "tn", "fn"])
+    df.to_csv("stats_per_layer.csv", index=False)
 
 
 if __name__ == '__main__':

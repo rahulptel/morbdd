@@ -10,7 +10,7 @@ prob:
 train:
   epochs: 1
   from_pid: 0
-  to_pid: 10
+  to_pid: 1000
   inst_per_step: 100
   neg_pos_ratio: 1
   min_samples: 0
@@ -58,7 +58,7 @@ test:
 deploy:
   split: val
   from_pid: 1000
-  to_pid: 1001
+  to_pid: 1100
   neg_pos_ratio: -1
   min_samples: 0
   batch_size: 1024
@@ -68,6 +68,7 @@ deploy:
   mdl: xgb
   label: binary
   order_type: MinWt
+  num_processes: 16
 
 # Prediction task
 # classification or regression
@@ -76,10 +77,10 @@ device: cpu
 
 xgb:
   path: model_${train.from_pid}_${train.to_pid}.json
-max_depth: 5
+max_depth: 10
 eta: 0.3
 objective: binary:logistic
-num_round: 10
+num_round: 100
 early_stopping_rounds: 20
 evals:
   - train
