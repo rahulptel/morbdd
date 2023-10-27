@@ -111,8 +111,8 @@ def main(cfg):
                     evals_result=evals_result)
     mdl_path = resource_path / "pretrained/xgb"
     mdl_path.mkdir(parents=True, exist_ok=True)
-    mdl_path = mdl_path / f"model_{cfg.train.from_pid}_{cfg.train.to_pid}.txt"
-    bst.dump_model(mdl_path)
+    mdl_path = mdl_path / f"model_{cfg.train.from_pid}_{cfg.train.to_pid}.json"
+    bst.save_model(mdl_path)
 
     metrics_path = mdl_path.parent / f"metrics_{cfg.train.from_pid}_{cfg.train.to_pid}.json"
     json.dump(evals_result, open(metrics_path, "w"))

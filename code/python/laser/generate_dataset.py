@@ -1,37 +1,12 @@
 import multiprocessing as mp
 
 import hydra
-import numpy as np
-import xgboost as xgb
 
 from laser import resource_path
 from laser.utils import convert_bdd_to_tensor_data
-from laser.utils import get_instance_data
-from laser.utils import get_order
-from laser.utils import read_from_zip
-from laser.utils import get_layer_weights
 from laser.utils import convert_bdd_to_xgb_data
-import shutil
-
-
-def label_bdd(bdd, labeling_scheme):
-    for l in range(len(bdd)):
-        for n in bdd[l]:
-            if labeling_scheme == "binary":
-                n["l"] = 1 if n["pareto"] else 0
-            elif labeling_scheme == "mo":
-                # Margin one
-                n["l"] = 1 if n["pareto"] else -1
-            elif labeling_scheme == "mos":
-                # Margin one score
-                n["l"] = 1 + n["score"] if n["pareto"] else -1
-            elif labeling_scheme == "nms":
-                # Negative margin score
-                n["l"] = n["score"] if n["pareto"] else -1
-            else:
-                raise ValueError("Invalid labeling scheme!")
-
-    return bdd
+from laser.utils import label_bdd
+from laser.utils import read_from_zip
 
 
 def worker(rank, cfg):

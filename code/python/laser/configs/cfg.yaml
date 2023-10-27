@@ -8,9 +8,9 @@ prob:
   state_norm_const: 1000
 
 train:
-  epochs: 50
+  epochs: 1
   from_pid: 0
-  to_pid: 100
+  to_pid: 10
   inst_per_step: 100
   neg_pos_ratio: 1
   min_samples: 0
@@ -29,11 +29,11 @@ train:
   layer_penalty: exponential
   flag_label_penalty: false
   label_penalty:
-  num_processes: 4
+  num_processes: 2
 
 val:
   from_pid: 1000
-  to_pid: 1025
+  to_pid: 1010
   neg_pos_ratio: ${train.neg_pos_ratio}
   min_samples: ${train.min_samples}
   batch_size: 1024
@@ -56,22 +56,42 @@ test:
   epoch_idx: 0
 
 deploy:
-  split: train
-  from_pid: 0
-  to_pid: 1
+  split: val
+  from_pid: 1000
+  to_pid: 1001
   neg_pos_ratio: -1
   min_samples: 0
   batch_size: 1024
   threshold: 0.5
   best: true
   epoch: false
+  mdl: xgb
+  label: binary
+  order_type: MinWt
 
 # Prediction task
 # classification or regression
 pred_task: classification
 device: cpu
+
+xgb:
+  path: model_${train.from_pid}_${train.to_pid}.json
+max_depth: 5
+eta: 0.3
+objective: binary:logistic
+num_round: 10
+early_stopping_rounds: 20
+evals:
+  - train
+  - val
+eval_metric:
+  - error
+  - auc
+  - logloss
+nthread: 16
+
 # Model
-mdl:
+net:
   # Instance encoder
   ie:
     in_dim: 8
