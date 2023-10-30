@@ -1,0 +1,55 @@
+# Problem parameters
+prob:
+  name: knapsack
+  num_objs: 7
+  num_vars: 40
+  size: ${prob.num_objs}_${prob.num_vars}
+  state_norm_const: 1000
+  layer_norm_const: 100
+
+deploy:
+  split: val
+  from_pid: 1000
+  to_pid: 1100
+  neg_pos_ratio: -1
+  min_samples: 0
+  batch_size: 1024
+  threshold: 0.5
+  best: true
+  epoch: false
+  mdl: xgb
+  label: binary
+  order_type: MinWt
+  num_processes: 16
+
+mdl:
+  device: cpu
+  path: model_0_1000.json
+  max_depth: 10
+  eta: 0.3
+  objective: binary:logistic
+  num_round: 100
+  early_stopping_rounds: 20
+  evals:
+    - train
+    - val
+  eval_metric:
+    - error
+    - auc
+    - logloss
+  nthread: 16
+
+# C++ lib parameters
+bin:
+  # 1: Knapsack
+  problem_type: 1
+  # Don't change this
+  preprocess: 0
+  # 0: Exact
+  # 1: Restricted
+  bdd_type: 0
+  # To be used when constructing restricted BDD.
+  # Set it to zero for exact.
+  maxwidth: 0
+
+seed: 789541
