@@ -38,10 +38,11 @@ class KnapsackBDDDataset(Dataset):
                 'label': self.labels[i]}
 
 
-class MockConfig:
-    norm_const = 1000
-    raw = False
-    context = True
+class FeaturizerConfig:
+    def __init__(self, norm_const=1000, raw=False, context=True):
+        self.norm_const = norm_const
+        self.raw = raw
+        self.context = context
 
 
 def read_from_zip(archive, file, format="raw"):
@@ -119,27 +120,60 @@ def get_context_features(layer_idxs, inst_feat, num_objs, num_vars, device):
     return context
 
 
-def get_layer_weights(penalty, num_vars):
-    lidxs = [lidx / num_vars for lidx in range(num_vars)]
+def get_layer_weights_const(num_vars):
+    return [1 for _ in num_vars]
 
-    # Set layer weights
-    if penalty == "const":
-        layer_weight = [1 for _ in num_vars]
-    elif penalty == "linear":
-        layer_weight = [1 - lidx for lidx in lidxs]
-    elif penalty == "exponential":
-        layer_weight = [np.exp(-0.5 * lidx) for lidx in lidxs]
-    elif penalty == "linearE":
-        layer_weight = [(np.exp(-0.5) - 1) * lidx + 1
-                        for lidx in lidxs]
-    elif penalty == "quadratic":
-        layer_weight = [(np.exp(-0.5) - 1) * (lidx ** 2) + 1
-                        for lidx in lidxs]
-    elif penalty == "sigmoidal":
-        layer_weight = [(1 + np.exp(-0.5)) / (1 + np.exp(lidx - 0.5))
-                        for lidx in lidxs]
+
+def get_layer_weights_linear(lidxs):
+    return [1 - lidx for lidx in lidxs]
+
+
+def get_layer_weights_exponential(lidxs):
+    return [np.exp(-0.5 * lidx) for lidx in lidxs]
+
+
+def get_layer_weights_linearE(lidxs):
+    return [(np.exp(-0.5) - 1) * lidx + 1 for lidx in lidxs]
+
+
+def get_layer_weights_quadratic(lidxs):
+    return [(np.exp(-0.5) - 1) * (lidx ** 2) + 1 for lidx in lidxs]
+
+
+def get_layer_weights_sigmoidal(lidxs):
+    return [(1 + np.exp(-0.5)) / (1 + np.exp(lidx - 0.5)) for lidx in lidxs]
+
+
+def get_layer_weights(flag_penalty, penalty, num_vars):
+    lidxs = [lidx / num_vars for lidx in range(num_vars)]
+    get_layer_weights_fn = {
+        "const": get_layer_weights_const,
+        "linear": get_layer_weights_linear,
+        "exponential": get_layer_weights_exponential,
+        "linearE": get_layer_weights_linearE,
+        "sigmoidal": get_layer_weights_sigmoidal
+    }
+    if flag_penalty is False or penalty == "const":
+        return get_layer_weights_fn["const"](num_vars)
+
+    if "+" not in penalty:
+        layer_weight = get_layer_weights_fn[penalty](lidxs)
     else:
-        raise ValueError("Invalid layer penalty scheme!")
+        a, b = penalty.strip().split("+")
+        a1, a2 = a.split("#")
+        upto_layer = int(a2)
+        if a1 == "const":
+            layer_weight_a = get_layer_weights_fn["const"](upto_layer)
+        else:
+            layer_weight_a = get_layer_weights_fn[penalty](lidxs[:upto_layer])
+
+        if b == "const":
+            layer_weight_b = get_layer_weights_fn["const"](num_vars)
+        else:
+            layer_weight_b = get_layer_weights_fn[penalty](lidxs)
+
+        layer_weight = layer_weight_a
+        layer_weight.extend(layer_weight_b[:num_vars - upto_layer])
 
     return layer_weight
 
@@ -370,25 +404,48 @@ def convert_bdd_to_xgb_data(problem,
                             num_vars=None,
                             split=None,
                             pid=None,
-                            layer_penalty=None,
                             order_type=None,
                             state_norm_const=1000,
                             layer_norm_const=100,
+                            task="classification",
+                            label_type="binary",
                             neg_pos_ratio=1,
                             min_samples=0,
+                            flag_layer_penalty=True,
+                            layer_penalty=None,
+                            flag_imbalance_penalty=False,
+                            flag_importance_penalty=False,
+                            penalty_aggregation="sum",
                             random_seed=100):
     size = f"{num_objs}_{num_vars}"
 
+    sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
+    sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
+    sampling_data_path.mkdir(parents=True, exist_ok=True)
+
+    weight_type = ""
+    if flag_layer_penalty:
+        weight_type += f"{layer_penalty}-"
+    weight_type += "1-" if flag_imbalance_penalty else "0-"
+    weight_type += "1-" if flag_importance_penalty else "0-"
+    weight_type += penalty_aggregation
+    weight_data_path = resource_path / "xgb_data" / problem / size / split / weight_type
+    weight_data_path.mkdir(parents=True, exist_ok=True)
+
+    label_data_path = resource_path / "xgb_data" / problem / size / split / label_type
+    label_data_path.mkdir(parents=True, exist_ok=True)
+
     def convert_bdd_to_xgb_data_knapsack():
         rng = random.Random(random_seed)
-        layer_weight = get_layer_weights(layer_penalty, num_vars)
+        layer_weight = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
 
         # Read instance
         inst_data = get_instance_data(problem, size, split, pid)
         order = get_order(problem, order_type, inst_data)
         # Extract instance and variable features
-        featurizer_conf = MockConfig()
-        featurizer = get_featurizer(problem, featurizer_conf)
+        featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
+                                                              raw=False,
+                                                              context=True))
         features = featurizer.get(inst_data)
         # Instance features
         inst_features = features["inst"][0]
@@ -396,9 +453,12 @@ def convert_bdd_to_xgb_data(problem,
         features["var"] = features["var"][order]
         num_var_features = features["var"].shape[1]
 
+        sampling_data_zip = sampling_data_path.parent / f"{sampling_type}.zip"
+        zfp_ = zipfile.Path(sampling_data_zip)
         features_lst, labels_lst, weights_lst = [], [], []
         for lidx, layer in enumerate(bdd):
             _features_lst, _labels_lst, _weights_lst = [], [], []
+
             num_pos = np.sum([1 for node in layer if node['l'] == 1])
 
             # Parent variable features
@@ -486,7 +546,6 @@ def convert_bdd_to_xgb_data(problem,
     data = (np.array(data[0]), np.array(data[1]).reshape(-1, 1), np.array(data[2]).reshape(-1, 1))
     data = np.hstack(data)
 
-    sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
     file_path = resource_path / "xgb_data" / problem / size / split / sampling_type
     file_path.mkdir(parents=True, exist_ok=True)
     file_path /= f"{pid}.npy"

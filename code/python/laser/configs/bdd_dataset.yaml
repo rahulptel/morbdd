@@ -1,7 +1,12 @@
 # Tensor: PyTorch Dataset
 # DMatrix: XGBoost Dataset
 dtype: DMatrix
+# classification: Classification
+# regression: Regression
+task: classification
+## Classification labels
 # binary: Negative samples: 0, positive samples 1
+## Regression labels
 # mo (margin_one): Negative samples: -1, positive samples 1
 # mos(margin_one_score): Negative samples: -1, positive samples: 1+score
 # nms(neg_margin_score): Negative samples: -1, positive samples: score
@@ -36,6 +41,9 @@ neg_pos_ratio_all:
   train: 1
   val: 1
   test: -1
+neg_pos_ratio: ${neg_pos_ratio_all[${split}]}
+state_norm_const: 1000
+layer_norm_const: 100
 flag_layer_penalty: true
 # layer in [0, 1], 0 for root and 1 for terminal
 # const:        1
@@ -45,11 +53,11 @@ flag_layer_penalty: true
 # quadratic:    e^(-0.5 - 1) * layer^2 + 1
 # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
 layer_penalty: exponential
-state_norm_const: 1000
-layer_norm_const: 100
-flag_label_penalty: false
-label_penalty: ${neg_pos_ratio}
-neg_pos_ratio: ${neg_pos_ratio_all[${split}]}
+flag_imbalance_penalty: false
+flag_importance_penalty: false
+# sum: Add all the penalties
+# product: Multiply all the penalties
+penalty_aggregation: sum
 min_samples: 0
 seed: 789541
 
