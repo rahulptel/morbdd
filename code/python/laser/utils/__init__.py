@@ -398,6 +398,79 @@ def convert_bdd_to_tensor_data(problem,
     torch.save(data, file_path)
 
 
+def extract_node_features(problem,
+                          lidx,
+                          node,
+                          prev_layer,
+                          inst_data,
+                          layer_norm_const=None,
+                          state_norm_const=None):
+    def extract_node_features_knapsack():
+        # Node features
+        norm_state = node["s"][0] / state_norm_const
+        state_to_capacity = node["s"][0] / inst_data["capacity"]
+        _node_feat = np.array([norm_state, state_to_capacity, (lidx + 1) / layer_norm_const])
+
+        # Parent node features
+        _parent_node_feat = []
+        if lidx == 0:
+            _parent_node_feat.extend([1, -1, -1, -1, -1, -1])
+        else:
+            # 1 implies parent of the one arc
+            _parent_node_feat.append(1)
+            if len(node["op"]) > 1:
+                prev_node_idx = node["op"][0]
+                prev_state = prev_layer[prev_node_idx]["s"][0]
+                _parent_node_feat.append(prev_state / state_norm_const)
+                _parent_node_feat.append(prev_state / inst_data["capacity"])
+            else:
+                _parent_node_feat.append(-1)
+                _parent_node_feat.append(-1)
+
+            # -1 implies parent of the zero arc
+            _parent_node_feat.append(-1)
+            if len(node["zp"]) > 0:
+                _parent_node_feat.append(norm_state)
+                _parent_node_feat.append(state_to_capacity)
+            else:
+                _parent_node_feat.append(-1)
+                _parent_node_feat.append(-1)
+        _parent_node_feat = np.array(_parent_node_feat)
+
+        return _node_feat, _parent_node_feat
+
+    if problem == "knapsack":
+        node_feat, parent_node_feat = extract_node_features_knapsack()
+        return node_feat, parent_node_feat
+    else:
+        raise ValueError("Invalid problem!")
+
+
+def get_aggregated_weight(aggregation="sum",
+                          flag_layer_penalty=False,
+                          layer_weight=1,
+                          flag_imbalance_penalty=False,
+                          imb_wt=1,
+                          flag_importance_penalty=False,
+                          score=0):
+    weight = None
+    if aggregation == "sum":
+        l_wt = layer_weight if flag_layer_penalty else 0
+        imb_wt = imb_wt if flag_imbalance_penalty else 0
+        imp_wt = score if flag_importance_penalty else 0
+        weight = l_wt + imb_wt + imp_wt
+    elif aggregation == "mul":
+        l_wt = layer_weight if flag_layer_penalty else 1
+        imb_wt = imb_wt if flag_imbalance_penalty else 1
+        imp_wt = score if flag_importance_penalty else 1
+        weight = l_wt * imb_wt * imp_wt
+
+    if weight is None or weight == 0:
+        return 1
+
+    return weight
+
+
 def convert_bdd_to_xgb_data(problem,
                             bdd=None,
                             num_objs=None,
@@ -422,134 +495,240 @@ def convert_bdd_to_xgb_data(problem,
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
     sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
+    # Check if the features for pid exists in the zip file
+    zipfile_path = sampling_data_path.joinpath(f"{sampling_type}.zip")
+    if zipfile_path.exists():
+        zfp = zipfile.Path(str(zipfile_path))
+        features_exists = zfp.joinpath(f"{sampling_type}/{pid}.npy").exists()
+    else:
+        features_exists = False
 
-    weight_type = ""
+    labels_data_path = resource_path / "xgb_data" / problem / size / split / "labels" / label_type
+    labels_data_path.mkdir(parents=True, exist_ok=True)
+    zipfile_path = labels_data_path.joinpath(f"{label_type}.zip")
+    if zipfile_path.exists():
+        zfp = zipfile.Path(str(zipfile_path))
+        labels_exists = zfp.joinpath(f"{label_type}/{pid}.npy").exists()
+    else:
+        labels_exists = False
+
+    weights_type = ""
     if flag_layer_penalty:
-        weight_type += f"{layer_penalty}-"
-    weight_type += "1-" if flag_imbalance_penalty else "0-"
-    weight_type += "1-" if flag_importance_penalty else "0-"
-    weight_type += penalty_aggregation
-    weight_data_path = resource_path / "xgb_data" / problem / size / split / weight_type
-    weight_data_path.mkdir(parents=True, exist_ok=True)
+        weights_type += f"{layer_penalty}-"
+    weights_type += "1-" if flag_imbalance_penalty else "0-"
+    weights_type += "1-" if flag_importance_penalty else "0-"
+    weights_type += penalty_aggregation
+    weights_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type / weights_type
+    weights_data_path.mkdir(parents=True, exist_ok=True)
+    zipfile_path = weights_data_path.joinpath(f"{sampling_type}.zip")
+    if zipfile_path.exists():
+        zfp = zipfile.Path(str(zipfile_path))
+        weights_exists = zfp.joinpath(f"{sampling_type}/{weights_type}/{pid}.npy").exists()
+    else:
+        weights_exists = False
 
-    label_data_path = resource_path / "xgb_data" / problem / size / split / label_type
-    label_data_path.mkdir(parents=True, exist_ok=True)
+    print(f"Processed {pid}: Features - {features_exists}")
 
     def convert_bdd_to_xgb_data_knapsack():
         rng = random.Random(random_seed)
-        layer_weight = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
+        features_lst = None if features_exists else []
+        weights_lst = None if weights_exists else []
+        labels_lst = None if labels_exists else []
+        layer_weight_lst = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
 
-        # Read instance
-        inst_data = get_instance_data(problem, size, split, pid)
-        order = get_order(problem, order_type, inst_data)
-        # Extract instance and variable features
-        featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
-                                                              raw=False,
-                                                              context=True))
-        features = featurizer.get(inst_data)
-        # Instance features
-        inst_features = features["inst"][0]
-        # Variable features. Reordered features based on ordering
-        features["var"] = features["var"][order]
-        num_var_features = features["var"].shape[1]
+        inst_data, order, features, inst_features, var_features, num_var_features = None, None, None, None, None, None
+        if not features_exists:
+            # Read instance
+            inst_data = get_instance_data(problem, size, split, pid)
+            order = get_order(problem, order_type, inst_data)
+            # Extract instance and variable features
+            featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
+                                                                  raw=False,
+                                                                  context=True))
+            features = featurizer.get(inst_data)
+            # Instance features
+            inst_features = features["inst"][0]
+            # Variable features. Reordered features based on ordering
+            var_features = features["var"][order]
+            num_var_features = features["var"].shape[1]
 
-        sampling_data_zip = sampling_data_path.parent / f"{sampling_type}.zip"
-        zfp_ = zipfile.Path(sampling_data_zip)
-        features_lst, labels_lst, weights_lst = [], [], []
+        # features_lst, labels_lst, weights_lst = [], [], []
         for lidx, layer in enumerate(bdd):
-            _features_lst, _labels_lst, _weights_lst = [], [], []
+            # _features_lst, _labels_lst, _weights_lst = [], [], []
+            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
 
-            num_pos = np.sum([1 for node in layer if node['l'] == 1])
+            # Subsample negative samples
+            num_pos_samples = len(pos_ids)
+            if neg_pos_ratio < 1:
+                num_neg_samples = len(neg_ids)
+            else:
+                num_neg_samples = np.max([int(neg_pos_ratio * num_pos_samples),
+                                          min_samples])
+                num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
+                rng.shuffle(neg_ids)
+            neg_ids = neg_ids[:num_neg_samples]
 
-            # Parent variable features
-            _parent_var_feat = -1 * np.ones(num_var_features) \
-                if lidx == 0 \
-                else features["var"][lidx - 1]
+            # Imbalance weights for the current layer
+            pos_imb_wt = num_neg_samples / (num_pos_samples + num_neg_samples)
+            neg_imb_wt = 1 - pos_imb_wt
 
-            for node in layer:
-                # Node features
-                norm_state = node["s"][0] / state_norm_const
-                state_to_capacity = node["s"][0] / inst_data["capacity"]
-                _node_feat = np.array([norm_state, state_to_capacity, (lidx + 1) / layer_norm_const])
+            _parent_var_feat, _var_feat = None, None
+            if not features_exists:
+                # Variable features: Parent and current layer
+                _parent_var_feat = -1 * np.ones(num_var_features) \
+                    if lidx == 0 \
+                    else var_features[lidx - 1]
+                _var_feat = var_features[lidx]
 
-                # Parent node features
-                _parent_node_feat = []
-                if lidx == 0:
-                    _parent_node_feat.extend([1, -1, -1, -1, -1, -1])
-                else:
-                    # 1 implies parent of the one arc
-                    _parent_node_feat.append(1)
-                    if len(node["op"]) > 1:
-                        prev_layer = lidx - 1
-                        prev_node_idx = node["op"][0]
-                        prev_state = bdd[prev_layer][prev_node_idx]["s"][0]
-                        _parent_node_feat.append(prev_state / state_norm_const)
-                        _parent_node_feat.append(prev_state / inst_data["capacity"])
-                    else:
-                        _parent_node_feat.append(-1)
-                        _parent_node_feat.append(-1)
-
-                    # -1 implies parent of the zero arc
-                    _parent_node_feat.append(-1)
-                    if len(node["zp"]) > 0:
-                        _parent_node_feat.append(norm_state)
-                        _parent_node_feat.append(state_to_capacity)
-                    else:
-                        _parent_node_feat.append(-1)
-                        _parent_node_feat.append(-1)
-                _parent_node_feat = np.array(_parent_node_feat)
-
-                if node["l"] > 0:
-                    # Features
+            prev_layer = bdd[lidx - 1]
+            for pos_id in pos_ids:
+                node = layer[pos_id]
+                if not features_exists:
+                    _node_feat, _parent_node_feat = extract_node_features("knapsack",
+                                                                          lidx,
+                                                                          node,
+                                                                          prev_layer,
+                                                                          inst_data,
+                                                                          layer_norm_const=layer_norm_const,
+                                                                          state_norm_const=state_norm_const)
                     features_lst.append(np.concatenate((inst_features,
                                                         _parent_var_feat,
                                                         _parent_node_feat,
-                                                        features["var"][lidx],
+                                                        _var_feat,
                                                         _node_feat)))
-                    labels_lst.append(node["l"])
-                    weights_lst.append(layer_weight[lidx])
-                else:
-                    # Features
-                    _features_lst.append(np.concatenate((inst_features,
-                                                         _parent_var_feat,
-                                                         _parent_node_feat,
-                                                         features["var"][lidx],
-                                                         _node_feat)))
-                    _labels_lst.append(node["l"])
-                    _weights_lst.append(layer_weight[lidx])
 
-            # Select samples from local to append to the global
-            if neg_pos_ratio == -1:
-                # Select all negative samples
-                features_lst.extend(_features_lst)
-                labels_lst.extend(_labels_lst)
-                weights_lst.extend(_weights_lst)
-            else:
-                neg_idxs = list(range(len(_labels_lst)))
-                rng.shuffle(neg_idxs)
-                num_neg_samples = np.max([int(neg_pos_ratio * num_pos),
-                                          min_samples])
-                num_neg_samples = np.min([num_neg_samples,
-                                          len(_labels_lst)])
-                for nidx in neg_idxs[:num_neg_samples]:
-                    features_lst.append(_features_lst[nidx])
-                    labels_lst.append(_labels_lst[nidx])
-                    weights_lst.append(_weights_lst[nidx])
+                if not labels_exists:
+                    labels_lst.append(node["l"])
+
+                if not weights_exists:
+                    weights_lst.append(get_aggregated_weight(
+                        aggregation=penalty_aggregation,
+                        flag_layer_penalty=flag_layer_penalty,
+                        layer_weight=layer_weight_lst[lidx],
+                        flag_imbalance_penalty=flag_imbalance_penalty,
+                        imb_wt=pos_imb_wt,
+                        flag_importance_penalty=flag_importance_penalty,
+                        score=node["score"]))
+
+            for neg_id in neg_ids:
+                node = layer[neg_id]
+                if not features_exists:
+                    _node_feat, _parent_node_feat = extract_node_features("knapsack",
+                                                                          lidx,
+                                                                          node,
+                                                                          prev_layer,
+                                                                          inst_data,
+                                                                          layer_norm_const=layer_norm_const,
+                                                                          state_norm_const=state_norm_const)
+                    features_lst.append(np.concatenate((inst_features,
+                                                        _parent_var_feat,
+                                                        _parent_node_feat,
+                                                        _var_feat,
+                                                        _node_feat)))
+
+                if not labels_exists:
+                    labels_lst.append(node["l"])
+
+                if not weights_exists:
+                    weights_lst.append(get_aggregated_weight(
+                        aggregation=penalty_aggregation,
+                        flag_layer_penalty=flag_layer_penalty,
+                        layer_weight=layer_weight_lst[lidx],
+                        flag_imbalance_penalty=flag_imbalance_penalty,
+                        imb_wt=neg_imb_wt,
+                        flag_importance_penalty=False,
+                        score=0))
+
+            # for node in layer:
+            #     # Node features
+            #     norm_state = node["s"][0] / state_norm_const
+            #     state_to_capacity = node["s"][0] / inst_data["capacity"]
+            #     _node_feat = np.array([norm_state, state_to_capacity, (lidx + 1) / layer_norm_const])
+            #
+            #     # Parent node features
+            #     _parent_node_feat = []
+            #     if lidx == 0:
+            #         _parent_node_feat.extend([1, -1, -1, -1, -1, -1])
+            #     else:
+            #         # 1 implies parent of the one arc
+            #         _parent_node_feat.append(1)
+            #         if len(node["op"]) > 1:
+            #             prev_layer = lidx - 1
+            #             prev_node_idx = node["op"][0]
+            #             prev_state = bdd[prev_layer][prev_node_idx]["s"][0]
+            #             _parent_node_feat.append(prev_state / state_norm_const)
+            #             _parent_node_feat.append(prev_state / inst_data["capacity"])
+            #         else:
+            #             _parent_node_feat.append(-1)
+            #             _parent_node_feat.append(-1)
+            #
+            #         # -1 implies parent of the zero arc
+            #         _parent_node_feat.append(-1)
+            #         if len(node["zp"]) > 0:
+            #             _parent_node_feat.append(norm_state)
+            #             _parent_node_feat.append(state_to_capacity)
+            #         else:
+            #             _parent_node_feat.append(-1)
+            #             _parent_node_feat.append(-1)
+            #     _parent_node_feat = np.array(_parent_node_feat)
+            #
+            #     if node["l"] > 0:
+            #         # Features
+            #         features_lst.append(np.concatenate((inst_features,
+            #                                             _parent_var_feat,
+            #                                             _parent_node_feat,
+            #                                             features["var"][lidx],
+            #                                             _node_feat)))
+            #         labels_lst.append(node["l"])
+            #         weights_lst.append(layer_weight[lidx])
+            #     else:
+            #         # Features
+            #         _features_lst.append(np.concatenate((inst_features,
+            #                                              _parent_var_feat,
+            #                                              _parent_node_feat,
+            #                                              features["var"][lidx],
+            #                                              _node_feat)))
+            #         _labels_lst.append(node["l"])
+            #         _weights_lst.append(layer_weight[lidx])
+
+            # # Select samples from local to append to the global
+            # if neg_pos_ratio == -1:
+            #     # Select all negative samples
+            #     features_lst.extend(_features_lst)
+            #     labels_lst.extend(_labels_lst)
+            #     weights_lst.extend(_weights_lst)
+            # else:
+            #     neg_idxs = list(range(len(_labels_lst)))
+            #     rng.shuffle(neg_idxs)
+            #     num_neg_samples = np.max([int(neg_pos_ratio * num_pos),
+            #                               min_samples])
+            #     num_neg_samples = np.min([num_neg_samples,
+            #                               len(_labels_lst)])
+            #     for nidx in neg_idxs[:num_neg_samples]:
+            #         features_lst.append(_features_lst[nidx])
+            #         labels_lst.append(_labels_lst[nidx])
+            #         weights_lst.append(_weights_lst[nidx])
 
         return features_lst, labels_lst, weights_lst
 
-    data = None
     if problem == "knapsack":
         data = convert_bdd_to_xgb_data_knapsack()
+    else:
+        raise ValueError("Invalid problem type!")
 
-    assert data is not None
-    data = (np.array(data[0]), np.array(data[1]).reshape(-1, 1), np.array(data[2]).reshape(-1, 1))
-    data = np.hstack(data)
+    features_lst, labels_lst, weights_lst = data
+    if features_lst is not None:
+        features_np = np.array(features_lst)
+        np.save(open(sampling_data_path.joinpath(f"{pid}.npy"), "wb"), features_np)
 
-    file_path = resource_path / "xgb_data" / problem / size / split / sampling_type
-    file_path.mkdir(parents=True, exist_ok=True)
-    file_path /= f"{pid}.npy"
-    np.save(open(file_path, "wb"), data)
+    if labels_lst is not None:
+        labels_np = np.array(labels_lst)
+        np.save(open(labels_data_path.joinpath(f"{pid}.npy"), "wb"), labels_np)
+
+    if weights_lst is not None:
+        weights_np = np.array(weights_lst)
+        np.save(open(weights_data_path.joinpath(f"{pid}.npy"), "wb"), weights_np)
 
 
 def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):

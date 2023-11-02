@@ -63,7 +63,6 @@ def worker_xgb(rank, cfg):
                                 flag_importance_penalty=cfg.flag_importance_penalty,
                                 penalty_aggregation=cfg.penalty_aggregation,
                                 random_seed=cfg.seed)
-        print(f"Processed {pid}...")
 
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="bdd_dataset.yaml")
@@ -83,6 +82,8 @@ def main(cfg):
 
     for r in results:
         r.get()
+    # Debug
+    # worker_fn(0, cfg)
 
 
 if __name__ == '__main__':
