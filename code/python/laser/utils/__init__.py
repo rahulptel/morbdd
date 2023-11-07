@@ -984,3 +984,53 @@ def label_bdd(bdd, labeling_scheme):
                 raise ValueError("Invalid labeling scheme!")
 
     return bdd
+
+
+def get_xgb_model_name(cfg):
+    def get_model_name_knapsack():
+        name = f"{cfg.max_depth}-"
+        name += f"{cfg.eta}-"
+        name += f"{cfg.objective}-"
+        name += f"{cfg.num_round}-"
+        name += f"{cfg.early_stopping_rounds}-"
+        for eval in cfg.evals:
+            name += f"{eval}"
+        for em in cfg.eval_metric:
+            name += f"{em}-"
+        name += f"{cfg.seed}"
+
+        name += f"{cfg.prob.name}-"
+        name += f"{cfg.prob.num_objs}-"
+        name += f"{cfg.prob.num_vars}-"
+        name += f"{cfg.prob.order}-"
+        name += f"{cfg.prob.layer_norm_const}-"
+        name += f"{cfg.prob.state_norm_const}-"
+
+        name += f"{cfg.train.from_pid}-"
+        name += f"{cfg.train.to_pid}-"
+        name += f"{cfg.train.neg_pos_ratio}-"
+        name += f"{cfg.train.min_samples}-"
+        name += f"{cfg.train.flag_layer_penalty}-"
+        name += f"{cfg.train.layer_penalty}-"
+        name += f"{cfg.train.flag_imbalance_penalty}-"
+        name += f"{cfg.train.flag_importance_penalty}-"
+        name += f"{cfg.train.penalty_aggregation}-"
+
+        name += f"{cfg.val.from_pid}-"
+        name += f"{cfg.val.to_pid}-"
+        name += f"{cfg.val.neg_pos_ratio}-"
+        name += f"{cfg.val.min_samples}-"
+        name += f"{cfg.val.flag_layer_penalty}-"
+        name += f"{cfg.val.layer_penalty}-"
+        name += f"{cfg.val.flag_imbalance_penalty}-"
+        name += f"{cfg.val.flag_importance_penalty}-"
+        name += f"{cfg.val.penalty_aggregation}-"
+
+        name += f"{cfg.device}"
+
+        return name
+
+    if cfg.prob.name == "knapsack":
+        return get_model_name_knapsack()
+    else:
+        raise ValueError("Invalid problem!")

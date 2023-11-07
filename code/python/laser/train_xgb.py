@@ -11,19 +11,26 @@ from laser import resource_path
 from omegaconf import OmegaConf
 import pandas as pd
 import datetime
+from laser.utils import get_xgb_model_name
 
 
 class Iterator(xgb.DataIter):
-    def __init__(self, problem, size, split, neg_pos_ratio, min_samples, names):
+    def __init__(self, problem, size, split, neg_pos_ratio, min_samples, sampling_type, weights_type, labels_type,
+                 names):
         self.problem = problem
         self.size = size
         self.split = split
         self.neg_pos_ratio = neg_pos_ratio
         self.min_samples = min_samples
-        self.dtype = f"npr{self.neg_pos_ratio}ms{self.min_samples}"
+        self.sampling_type = sampling_type
+        self.weights_type = weights_type
+        self.labels_type = labels_type
         self.names = names
 
-        self.zf = zipfile.ZipFile(resource_path / f"xgb_data/{self.problem}/{self.size}/{self.split}.zip")
+        self.zf_sampling = zipfile.ZipFile(
+            resource_path / f"xgb_data/{self.problem}/{self.size}/{self.split}/{sampling_type}.zip")
+        self.zf_labels_type = zipfile.ZipFile(
+            resource_path / f"xgb_data/{self.problem}/{self.size}/{self.split}/labels/{labels_type}.zip")
 
         self._it = 0
         # XGBoost will generate some cache files under current directory with the prefix
@@ -42,10 +49,19 @@ class Iterator(xgb.DataIter):
         # input_data is a function passed in by XGBoost who has the exact same signature of
         # ``DMatrix``
         _name = self.names[self._it]
-        with self.zf.open(f"{self.split}/{self.dtype}/{_name}", "r") as fp:
+        with self.zf_sampling.open(f"{self.sampling_type}/{_name}", "r") as fp:
             data = io.BytesIO(fp.read())
-            data_np = np.load(data)
-        input_data(data=data_np[:, :-2], label=data_np[:, -2], weight=data_np[:, -1])
+            x = np.load(data)
+
+        with self.zf_sampling.open(f"{self.sampling_type}/{self.weights_type}/{_name}", "r") as fp:
+            data = io.BytesIO(fp.read())
+            wt = np.load(data)
+
+        with self.zf_labels_type.open(f"{self.labels_type}/{_name}", "r") as fp:
+            data = io.BytesIO(fp.read())
+            y = np.load(data)
+
+        input_data(data=x, label=y, weight=wt)
         self._it += 1
         # Return 1 to let XGBoost know we haven't seen all the files yet.
         return 1
@@ -67,76 +83,47 @@ def get_dmatrix_filename(cfg, split):
     return name
 
 
-def get_iterator(cfg, dtype, split):
-    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/{split}.zip")
+def get_iterator(cfg, sampling_type, weights_type, label_type, split):
     valid_names = [f"{i}.npy" for i in range(cfg[split].from_pid, cfg[split].to_pid)]
-    filenames = [p.name for p in zf_path.joinpath(f'{split}/{dtype}').iterdir() if p.name in valid_names]
+
+    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/{split}/{sampling_type}.zip")
+    data_names = [p.name for p in zf_path.joinpath(f'{sampling_type}').iterdir() if p.name in valid_names]
+    weight_names = [p.name for p in zf_path.joinpath(f'{sampling_type}/{weights_type}').iterdir() if
+                    p.name in valid_names]
+
+    zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{cfg.prob.size}/{split}/labels/{label_type}.zip")
+    label_names = [p.name for p in zf_path.joinpath(f'{label_type}').iterdir() if p.name in valid_names]
     print("Iterator on ", split, ": len - ", len(filenames))
     it = Iterator(cfg.prob.name,
                   cfg.prob.size,
                   split,
                   cfg[split].neg_pos_ratio,
                   cfg[split].min_samples,
+                  sampling_type,
                   filenames)
 
     return it
 
 
-def get_xgb_model_name(cfg):
-    def get_model_name_knapsack():
-        name = f"{cfg.max_depth}-"
-        name += f"{cfg.eta}-"
-        name += f"{cfg.objective}-"
-        name += f"{cfg.num_round}-"
-        name += f"{cfg.early_stopping_rounds}-"
-        for eval in cfg.evals:
-            name += f"{eval}"
-        for em in cfg.eval_metric:
-            name += f"{em}-"
-        name += f"{cfg.seed}"
-
-        name += f"{cfg.prob.name}-"
-        name += f"{cfg.prob.num_objs}-"
-        name += f"{cfg.prob.num_vars}-"
-        name += f"{cfg.prob.order}-"
-        name += f"{cfg.prob.layer_norm_const}-"
-        name += f"{cfg.prob.state_norm_const}-"
-
-        name += f"{cfg.train.from_pid}-"
-        name += f"{cfg.train.to_pid}-"
-        name += f"{cfg.train.neg_pos_ratio}-"
-        name += f"{cfg.train.min_samples}-"
-        name += f"{cfg.train.flag_layer_penalty}-"
-        name += f"{cfg.train.layer_penalty}-"
-        name += f"{cfg.train.flag_imbalance_penalty}-"
-        name += f"{cfg.train.flag_importance_penalty}-"
-        name += f"{cfg.train.penalty_aggregation}-"
-
-        name += f"{cfg.val.from_pid}-"
-        name += f"{cfg.val.to_pid}-"
-        name += f"{cfg.val.neg_pos_ratio}-"
-        name += f"{cfg.val.min_samples}-"
-        name += f"{cfg.val.flag_layer_penalty}-"
-        name += f"{cfg.val.layer_penalty}-"
-        name += f"{cfg.val.flag_imbalance_penalty}-"
-        name += f"{cfg.val.flag_importance_penalty}-"
-        name += f"{cfg.val.penalty_aggregation}-"
-
-        name += f"{cfg.device}"
-
-        return name
-
-    if cfg.prob.name == "knapsack":
-        return get_model_name_knapsack()
-    else:
-        raise ValueError("Invalid problem!")
-
-
 @hydra.main(version_base="1.2", config_path="./configs", config_name="train_xgb.yaml")
 def main(cfg):
-    dtype = f"npr{cfg.train.neg_pos_ratio}ms{cfg.train.min_samples}"
-    dtrain = xgb.DMatrix(get_iterator(cfg, dtype, "train"))
-    dval = xgb.DMatrix(get_iterator(cfg, dtype, "val"))
+    sampling_type = f"npr{cfg.train.neg_pos_ratio}ms{cfg.train.min_samples}"
+    weights_type = ""
+    if cfg.train.flag_layer_penalty:
+        weights_type += f"{cfg.train.layer_penalty}-"
+    weights_type += "1-" if cfg.train.flag_imbalance_penalty else "0-"
+    weights_type += "1-" if cfg.train.flag_importance_penalty else "0-"
+    weights_type += cfg.train.penalty_aggregation
+    dtrain = xgb.DMatrix(get_iterator(cfg, sampling_type, weights_type, "train"))
+
+    sampling_type = f"npr{cfg.val.neg_pos_ratio}ms{cfg.val.min_samples}"
+    weights_type = ""
+    if cfg.val.flag_layer_penalty:
+        weights_type += f"{cfg.val.layer_penalty}-"
+    weights_type += "1-" if cfg.val.flag_imbalance_penalty else "0-"
+    weights_type += "1-" if cfg.val.flag_importance_penalty else "0-"
+    weights_type += cfg.val.penalty_aggregation
+    dval = xgb.DMatrix(get_iterator(cfg, sampling_type, weights_type, "val"))
 
     print("Number of training samples: ", dtrain.num_row())
     print("Number of validation samples: ", dval.num_row())
