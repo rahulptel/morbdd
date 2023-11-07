@@ -6,8 +6,11 @@ import zipfile
 import hydra
 import numpy as np
 import xgboost as xgb
-
+import hashlib
 from laser import resource_path
+from omegaconf import OmegaConf
+import pandas as pd
+import datetime
 
 
 class Iterator(xgb.DataIter):
@@ -79,6 +82,56 @@ def get_iterator(cfg, dtype, split):
     return it
 
 
+def get_xgb_model_name(cfg):
+    def get_model_name_knapsack():
+        name = f"{cfg.max_depth}-"
+        name += f"{cfg.eta}-"
+        name += f"{cfg.objective}-"
+        name += f"{cfg.num_round}-"
+        name += f"{cfg.early_stopping_rounds}-"
+        for eval in cfg.evals:
+            name += f"{eval}"
+        for em in cfg.eval_metric:
+            name += f"{em}-"
+        name += f"{cfg.seed}"
+
+        name += f"{cfg.prob.name}-"
+        name += f"{cfg.prob.num_objs}-"
+        name += f"{cfg.prob.num_vars}-"
+        name += f"{cfg.prob.order}-"
+        name += f"{cfg.prob.layer_norm_const}-"
+        name += f"{cfg.prob.state_norm_const}-"
+
+        name += f"{cfg.train.from_pid}-"
+        name += f"{cfg.train.to_pid}-"
+        name += f"{cfg.train.neg_pos_ratio}-"
+        name += f"{cfg.train.min_samples}-"
+        name += f"{cfg.train.flag_layer_penalty}-"
+        name += f"{cfg.train.layer_penalty}-"
+        name += f"{cfg.train.flag_imbalance_penalty}-"
+        name += f"{cfg.train.flag_importance_penalty}-"
+        name += f"{cfg.train.penalty_aggregation}-"
+
+        name += f"{cfg.val.from_pid}-"
+        name += f"{cfg.val.to_pid}-"
+        name += f"{cfg.val.neg_pos_ratio}-"
+        name += f"{cfg.val.min_samples}-"
+        name += f"{cfg.val.flag_layer_penalty}-"
+        name += f"{cfg.val.layer_penalty}-"
+        name += f"{cfg.val.flag_imbalance_penalty}-"
+        name += f"{cfg.val.flag_importance_penalty}-"
+        name += f"{cfg.val.penalty_aggregation}-"
+
+        name += f"{cfg.device}"
+
+        return name
+
+    if cfg.prob.name == "knapsack":
+        return get_model_name_knapsack()
+    else:
+        raise ValueError("Invalid problem!")
+
+
 @hydra.main(version_base="1.2", config_path="./configs", config_name="train_xgb.yaml")
 def main(cfg):
     dtype = f"npr{cfg.train.neg_pos_ratio}ms{cfg.train.min_samples}"
@@ -111,11 +164,31 @@ def main(cfg):
                     evals_result=evals_result)
     mdl_path = resource_path / "pretrained/xgb"
     mdl_path.mkdir(parents=True, exist_ok=True)
-    mdl_path = mdl_path / f"model_{cfg.train.from_pid}_{cfg.train.to_pid}.json"
-    bst.save_model(mdl_path)
-
-    metrics_path = mdl_path.parent / f"metrics_{cfg.train.from_pid}_{cfg.train.to_pid}.json"
-    json.dump(evals_result, open(metrics_path, "w"))
+    # Get model name
+    mdl_name = get_xgb_model_name(cfg)
+    # Convert to hex
+    h = hashlib.blake2s(digest_size=32)
+    h.update(mdl_name)
+    hex = h.hexdigest()
+    # Save config
+    with open(f"{hex}.yaml", "w") as fp:
+        OmegaConf.save(cfg, fp)
+    # Save model
+    bst.save_model(mdl_path.joinpath(f"model_{hex}.json"))
+    # Save metrics
+    json.dump(evals_result, open(mdl_path.joinpath(f"metrics_{hex}.json"), "w"))
+    # Save summary
+    summary_line = [datetime.datetime.now(), hex]
+    for em in cfg.eval_metric:
+        summary_line.append(evals_result[em][bst.best_iteration])
+    summary_line_str = ",".join(list(map(str, summary_line)))
+    summary_path = mdl_path.joinpath("summary.csv")
+    if summary_path.exists():
+        with summary_path.open("a") as fp:
+            fp.write(summary_line_str)
+    else:
+        with summary_path.open("w") as fp:
+            fp.write(summary_line_str)
 
 
 if __name__ == '__main__':
