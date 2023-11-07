@@ -121,7 +121,7 @@ def get_context_features(layer_idxs, inst_feat, num_objs, num_vars, device):
 
 
 def get_layer_weights_const(num_vars):
-    return [1 for _ in num_vars]
+    return [1 for _ in range(num_vars)]
 
 
 def get_layer_weights_linear(lidxs):
@@ -160,17 +160,17 @@ def get_layer_weights(flag_penalty, penalty, num_vars):
         layer_weight = get_layer_weights_fn[penalty](lidxs)
     else:
         a, b = penalty.strip().split("+")
-        a1, a2 = a.split("#")
+        a1, a2 = a.split("-")
         upto_layer = int(a2)
         if a1 == "const":
             layer_weight_a = get_layer_weights_fn["const"](upto_layer)
         else:
-            layer_weight_a = get_layer_weights_fn[penalty](lidxs[:upto_layer])
+            layer_weight_a = get_layer_weights_fn[a1](lidxs[:upto_layer])
 
         if b == "const":
             layer_weight_b = get_layer_weights_fn["const"](num_vars)
         else:
-            layer_weight_b = get_layer_weights_fn[penalty](lidxs)
+            layer_weight_b = get_layer_weights_fn[b](lidxs)
 
         layer_weight = layer_weight_a
         layer_weight.extend(layer_weight_b[:num_vars - upto_layer])
@@ -496,7 +496,7 @@ def convert_bdd_to_xgb_data(problem,
     sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     # Check if the features for pid exists in the zip file
-    zipfile_path = sampling_data_path.joinpath(f"{sampling_type}.zip")
+    zipfile_path = sampling_data_path.parent.joinpath(f"{sampling_type}.zip")
     if zipfile_path.exists():
         zfp = zipfile.Path(str(zipfile_path))
         features_exists = zfp.joinpath(f"{sampling_type}/{pid}.npy").exists()
@@ -505,7 +505,7 @@ def convert_bdd_to_xgb_data(problem,
 
     labels_data_path = resource_path / "xgb_data" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
-    zipfile_path = labels_data_path.joinpath(f"{label_type}.zip")
+    zipfile_path = labels_data_path.parent.joinpath(f"{label_type}.zip")
     if zipfile_path.exists():
         zfp = zipfile.Path(str(zipfile_path))
         labels_exists = zfp.joinpath(f"{label_type}/{pid}.npy").exists()
@@ -520,14 +520,14 @@ def convert_bdd_to_xgb_data(problem,
     weights_type += penalty_aggregation
     weights_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
-    zipfile_path = weights_data_path.joinpath(f"{sampling_type}.zip")
+    zipfile_path = weights_data_path.parent.parent.joinpath(f"{sampling_type}.zip")
     if zipfile_path.exists():
         zfp = zipfile.Path(str(zipfile_path))
         weights_exists = zfp.joinpath(f"{sampling_type}/{weights_type}/{pid}.npy").exists()
     else:
         weights_exists = False
 
-    print(f"Processed {pid}: Features - {features_exists}")
+    print(f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
 
     def convert_bdd_to_xgb_data_knapsack():
         rng = random.Random(random_seed)
