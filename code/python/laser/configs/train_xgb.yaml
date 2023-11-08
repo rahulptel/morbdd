@@ -1,5 +1,18 @@
 device: cpu
 nthread: 16
+# Tensor: PyTorch Dataset
+# DMatrix: XGBoost Dataset
+dtype: DMatrix
+# classification: Classification
+# regression: Regression
+task: classification
+## Classification labels
+# binary: Negative samples: 0, positive samples 1
+## Regression labels
+# mo (margin_one): Negative samples: -1, positive samples 1
+# mos(margin_one_score): Negative samples: -1, positive samples: 1+score
+# nms(neg_margin_score): Negative samples: -1, positive samples: score
+label: binary
 
 max_depth: 10
 eta: 0.3
