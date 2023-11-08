@@ -8,7 +8,7 @@ import pandas as pd
 import xgboost as xgb
 
 from laser import resource_path
-from laser.utils import MockConfig
+from laser.utils import FeaturizerConfig
 from laser.utils import get_featurizer
 from laser.utils import get_instance_data
 from laser.utils import get_order
@@ -24,7 +24,7 @@ def convert_bdd_to_xgb_data_deploy(problem,
                                    layer_norm_const=100):
     def convert_bdd_to_xgb_data_deploy_knapsack():
         # Extract instance and variable features
-        featurizer_conf = MockConfig()
+        featurizer_conf = FeaturizerConfig()
         featurizer = get_featurizer(problem, featurizer_conf)
         features = featurizer.get(inst_data)
         # Instance features
@@ -119,7 +119,7 @@ def score_bdd_nodes_using_preds(bdd, preds):
     return bdd
 
 
-def check_connectedness(pid, bdd):
+def check_connectedness(pid, bdd, threshold=0.5):
     disconnected_layer = 2
     is_connected = False
     for lidx, layer in enumerate(bdd):
@@ -127,19 +127,19 @@ def check_connectedness(pid, bdd):
         for node in layer:
             if is_connected is False:
                 if lidx == 0:
-                    if node["pred"] >= 0.5:
+                    if node["pred"] >= threshold:
                         is_connected = True
                         break
                 else:
-                    if node["pred"] >= 0.5:
+                    if node["pred"] >= threshold:
                         if len(node["op"]):
                             prev_one = node["op"][0]
-                            if bdd[lidx - 1][prev_one]["pred"] >= 0.5:
+                            if bdd[lidx - 1][prev_one]["pred"] >= threshold:
                                 is_connected = True
                                 break
                         if len(node["zp"]):
                             prev_zero = node["zp"][0]
-                            if bdd[lidx - 1][prev_zero]["pred"] >= 0.5:
+                            if bdd[lidx - 1][prev_zero]["pred"] >= threshold:
                                 is_connected = True
                                 break
 
@@ -169,11 +169,9 @@ def worker(rank, cfg):
     model = load_model(cfg)
     pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
     pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
-    pids = []
-    bdd_data = []
+    pids, bdd_data = [], []
 
     for pid in range(cfg.deploy.from_pid + rank, cfg.deploy.to_pid, cfg.deploy.num_processes):
-        print("Started processing ", pid)
         pids.append(pid)
         # Read instance
         inst_data = get_instance_data(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid)
@@ -202,17 +200,17 @@ def worker(rank, cfg):
         # Get prediction stats
         layers = np.round(features[:, -1] * cfg.prob.layer_norm_const)
         for l in list(map(int, np.unique(layers))):
-            tp = (np.round(preds[(layers == l) & (labels > 0)], 1) >= 0.5).sum()
-            fp = (np.round(preds[(layers == l) & (labels <= 0)], 1) >= 0.5).sum()
-            tn = (np.round(preds[(layers == l) & (labels <= 0)], 1) < 0.5).sum()
-            fn = (np.round(preds[(layers == l) & (labels > 0)], 1) < 0.5).sum()
+            tp = (np.round(preds[(layers == l) & (labels > 0)], 1) >= cfg.deploy.threshold).sum()
+            fp = (np.round(preds[(layers == l) & (labels <= 0)], 1) >= cfg.deploy.threshold).sum()
+            tn = (np.round(preds[(layers == l) & (labels <= 0)], 1) < cfg.deploy.threshold).sum()
+            fn = (np.round(preds[(layers == l) & (labels > 0)], 1) < cfg.deploy.threshold).sum()
             pred_stats_per_layer[l][1] += tp
             pred_stats_per_layer[l][2] += fp
             pred_stats_per_layer[l][3] += tn
             pred_stats_per_layer[l][4] += fn
 
         bdd = score_bdd_nodes_using_preds(bdd, preds)
-        is_connected, disconnected_layer = check_connectedness(pid, bdd)
+        is_connected, disconnected_layer = check_connectedness(pid, bdd, threshold=cfg.deploy.threshold)
         _data = []
 
         # Run BDD builder
@@ -244,6 +242,8 @@ def worker(rank, cfg):
             _data.extend([None] * 7)
 
         bdd_data.append(_data)
+
+        print("Finished processing ", pid)
 
     return pids, pred_stats_per_layer, bdd_data
 
