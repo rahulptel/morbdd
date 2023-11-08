@@ -495,22 +495,24 @@ def convert_bdd_to_xgb_data(problem,
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
     sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
+    features_exists = sampling_data_path.joinpath(f"{pid}.npy").exists()
     # Check if the features for pid exists in the zip file
-    zipfile_path = sampling_data_path.parent.joinpath(f"{sampling_type}.zip")
-    if zipfile_path.exists():
-        zfp = zipfile.Path(str(zipfile_path))
-        features_exists = zfp.joinpath(f"{sampling_type}/{pid}.npy").exists()
-    else:
-        features_exists = False
+    # zipfile_path = sampling_data_path.parent.joinpath(f"{sampling_type}.zip")
+    # if zipfile_path.exists():
+    #     zfp = zipfile.Path(str(zipfile_path))
+    #     features_exists = zfp.joinpath(f"{sampling_type}/{pid}.npy").exists()
+    # else:
+    #     features_exists = False
 
     labels_data_path = resource_path / "xgb_data" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
-    zipfile_path = labels_data_path.parent.joinpath(f"{label_type}.zip")
-    if zipfile_path.exists():
-        zfp = zipfile.Path(str(zipfile_path))
-        labels_exists = zfp.joinpath(f"{label_type}/{pid}.npy").exists()
-    else:
-        labels_exists = False
+    labels_exists = labels_data_path.joinpath(f"{pid}.npy").exists()
+    # zipfile_path = labels_data_path.parent.joinpath(f"{label_type}.zip")
+    # if zipfile_path.exists():
+    #     zfp = zipfile.Path(str(zipfile_path))
+    #     labels_exists = zfp.joinpath(f"{label_type}/{pid}.npy").exists()
+    # else:
+    #     labels_exists = False
 
     weights_type = ""
     if flag_layer_penalty:
@@ -520,12 +522,13 @@ def convert_bdd_to_xgb_data(problem,
     weights_type += penalty_aggregation
     weights_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
-    zipfile_path = weights_data_path.parent.parent.joinpath(f"{sampling_type}.zip")
-    if zipfile_path.exists():
-        zfp = zipfile.Path(str(zipfile_path))
-        weights_exists = zfp.joinpath(f"{sampling_type}/{weights_type}/{pid}.npy").exists()
-    else:
-        weights_exists = False
+    weights_exists = weights_data_path.joinpath(f"{pid}.npy").exists()
+    # zipfile_path = weights_data_path.parent.parent.joinpath(f"{sampling_type}.zip")
+    # if zipfile_path.exists():
+    #     zfp = zipfile.Path(str(zipfile_path))
+    #     weights_exists = zfp.joinpath(f"{sampling_type}/{weights_type}/{pid}.npy").exists()
+    # else:
+    #     weights_exists = False
 
     print(f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
 
