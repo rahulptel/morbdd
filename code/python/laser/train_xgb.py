@@ -145,7 +145,7 @@ def main(cfg):
     hex = h.hexdigest()
 
     # Save config
-    with open(f"{hex}.yaml", "w") as fp:
+    with open(mdl_path.joinpath(f"config_{hex}.yaml"), "w") as fp:
         OmegaConf.save(cfg, fp)
 
     # Save model
