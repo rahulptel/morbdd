@@ -138,7 +138,39 @@ def main(cfg):
     # Get model name
     mdl_path = resource_path / "pretrained/xgb"
     mdl_path.mkdir(parents=True, exist_ok=True)
-    mdl_name = get_xgb_model_name(cfg)
+    mdl_name = get_xgb_model_name(max_depth=cfg.max_depth,
+                                  eta=cfg.eta,
+                                  objective=cfg.objective,
+                                  num_round=cfg.num_round,
+                                  early_stopping_rounds=cfg.early_stopping_rounds,
+                                  evals=cfg.evals,
+                                  eval_metric=cfg.eval_metric,
+                                  seed=cfg.seed,
+                                  prob_name=cfg.prob.name,
+                                  num_objs=cfg.prob.num_objs,
+                                  num_vars=cfg.prob.num_vars,
+                                  order=cfg.prob.order,
+                                  layer_norm_const=cfg.prob.layer_norm_const,
+                                  state_norm_const=cfg.prob.state_norm_const,
+                                  train_from_pid=cfg.train.from_pid,
+                                  train_to_pid=cfg.train.to_pid,
+                                  train_neg_pos_ratio=cfg.train.neg_pos_ratio,
+                                  train_min_samples=cfg.train.min_samples,
+                                  train_flag_layer_penalty=cfg.train.flag_layer_penalty,
+                                  train_layer_penalty=cfg.train.layer_penalty,
+                                  train_flag_imbalance_penalty=cfg.train.flag_imbalance_penalty,
+                                  train_flag_importance_penalty=cfg.train.flag_importance_penalty,
+                                  train_penalty_aggregation=cfg.train.penalty_aggregation,
+                                  val_from_pid=cfg.val.from_pid,
+                                  val_to_pid=cfg.val.to_pid,
+                                  val_neg_pos_ratio=cfg.val.neg_pos_ratio,
+                                  val_min_samples=cfg.val.min_samples,
+                                  val_flag_layer_penalty=cfg.val.flag_layer_penalty,
+                                  val_layer_penalty=cfg.val.layer_penalty,
+                                  val_flag_imbalance_penalty=cfg.val.flag_imbalance_penalty,
+                                  val_flag_importance_penalty=cfg.val.flag_importance_penalty,
+                                  val_penalty_aggregation=cfg.val.penalty_aggregation,
+                                  device=cfg.device)
     # Convert to hex
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))

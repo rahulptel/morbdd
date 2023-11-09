@@ -989,51 +989,116 @@ def label_bdd(bdd, labeling_scheme):
     return bdd
 
 
-def get_xgb_model_name(cfg):
+def get_xgb_model_name(max_depth=None,
+                       eta=None,
+                       objective=None,
+                       num_round=None,
+                       early_stopping_rounds=None,
+                       evals=None,
+                       eval_metric=None,
+                       seed=None,
+                       prob_name=None,
+                       num_objs=None,
+                       num_vars=None,
+                       order=None,
+                       layer_norm_const=None,
+                       state_norm_const=None,
+                       train_from_pid=None,
+                       train_to_pid=None,
+                       train_neg_pos_ratio=None,
+                       train_min_samples=None,
+                       train_flag_layer_penalty=None,
+                       train_layer_penalty=None,
+                       train_flag_imbalance_penalty=None,
+                       train_flag_importance_penalty=None,
+                       train_penalty_aggregation=None,
+                       val_from_pid=None,
+                       val_to_pid=None,
+                       val_neg_pos_ratio=None,
+                       val_min_samples=None,
+                       val_flag_layer_penalty=None,
+                       val_layer_penalty=None,
+                       val_flag_imbalance_penalty=None,
+                       val_flag_importance_penalty=None,
+                       val_penalty_aggregation=None,
+                       device=None):
     def get_model_name_knapsack():
-        name = f"{cfg.max_depth}-"
-        name += f"{cfg.eta}-"
-        name += f"{cfg.objective}-"
-        name += f"{cfg.num_round}-"
-        name += f"{cfg.early_stopping_rounds}-"
-        for eval in cfg.evals:
-            name += f"{eval}"
-        for em in cfg.eval_metric:
-            name += f"{em}-"
-        name += f"{cfg.seed}"
+        name = ""
+        if max_depth is not None:
+            name += f"{max_depth}-"
+        if eta is not None:
+            name += f"{eta}-"
+        if objective is not None:
+            name += f"{objective}-"
+        if num_round is not None:
+            name += f"{num_round}-"
+        if early_stopping_rounds is not None:
+            name += f"{early_stopping_rounds}-"
+        if type(evals) is list and len(evals):
+            for eval in evals:
+                name += f"{eval}"
+        if type(eval_metric) is list and len(eval_metric):
+            for em in eval_metric:
+                name += f"{em}-"
+        if seed is not None:
+            name += f"{seed}"
 
-        name += f"{cfg.prob.name}-"
-        name += f"{cfg.prob.num_objs}-"
-        name += f"{cfg.prob.num_vars}-"
-        name += f"{cfg.prob.order}-"
-        name += f"{cfg.prob.layer_norm_const}-"
-        name += f"{cfg.prob.state_norm_const}-"
+        if prob_name is not None:
+            name += f"{prob_name}-"
+        if num_objs is not None:
+            name += f"{num_objs}-"
+        if num_vars is not None:
+            name += f"{num_vars}-"
+        if order is not None:
+            name += f"{order}-"
+        if layer_norm_const is not None:
+            name += f"{layer_norm_const}-"
+        if state_norm_const is not None:
+            name += f"{state_norm_const}-"
 
-        name += f"{cfg.train.from_pid}-"
-        name += f"{cfg.train.to_pid}-"
-        name += f"{cfg.train.neg_pos_ratio}-"
-        name += f"{cfg.train.min_samples}-"
-        name += f"{cfg.train.flag_layer_penalty}-"
-        name += f"{cfg.train.layer_penalty}-"
-        name += f"{cfg.train.flag_imbalance_penalty}-"
-        name += f"{cfg.train.flag_importance_penalty}-"
-        name += f"{cfg.train.penalty_aggregation}-"
+        if train_from_pid is not None:
+            name += f"{train_from_pid}-"
+        if train_to_pid is not None:
+            name += f"{train_to_pid}-"
+        if train_neg_pos_ratio is not None:
+            name += f"{train_neg_pos_ratio}-"
+        if train_min_samples is not None:
+            name += f"{train_min_samples}-"
+        if train_flag_layer_penalty is not None:
+            name += f"{train_flag_layer_penalty}-"
+        if train_layer_penalty is not None:
+            name += f"{train_layer_penalty}-"
+        if train_flag_imbalance_penalty is not None:
+            name += f"{train_flag_imbalance_penalty}-"
+        if train_flag_importance_penalty is not None:
+            name += f"{train_flag_importance_penalty}-"
+        if train_penalty_aggregation is not None:
+            name += f"{train_penalty_aggregation}-"
 
-        name += f"{cfg.val.from_pid}-"
-        name += f"{cfg.val.to_pid}-"
-        name += f"{cfg.val.neg_pos_ratio}-"
-        name += f"{cfg.val.min_samples}-"
-        name += f"{cfg.val.flag_layer_penalty}-"
-        name += f"{cfg.val.layer_penalty}-"
-        name += f"{cfg.val.flag_imbalance_penalty}-"
-        name += f"{cfg.val.flag_importance_penalty}-"
-        name += f"{cfg.val.penalty_aggregation}-"
-
-        name += f"{cfg.device}"
+        if val_from_pid is not None:
+            name += f"{val_from_pid}-"
+        if val_to_pid is not None:
+            name += f"{val_to_pid}-"
+        if val_neg_pos_ratio is not None:
+            name += f"{val_neg_pos_ratio}-"
+        if val_min_samples is not None:
+            name += f"{val_min_samples}-"
+        if val_flag_layer_penalty is not None:
+            name += f"{val_flag_layer_penalty}-"
+        if val_layer_penalty is not None:
+            name += f"{val_layer_penalty}-"
+        if val_flag_imbalance_penalty is not None:
+            name += f"{val_flag_imbalance_penalty}-"
+        if val_flag_importance_penalty is not None:
+            name += f"{val_flag_importance_penalty}-"
+        if val_penalty_aggregation is not None:
+            name += f"{val_penalty_aggregation}-"
+        if device is not None:
+            name += f"{device}"
 
         return name
 
-    if cfg.prob.name == "knapsack":
+    if prob_name == "knapsack":
         return get_model_name_knapsack()
     else:
         raise ValueError("Invalid problem!")
