@@ -1,17 +1,14 @@
-from pathlib import Path
-import json
-import pandas as pd
-from laser import resource_path
-import zipfile
-import numpy as np
-from laser.utils import get_instance_data
-from laser.utils import get_order
 import copy
-import multiprocessing as mp
-import hydra
-
-from laser.utils import get_xgb_model_name
 import hashlib
+import json
+import multiprocessing as mp
+import zipfile
+
+import hydra
+import numpy as np
+
+from laser import resource_path
+from laser.utils import get_xgb_model_name
 
 
 def call_get_model_name(cfg):
@@ -50,9 +47,8 @@ def call_get_model_name(cfg):
                               device=cfg.device)
 
 
-def count_ndps(true_pf, pred_pf, i, mdl_hex):
+def find_ndps_in_preds(true_pf, pred_pf, i, mdl_hex):
     z, z_pred = np.array(true_pf), np.array(pred_pf)
-    print(i, z.shape, z_pred.shape)
     assert z.shape[1] == z_pred.shape[1]
     num_objs = z.shape[1]
 
@@ -75,38 +71,62 @@ def count_ndps(true_pf, pred_pf, i, mdl_hex):
             j += 1
 
     found_ndps = np.array(found_ndps)
-    p = resource_path / f"predictions/xgb/{mdl_hex}/count_pareto"
-    p.mkdir(exist_ok=True, parents=True)
-    with open(resource_path / f"predictions/xgb/{mdl_hex}/count_pareto/found_ndps_{i}.npy", "wb") as fp:
-        np.save(fp, found_ndps)
+    # p = resource_path / f"predictions/xgb/{mdl_hex}/count_pareto"
+    # p.mkdir(exist_ok=True, parents=True)
+    # with open(resource_path / f"predictions/xgb/{mdl_hex}/count_pareto/found_ndps_{i}.npy", "wb") as fp:
+    #     np.save(fp, found_ndps)
     #
     # with open("true_ndps.npy", "wb") as fp:
     #     np.save(fp, z)
     #
     # with open("pred_ndps.npy", "wb") as fp:
     #     np.save(fp, z_pred)
-    return counter
+    # return counter
+
+    return found_ndps
+
+
+def save_found_ndps(cfg, out_path, i, found_ndps):
+    p = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-count_pareto"
+    p.mkdir(exist_ok=True, parents=True)
+    with open(p / f"found_ndps_{i}.npy", "wb") as fp:
+        np.save(fp, found_ndps)
+
+
+def save_count_pareto(cfg, out_path, i,
+                      ndps_in_pred,
+                      num_pred_ndps,
+                      num_total_ndps,
+                      frac_true_ndps_in_pred,
+                      frac_ndps_recovered):
+    count_pareto_path = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-count_pareto"
+    count_pareto_path.mkdir(exist_ok=True, parents=True)
+    count_pareto_file = count_pareto_path / f"{i}.txt"
+    count_pareto_file.write_text(f"{ndps_in_pred}, {num_pred_ndps}, {num_total_ndps}, "
+                                 f"{frac_true_ndps_in_pred}, {frac_ndps_recovered}")
 
 
 def worker(i, cfg, mdl_hex):
     # Load predicted solution
-    sols_pred_path = resource_path / f"predictions/xgb/{mdl_hex}/sols_pred"
+    out_path = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}"
+    sols_pred_path = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-sols_pred"
     sol_path = sols_pred_path / f"sol_{i}.json"
     if sol_path.exists():
-        with open(sols_pred_path / f"sol_{i}.json", "r") as fp:
+        with open(sol_path, "r") as fp:
             sol_pred = json.load(fp)
 
         # inst_data = get_instance_data("knapsack", "7_40", cfg.deploy.split, i)
         # order = get_order("knapsack", "MinWt", inst_data)
         # weight = np.array(inst_data["weight"])[order]
         # num_nodes = get_node_count(sol_pred["x"], weight)
-        zfp = zipfile.Path(resource_path / f"sols/knapsack/7_40.zip")
-        if zfp.joinpath(f"7_40/{cfg.deploy.split}/{i}.json"):
-            zf = zipfile.ZipFile(resource_path / f"sols/knapsack/7_40.zip")
-            with zf.open(f"7_40/{cfg.deploy.split}/{i}.json") as fp:
+        zfp = zipfile.Path(resource_path / f"sols/{cfg.prob.name}/{cfg.prob.size}.zip")
+        if zfp.joinpath(f"{cfg.prob.size}/{cfg.deploy.split}/{i}.json"):
+            zf = zipfile.ZipFile(resource_path / f"sols/{cfg.prob.name}/{cfg.prob.size}.zip")
+            with zf.open(f"{cfg.prob.size}/{cfg.deploy.split}/{i}.json") as fp:
                 sol = json.load(fp)
 
-            ndps_in_pred = count_ndps(sol["z"], sol_pred["z"], i, mdl_hex)
+            found_ndps = find_ndps_in_preds(sol["z"], sol_pred["z"], i, mdl_hex)
+            ndps_in_pred = found_ndps.shape[0]
             num_pred_ndps = len(sol_pred["z"])
             num_total_ndps = len(sol["z"])
             frac_true_ndps_in_pred = ndps_in_pred / num_pred_ndps
@@ -115,10 +135,14 @@ def worker(i, cfg, mdl_hex):
                   ndps_in_pred,
                   frac_true_ndps_in_pred,
                   frac_ndps_recovered)
-            count_pareto_file = resource_path / f"predictions/xgb/{mdl_hex}/count_pareto/{i}.txt"
-            count_pareto_file.parent.mkdir(exist_ok=True, parents=True)
-            count_pareto_file.write_text(
-                f"{ndps_in_pred}, {num_pred_ndps}, {num_total_ndps}, {frac_true_ndps_in_pred}, {frac_ndps_recovered}")
+
+            save_found_ndps(cfg, out_path, i, found_ndps)
+            save_count_pareto(cfg, out_path, i,
+                              ndps_in_pred,
+                              num_pred_ndps,
+                              num_total_ndps,
+                              frac_true_ndps_in_pred,
+                              frac_ndps_recovered)
 
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="post_process.yaml")
@@ -128,7 +152,6 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
-    print("Mdl hex", mdl_hex)
 
     pool = mp.Pool(processes=cfg.nthread)
     results = [pool.apply_async(worker, args=(i, cfg, mdl_hex)) for i in range(cfg.deploy.from_pid, cfg.deploy.to_pid)]
