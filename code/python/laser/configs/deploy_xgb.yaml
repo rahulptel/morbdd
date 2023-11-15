@@ -72,12 +72,13 @@ val:
 deploy:
   split: val
   from_pid: 1000
-  to_pid: 1001
+  to_pid: 1100
   neg_pos_ratio: -1
   min_samples: 0
   batch_size: 1024
   threshold: 0.5
   round_upto: 1
+  select_all_upto: 1
   stitching_heuristic: min_resistance
   lookahead: 2
   best: true
