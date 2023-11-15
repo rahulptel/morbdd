@@ -79,6 +79,7 @@ deploy:
   threshold: 0.5
   round_upto: 1
   stitching_heuristic: min_resistance
+  lookahead: 2
   best: true
   epoch: false
   mdl: xgb

@@ -129,7 +129,7 @@ def load_model(cfg, mdl_hex):
     return model
 
 
-def set_node_score(bdd, preds):
+def set_prediction_score_on_node(bdd, preds):
     it = 0
     for lidx, layer in enumerate(bdd):
         for node in layer:
@@ -185,26 +185,36 @@ def extend_paths(layer, partial_paths):
     return new_partial_paths
 
 
-def calculate_path_resistance(paths, cl, nl, threshold=0.5, round_upto=1):
+# def calculate_path_resistance(paths, cl, nl, threshold=0.5, round_upto=1):
+def calculate_path_resistance(paths, layers, threshold=0.5, round_upto=1):
     resistances = []
     for path in paths:
-        s1 = cl[path[1]]["score"]
-        r1 = 0 if np.round(s1, round_upto) >= threshold else threshold - s1
+        resistance = 0
+        for i, layer in enumerate(layers):
+            pred_score = layer[path[i + 1]]["pred"]
+            _resistance = 0 if np.round(pred_score, round_upto) >= threshold else threshold - pred_score
+            resistance += _resistance
+        resistances.append(resistance)
 
-        s2 = nl[path[2]]["score"]
-        r2 = 0 if np.round(s2, round_upto) >= threshold else threshold - s2
-
-        resistances.append(r1 + r2)
+        # s1 = cl[path[1]]["score"]
+        # r1 = 0 if np.round(s1, round_upto) >= threshold else threshold - s1
+        #
+        # s2 = nl[path[2]]["score"]
+        # r2 = 0 if np.round(s2, round_upto) >= threshold else threshold - s2
+        #
+        # resistances.append(r1 + r2)
 
     return resistances
 
 
-def stitch_layer(bdd, lidx, heuristic, threshold=0.5, round_upto=1):
+def stitch_layer(bdd, lidx, heuristic, lookahead, threshold=0.5, round_upto=1):
     pl = bdd[lidx - 1] if lidx > 0 else None
-    cl, nl = bdd[lidx], bdd[lidx + 1]
+    layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
+    # cl, nl = bdd[lidx], bdd[lidx + 1]
 
     # If BDD is disconnected on the first layer, select both nodes.
     if pl is None:
+        cl = layers[0]
         for node in cl:
             node["prev_pred"] = float(node["pred"])
             node["pred"] = float(threshold + 0.001)
@@ -227,9 +237,13 @@ def stitch_layer(bdd, lidx, heuristic, threshold=0.5, round_upto=1):
 
         elif heuristic == "min_resistance":
             print("Min resistance")
-            partial_paths = extend_paths(cl, partial_paths)
-            paths = extend_paths(nl, partial_paths)
-            resistances = calculate_path_resistance(paths, cl, nl, threshold=threshold, round_upto=round_upto)
+            # partial_paths = extend_paths(cl, partial_paths)
+            # paths = extend_paths(nl, partial_paths)
+            for i in range(lookahead - 1):
+                partial_paths = extend_paths(layers[i], partial_paths)
+            paths = extend_paths(layers[-1], partial_paths)
+            # resistances = calculate_path_resistance(paths, cl, nl, threshold=threshold, round_upto=round_upto)
+            resistances = calculate_path_resistance(paths, layers, threshold=threshold, round_upto=round_upto)
 
             resistances, paths = zip(*sorted(zip(resistances, paths), key=lambda x: x[0]))
             k = 1
@@ -322,7 +336,7 @@ def worker(rank, cfg, mdl_hex):
             pred_stats_per_layer[l][3] += tn
             pred_stats_per_layer[l][4] += fn
 
-        bdd = set_node_score(bdd, preds)
+        bdd = set_prediction_score_on_node(bdd, preds)
         # Check connectedness and perform stitching if necessary
         was_disconnected = False
         for lidx, layer in enumerate(bdd):
