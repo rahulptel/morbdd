@@ -1,3 +1,5 @@
+import datetime
+import hashlib
 import io
 import json
 import os
@@ -6,12 +8,130 @@ import zipfile
 import hydra
 import numpy as np
 import xgboost as xgb
-import hashlib
-from laser import resource_path
 from omegaconf import OmegaConf
-import pandas as pd
-import datetime
-from laser.utils import get_xgb_model_name
+
+from laser import resource_path
+
+
+def get_xgb_model_name(max_depth=None,
+                       min_child_weight=None,
+                       subsample=None,
+                       eta=None,
+                       objective=None,
+                       num_round=None,
+                       early_stopping_rounds=None,
+                       evals=None,
+                       eval_metric=None,
+                       seed=None,
+                       prob_name=None,
+                       num_objs=None,
+                       num_vars=None,
+                       order=None,
+                       layer_norm_const=None,
+                       state_norm_const=None,
+                       train_from_pid=None,
+                       train_to_pid=None,
+                       train_neg_pos_ratio=None,
+                       train_min_samples=None,
+                       train_flag_layer_penalty=None,
+                       train_layer_penalty=None,
+                       train_flag_imbalance_penalty=None,
+                       train_flag_importance_penalty=None,
+                       train_penalty_aggregation=None,
+                       val_from_pid=None,
+                       val_to_pid=None,
+                       val_neg_pos_ratio=None,
+                       val_min_samples=None,
+                       val_flag_layer_penalty=None,
+                       val_layer_penalty=None,
+                       val_flag_imbalance_penalty=None,
+                       val_flag_importance_penalty=None,
+                       val_penalty_aggregation=None,
+                       device=None):
+    def get_model_name_knapsack():
+        name = ""
+        if max_depth is not None:
+            name += f"{max_depth}-"
+        if min_child_weight is not None:
+            name += f"{min_child_weight}-"
+        if subsample is not None:
+            name += f"{subsample}-"
+        if eta is not None:
+            name += f"{eta}-"
+        if objective is not None:
+            name += f"{objective}-"
+        if num_round is not None:
+            name += f"{num_round}-"
+        if early_stopping_rounds is not None:
+            name += f"{early_stopping_rounds}-"
+        if type(evals) is list and len(evals):
+            for eval in evals:
+                name += f"{eval}"
+        if type(eval_metric) is list and len(eval_metric):
+            for em in eval_metric:
+                name += f"{em}-"
+        if seed is not None:
+            name += f"{seed}"
+
+        if prob_name is not None:
+            name += f"{prob_name}-"
+        if num_objs is not None:
+            name += f"{num_objs}-"
+        if num_vars is not None:
+            name += f"{num_vars}-"
+        if order is not None:
+            name += f"{order}-"
+        if layer_norm_const is not None:
+            name += f"{layer_norm_const}-"
+        if state_norm_const is not None:
+            name += f"{state_norm_const}-"
+
+        if train_from_pid is not None:
+            name += f"{train_from_pid}-"
+        if train_to_pid is not None:
+            name += f"{train_to_pid}-"
+        if train_neg_pos_ratio is not None:
+            name += f"{train_neg_pos_ratio}-"
+        if train_min_samples is not None:
+            name += f"{train_min_samples}-"
+        if train_flag_layer_penalty is not None:
+            name += f"{train_flag_layer_penalty}-"
+        if train_layer_penalty is not None:
+            name += f"{train_layer_penalty}-"
+        if train_flag_imbalance_penalty is not None:
+            name += f"{train_flag_imbalance_penalty}-"
+        if train_flag_importance_penalty is not None:
+            name += f"{train_flag_importance_penalty}-"
+        if train_penalty_aggregation is not None:
+            name += f"{train_penalty_aggregation}-"
+
+        if val_from_pid is not None:
+            name += f"{val_from_pid}-"
+        if val_to_pid is not None:
+            name += f"{val_to_pid}-"
+        if val_neg_pos_ratio is not None:
+            name += f"{val_neg_pos_ratio}-"
+        if val_min_samples is not None:
+            name += f"{val_min_samples}-"
+        if val_flag_layer_penalty is not None:
+            name += f"{val_flag_layer_penalty}-"
+        if val_layer_penalty is not None:
+            name += f"{val_layer_penalty}-"
+        if val_flag_imbalance_penalty is not None:
+            name += f"{val_flag_imbalance_penalty}-"
+        if val_flag_importance_penalty is not None:
+            name += f"{val_flag_importance_penalty}-"
+        if val_penalty_aggregation is not None:
+            name += f"{val_penalty_aggregation}-"
+        if device is not None:
+            name += f"{device}"
+
+        return name
+
+    if prob_name == "knapsack":
+        return get_model_name_knapsack()
+    else:
+        raise ValueError("Invalid problem!")
 
 
 class Iterator(xgb.DataIter):
@@ -136,9 +256,11 @@ def main(cfg):
                     evals_result=evals_result)
 
     # Get model name
-    mdl_path = resource_path / "pretrained/xgb"
+    mdl_path = resource_path / f"pretrained/xgb/{cfg.prob.name}/{cfg.prob.size}"
     mdl_path.mkdir(parents=True, exist_ok=True)
     mdl_name = get_xgb_model_name(max_depth=cfg.max_depth,
+                                  min_child_weight=cfg.min_child_weight,
+                                  subsample=cfg.subsample,
                                   eta=cfg.eta,
                                   objective=cfg.objective,
                                   num_round=cfg.num_round,
@@ -187,19 +309,20 @@ def main(cfg):
     json.dump(evals_result, open(mdl_path.joinpath(f"metrics_{hex}.json"), "w"))
 
     # Save summary
-    summary_line = [datetime.datetime.now(), hex]
-    for em in cfg.eval_metric:
-        summary_line.append(evals_result["train"][em][bst.best_iteration])
-    for em in cfg.eval_metric:
-        summary_line.append(evals_result["val"][em][bst.best_iteration])
-    summary_line_str = ",".join(list(map(str, summary_line)))
-    summary_path = mdl_path.joinpath("summary.csv")
+    summary_obj = {"timestamp": str(datetime.datetime.now()),
+                   "mdl_hex": hex,
+                   "best_iteration": bst.best_iteration,
+                   "eval_metric": list(cfg.eval_metric)[-1]}
+    summary_obj.update({em: evals_result["train"][em][bst.best_iteration] for em in cfg.eval_metric})
+    summary_obj.update({em: evals_result["val"][em][bst.best_iteration] for em in cfg.eval_metric})
+
+    summary_path = mdl_path.joinpath("summary.json")
     if summary_path.exists():
-        with summary_path.open("a") as fp:
-            fp.write(summary_line_str)
+        summary_json = json.load(open(summary_path, "r"))
+        summary_json.append(summary_obj)
+        json.dump(summary_json, open(summary_path, "w"))
     else:
-        with summary_path.open("w") as fp:
-            fp.write(summary_line_str)
+        json.dump([summary_obj], open(summary_path, "w"))
 
 
 if __name__ == '__main__':
