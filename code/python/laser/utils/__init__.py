@@ -8,23 +8,32 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 
 from laser import resource_path
+import hashlib
 
 ZERO_ARC = -1
 ONE_ARC = 1
 
 
 class KnapsackBDDDataset(Dataset):
-    def __init__(self, size=None, split=None, pid=None, dtype=None, device=None):
+    def __init__(self, size=None, split=None, pid=None,
+                 sampling_type=None, labels_type=None, weights_type=None, device=None):
         super(KnapsackBDDDataset, self).__init__()
 
-        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}.zip")
-        data = torch.load(zf.open(f"{split}/{dtype}/{pid}.pt"))
-        self.node_feat = data["nf"].to(device)
-        self.parent_feat = data["pf"].to(device)
-        self.inst_feat = data["if"].to(device)
-        self.wt_layer = data["wtlayer"].to(device)
-        self.wt_label = data["wtlabel"].to(device)
-        self.labels = data["label"].to(device)
+        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
+        self.node_feat = torch.load(zf.open(f"{sampling_type}/n{pid}.pt")).to(device)
+        self.parent_feat = torch.load(zf.open(f"{sampling_type}/p{pid}.pt")).to(device)
+        self.inst_feat = torch.load(zf.open(f"{sampling_type}/i{pid}.pt")).to(device)
+        self.wt = torch.load(zf.open(f"{sampling_type}/{weights_type}/{pid}.pt")).to(device)
+
+        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
+        self.labels = torch.load(zf.open(f"{labels_type}/{pid}.pt")).to(device)
+
+        # self.node_feat = data["nf"].to(device)
+        # self.parent_feat = data["pf"].to(device)
+        # self.inst_feat = data["if"].to(device)
+        # self.wt_layer = data["wtlayer"].to(device)
+        # self.wt_label = data["wtlabel"].to(device)
+        # self.labels = data["label"].to(device)
 
     def __len__(self):
         return len(self.labels)
@@ -33,8 +42,7 @@ class KnapsackBDDDataset(Dataset):
         return {'nf': self.node_feat[i],
                 'pf': self.parent_feat[i],
                 'if': self.inst_feat,
-                'wtlayer': self.wt_layer[i],
-                'wtlabel': self.wt_label[i],
+                'wt': self.wt[i],
                 'label': self.labels[i]}
 
 
@@ -111,8 +119,8 @@ def get_context_features(layer_idxs, inst_feat, num_objs, num_vars, device):
         ranks = (torch.arange(lidx).reshape(-1, 1) + 1) / num_vars
         _context = torch.concat((_inst_feat, ranks.to(device)), axis=1)
 
-        ranks_pad = torch.zeros(max_lidx - _inst_feat.shape[0], num_objs + 2).to(device)
-        _context = torch.concat((_context, ranks_pad), axis=0)
+        pad = torch.zeros(max_lidx - _inst_feat.shape[0], num_objs + 2).to(device)
+        _context = torch.concat((_context, pad), axis=0)
 
         context.append(_context)
     context = torch.stack(context)
@@ -302,10 +310,12 @@ def convert_bdd_to_tensor_data(problem,
     sampling_data_path = resource_path / "tensors" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.pt").exists()
+    features_exists = False
 
     labels_data_path = resource_path / "tensors" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.pt").exists()
+    labels_exists = False
 
     weights_type = ""
     if flag_layer_penalty:
@@ -316,6 +326,7 @@ def convert_bdd_to_tensor_data(problem,
     weights_data_path = resource_path / "tensors" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.pt").exists()
+    weights_exists = False
 
     print(f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
 
@@ -373,6 +384,7 @@ def convert_bdd_to_tensor_data(problem,
                     node_feat_lst.append([node['s'][0] / state_norm_const,
                                           node['s'][0] / inst_data['capacity'],
                                           (lidx + 1) / layer_norm_const])
+                    # print(node_feat_lst)
 
                     # Extract parent feature
                     parents_node_feat_lst.append(get_parent_features(problem,
@@ -654,22 +666,24 @@ def convert_bdd_to_xgb_data(problem,
         np.save(open(weights_data_path.joinpath(f"{pid}.npy"), "wb"), weights_np)
 
 
-def get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device):
+def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device):
     def get_dataset_knapsack():
-        dtype = f"npr{neg_pos_ratio}ms{min_samples}"
-        zf = zipfile.Path(resource_path / f"tensors/knapsack/{size}/{split}.zip")
-        if zf.joinpath(f"{split}/{dtype}/{pid}.pt").exists():
+        zf = zipfile.Path(resource_path / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
+        if zf.joinpath(f"{sampling_type}/n{pid}.pt").exists():
             return KnapsackBDDDataset(size=size,
                                       split=split,
                                       pid=pid,
-                                      dtype=dtype,
+                                      sampling_type=sampling_type,
+                                      labels_type=labels_type,
+                                      weights_type=weights_type,
                                       device=device)
         else:
             return None
 
-    dataset = None
     if problem == "knapsack":
         dataset = get_dataset_knapsack()
+    else:
+        raise ValueError("Invalid problem name!")
 
     return dataset
 
@@ -699,12 +713,39 @@ def get_dataloader(dataset, batch_size, shuffle=True):
     DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
-def update_scores(scores_df, scores, tp, fp, tn, fn):
+def statscore(preds=None, labels=None, threshold=0.5, round_upto=1, is_type="torch"):
+    assert preds.shape == labels.shape
+    if is_type == "numpy":
+        preds = torch.from_numpy(preds)
+        labels = torch.from_numpy(labels)
+
+    # Binarize preds
+    preds = torch.round(preds, decimals=round_upto)
+    one_idxs = preds >= threshold
+    preds[one_idxs], preds[~one_idxs] = 1, 0
+
+    # Binarize labels
+    one_idxs = labels >= threshold
+    labels[one_idxs], labels[~one_idxs] = 1, 0
+
+    # Scores
+    tp = ((labels == preds) & (labels == 1))
+    fn = ((labels != preds) & (labels == 1))
+    fp = ((labels != preds) & (labels == 0))
+    tn = ((labels == preds) & (labels == 0))
+    result = torch.cat((tp, fp, tn, fn), axis=1)
+    result[result is True] = 1
+    result[result is False] = 0
+
+    return result
+
+
+def update_scores(num_vars, scores_df, scores, tp, fp, tn, fn):
     tp += scores[:, 1].sum()
     fp += scores[:, 2].sum()
     tn += scores[:, 3].sum()
     fn += scores[:, 4].sum()
-    for layer in range(40):
+    for layer in range(num_vars):
         _scores = scores[scores[:, 0] == layer]
         if _scores.shape[0] > 0:
             _sum = _scores.sum(axis=0)
@@ -712,7 +753,7 @@ def update_scores(scores_df, scores, tp, fp, tn, fn):
             scores_df.loc[layer, "FP"] += _sum[2]
             scores_df.loc[layer, "TN"] += _sum[3]
             scores_df.loc[layer, "FN"] += _sum[4]
-            scores_df.loc[layer, "Support"] += _sum[5]
+            # scores_df.loc[layer, "Support"] += _sum[5]
 
     return scores_df, tp, fp, tn, fn
 
@@ -770,53 +811,44 @@ def get_log_dir_name(name,
 
 
 def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None):
-    checkpoint_dir = resource_path / "experiments/"
-    checkpoint_str = get_log_dir_name(cfg.prob.name,
-                                      cfg.prob.size,
-                                      cfg.train.flag_layer_penalty,
-                                      cfg.train.layer_penalty,
-                                      cfg.train.flag_label_penalty,
-                                      cfg.train.label_penalty,
-                                      cfg.train.neg_pos_ratio,
-                                      cfg.prob.order,
-                                      cfg.prob.layer_norm_const,
-                                      cfg.prob.state_norm_const)
-    checkpoint_str += f"{cfg[split].log_dir}"
-    checkpoint_dir /= checkpoint_str
-    checkpoint_dir.mkdir(exist_ok=True, parents=True)
+    mdl_path = resource_path / f"pretrained/nn/{cfg.prob.name}/{cfg.prob.size}"
+    mdl_path.mkdir(parents=True, exist_ok=True)
+
+    mdl_name = get_nn_model_name(cfg)
+    # Convert to hex
+    h = hashlib.blake2s(digest_size=32)
+    h.update(mdl_name.encode("utf-8"))
+    hex = h.hexdigest()
+    split_path = mdl_path.joinpath(f"{hex}/{split}")
+    split_path.mkdir(parents=True, exist_ok=True)
 
     if model is not None:
-        model_name = f"model_{epoch}.ckpt"
-        model_path = checkpoint_dir / model_name
-        torch.save(model.state_dict(), model_path)
+        torch.save(model.state_dict(),
+                   split_path.joinpath(f"model_{epoch}.ckpt"))
 
         if is_best:
-            model_name = f"model_best.ckpt"
-            model_path = checkpoint_dir / model_name
-            torch.save(model.state_dict(), model_path)
+            torch.save(model.state_dict(),
+                       split_path.joinpath(f"model_best.ckpt"))
 
     if scores_df is not None:
-        score_name = f"scores_{epoch}.csv"
-        scores_df_name = checkpoint_dir / score_name
-        scores_df.to_csv(scores_df_name, index=False)
+        scores_df.to_csv(split_path.joinpath(f"scores_{epoch}.csv"), index=False)
         if is_best:
-            scores_df_name = checkpoint_dir / "scores_best.csv"
-            scores_df.to_csv(scores_df_name, index=False)
+            scores_df.to_csv(split_path.joinpath(f"scores_best_{epoch}.csv"), index=False)
 
         # Normalize scores
-        scores_df["NSupport"] = (scores_df["TP"] + scores_df["FP"] +
-                                 scores_df["TN"] + scores_df["FN"]) - scores_df["Support"]
-        scores_df["TP"] /= scores_df["Support"]
-        scores_df["FP"] /= scores_df["NSupport"]
-        scores_df["TN"] /= scores_df["NSupport"]
-        scores_df["FN"] /= scores_df["Support"]
+        # scores_df["NSupport"] = (scores_df["TP"] + scores_df["FP"] +
+        #                          scores_df["TN"] + scores_df["FN"]) - scores_df["Support"]
+        # scores_df["TP"] /= scores_df["Support"]
+        # scores_df["FP"] /= scores_df["NSupport"]
+        # scores_df["TN"] /= scores_df["NSupport"]
+        # scores_df["FN"] /= scores_df["Support"]
 
-        score_name = f"scores_norm_{epoch}.csv"
-        scores_df_name = checkpoint_dir / score_name
-        scores_df.to_csv(scores_df_name, index=False)
-        if is_best:
-            scores_df_name = checkpoint_dir / "scores_norm_best.csv"
-            scores_df.to_csv(scores_df_name, index=False)
+        # score_name = f"scores_norm_{epoch}.csv"
+        # scores_df_name = checkpoint_dir / score_name
+        # scores_df.to_csv(scores_df_name, index=False)
+        # if is_best:
+        #     scores_df_name = checkpoint_dir / "scores_norm_best.csv"
+        #     scores_df.to_csv(scores_df_name, index=False)
 
 
 def checkpoint_test(cfg, scores_df):
@@ -870,21 +902,21 @@ def set_device(device_type):
     return device
 
 
-def get_split_datasets(pids, problem, size, split, neg_pos_ratio, min_samples, device, dataset_dict=None):
+def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, weights_type, device, dataset_dict=None):
     datasets = []
-    if dataset_dict is not None:
-        for pid in pids:
-            if pid not in dataset_dict:
-                dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
-            if dataset_dict[pid] is not None:
-                # print("Reading dataset ", pid)
-                datasets.append(dataset_dict[pid])
-            datasets.append(get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device))
-    else:
-        for pid in pids:
-            dataset = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
-            if dataset is not None:
-                datasets.append(dataset)
+    # if dataset_dict is not None:
+    #     for pid in pids:
+    # if pid not in dataset_dict:
+    #     dataset_dict[pid] = get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device)
+    # if dataset_dict[pid] is not None:
+    #     # print("Reading dataset ", pid)
+    #     datasets.append(dataset_dict[pid])
+    # datasets.append(get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device))
+    # else:
+    for pid in pids:
+        dataset = get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device)
+        if dataset is not None:
+            datasets.append(dataset)
 
     return datasets, dataset_dict
 
@@ -1026,5 +1058,50 @@ def get_xgb_model_name(max_depth=None,
 
     if prob_name == "knapsack":
         return get_model_name_knapsack()
+    else:
+        raise ValueError("Invalid problem!")
+
+
+def get_nn_model_name(cfg):
+    def get_nn_model_name_knapsack():
+        name = ""
+        name += str(cfg.pred_task)
+        name += str(cfg.device)
+        name += str(cfg.threshold)
+        name += str(cfg.round_upto)
+        name += str(cfg.prob.name)
+        name += str(cfg.prob.size)
+        name += str(cfg.prob.order)
+        name += str(cfg.prob.layer_norm_const)
+        name += str(cfg.prob.state_norm_const)
+        name += str(cfg.train.epochs)
+        name += str(cfg.train.from_pid)
+        name += str(cfg.train.to_pid)
+        name += str(cfg.train.inst_per_step)
+        name += str(cfg.train.neg_pos_ratio)
+        name += str(cfg.train.min_samples)
+        name += str(cfg.train.batch_size)
+        name += str(cfg.train.flag_layer_penalty)
+        name += str(cfg.train.layer_penalty)
+        name += str(cfg.train.flag_imbalance_penalty)
+        name += str(cfg.train.flag_importance_penalty)
+        name += str(cfg.train.penalty_aggregation)
+        name += str(cfg.val.from_pid)
+        name += str(cfg.val.to_pid)
+        name += "-".join(map(str, cfg.mdl.ie.enc))
+        name += "-".join(map(str, cfg.mdl.ie.agg))
+        name += "-".join(map(str, cfg.mdl.ce.enc))
+        name += "-".join(map(str, cfg.mdl.ce.agg))
+        name += "-".join(map(str, cfg.mdl.pe.enc))
+        name += "-".join(map(str, cfg.mdl.pe.agg))
+        name += "-".join(map(str, cfg.mdl.ne))
+        name += str(cfg.opt.name)
+        name += str(cfg.opt.lr)
+        name += str(cfg.loss.name)
+
+        return name
+
+    if cfg.prob.name == "knapsack":
+        return get_nn_model_name_knapsack()
     else:
         raise ValueError("Invalid problem!")

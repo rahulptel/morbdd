@@ -1,3 +1,4 @@
+import copy
 import os
 import random
 import sys
@@ -13,8 +14,8 @@ import torch.optim as optim
 from torch.utils.data import ConcatDataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torchmetrics.classification import StatScores
-
+# from torchmetrics.classification import StatScores
+from laser.utils import statscore
 from laser.model import model_factory
 from laser.utils import calculate_accuracy
 from laser.utils import checkpoint
@@ -23,6 +24,7 @@ from laser.utils import get_split_datasets
 from laser.utils import print_result
 from laser.utils import set_device
 from laser.utils import update_scores
+from laser import resource_path
 
 
 # os.environ['MKL_NUM_THREADS'] = '1'
@@ -240,12 +242,12 @@ def aggregate_results(results):
 
 def val_worker(cfg, epoch, model, dataloader, device):
     print("\tValidation worker...")
-    statscores = StatScores(task='binary', multidim_average='samplewise')
+    # statscores = StatScores(task='binary', multidim_average='samplewise')
 
     tp, fp, tn, fn = 0, 0, 0, 0
     init_scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
-                                  np.zeros((cfg.prob.num_vars, 5))), axis=1)
-    scores_df = pd.DataFrame(init_scores, columns=["layer", "TP", "FP", "TN", "FN", "Support"])
+                                  np.zeros((cfg.prob.num_vars, 4))), axis=1)
+    scores_df = pd.DataFrame(init_scores, columns=["layer", "TP", "FP", "TN", "FN"])
     scores_df["layer"] = list(map(int, scores_df["layer"]))
     scores = None
 
@@ -254,68 +256,70 @@ def val_worker(cfg, epoch, model, dataloader, device):
             nf, pf, inst_feat, label = (batch["nf"], batch["pf"], batch["if"], batch["label"])
 
             # Get layer ids of the nodes in the current batch and predict
-            lidxs_t = torch.round(nf[:, 1] * cfg.prob.layer_norm_const)
+            lidxs_t = torch.round(nf[:, -1] * cfg.prob.layer_norm_const)
             lidxs = list(map(int, lidxs_t.cpu().numpy()))
             context_feat = get_context_features(lidxs, inst_feat, cfg.prob.num_objs, cfg.prob.num_vars, device)
             preds = model(inst_feat, context_feat, nf, pf)
 
-            score = statscores(preds.clone().detach(), label)
+            preds = preds.clone().detach()
+            preds = torch.round(preds, decimals=1)
+            score = statscore(preds=preds, labels=label, threshold=cfg.threshold, round_upto=cfg.round_upto,
+                              is_type="torch")
+
             score = score if len(score.shape) > 1 else score.unsqueeze(0)
             layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
             scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
 
-        scores.cpu().numpy()
-        scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
+        scores = scores.cpu().numpy()
+        scores_df, tp, fp, tn, fn = update_scores(cfg.prob.num_vars, scores_df, scores, tp, fp, tn, fn)
 
     return scores_df, tp, fp, tn, fn
 
 
 def train_worker(rank, cfg, epoch, model, optimizer, dataloader, device):
-    # print("\tTrain worker...")
-    # print(rank, len(dataloader))
-    statscores = StatScores(task='binary', multidim_average='samplewise')
+    print("\tTrain worker: ", rank, " Batches: ", len(dataloader))
+    # statscores = StatScores(task='binary', multidim_average='samplewise')
 
     tp, fp, tn, fn = 0, 0, 0, 0
     init_scores = np.concatenate((np.arange(cfg.prob.num_vars).reshape(-1, 1),
-                                  np.zeros((cfg.prob.num_vars, 5))), axis=1)
-    scores_df = pd.DataFrame(init_scores, columns=["layer", "TP", "FP", "TN", "FN", "Support"])
+                                  np.zeros((cfg.prob.num_vars, 4))), axis=1)
+    scores_df = pd.DataFrame(init_scores, columns=["layer", "TP", "FP", "TN", "FN"])
     scores_df["layer"] = list(map(int, scores_df["layer"]))
     scores = None
 
     for bidx, batch in enumerate(dataloader):
-        nf, pf, inst_feat, wtlayer, wtlabel, label = (batch["nf"], batch["pf"], batch["if"],
-                                                      batch["wtlayer"], batch["wtlabel"], batch["label"])
-
+        nf, pf, inst_feat, wt, label = (batch["nf"], batch["pf"], batch["if"], batch["wt"], batch["label"])
         # Get layer ids of the nodes in the current batch and predict
-        lidxs_t = torch.round(nf[:, 1] * cfg.prob.layer_norm_const)
+        lidxs_t = torch.round(nf[:, -1] * cfg.prob.layer_norm_const)
         lidxs = list(map(int, lidxs_t.cpu().numpy()))
         context_feat = get_context_features(lidxs, inst_feat, cfg.prob.num_objs, cfg.prob.num_vars, device)
         preds = model(inst_feat, context_feat, nf, pf)
 
         # Weighted loss
-        weight = None
-        if cfg.train.flag_layer_penalty:
-            weight = wtlayer
-        if cfg.train.flag_label_penalty:
-            weight = wtlabel if weight is None else weight * wtlabel
+        weight = wt \
+            if cfg.train.flag_layer_penalty or cfg.train.imbalance_penalty or cfg.train.importance_penalty \
+            else None
         loss_fn = nn.BCELoss(weight=weight.reshape(-1, 1))
         loss_batch = loss_fn(preds, label)
 
-        optimizer.zero_grad()
-        loss_batch.backward()
-        optimizer.step()
+        if epoch > 0:
+            optimizer.zero_grad()
+            loss_batch.backward()
+            optimizer.step()
 
-        score = statscores(preds.clone().detach(), label)
+        preds = preds.clone().detach()
+        score = statscore(preds=preds, labels=label, threshold=cfg.threshold, round_upto=cfg.round_upto,
+                          is_type="torch")
         score = score if len(score.shape) > 1 else score.unsqueeze(0)
         layer_score = torch.cat((lidxs_t.unsqueeze(1), score), axis=1)
         scores = layer_score if scores is None else torch.cat((scores, layer_score), axis=0)
 
     scores = scores.cpu().numpy()
-    scores_df, tp, fp, tn, fn = update_scores(scores_df, scores, tp, fp, tn, fn)
+    scores_df, tp, fp, tn, fn = update_scores(cfg.prob.num_vars, scores_df, scores, tp, fp, tn, fn)
     return scores_df, tp, fp, tn, fn
 
 
-@hydra.main(version_base="1.2", config_path="./configs", config_name="cfg.yaml")
+@hydra.main(version_base="1.2", config_path="./configs", config_name="train_nn.yaml")
 def main(cfg):
     torch.set_num_threads(1)
     device = set_device(cfg.device)
@@ -326,28 +330,33 @@ def main(cfg):
     model.share_memory()
     optimizer = SharedAdam(model.parameters())
 
+    sampling_type = "npr1ms0"
+    labels_type = "binary"
+    weights_type = "exponential-0-1-sum"
+
     print("Building training dataset...")
     start = time.time()
-    train_pids = list(range(0, 1000))
+    train_pids = list(range(cfg.train.from_pid, cfg.train.to_pid))
     train_datasets, _ = get_split_datasets(train_pids,
                                            cfg.prob.name,
                                            cfg.prob.size,
                                            "train",
-                                           cfg.train.neg_pos_ratio,
-                                           cfg.train.min_samples,
+                                           sampling_type,
+                                           labels_type,
+                                           weights_type,
                                            device)
     train_dataset = ConcatDataset(train_datasets)
     end = time.time()
     print(f"Took {end - start:.2f}s to build the train dataset...")
-
     start = time.time()
-    val_pids = list(range(1000, 1100))
+    val_pids = list(range(cfg.val.from_pid, cfg.val.to_pid))
     val_datasets, _ = get_split_datasets(val_pids,
                                          cfg.prob.name,
                                          cfg.prob.size,
                                          "val",
-                                         cfg.val.neg_pos_ratio,
-                                         cfg.val.min_samples,
+                                         sampling_type,
+                                         labels_type,
+                                         weights_type,
                                          device)
     val_dataset = ConcatDataset(val_datasets)
     end = time.time()
@@ -370,10 +379,15 @@ def main(cfg):
             results.append(pool.apply_async(train_worker,
                                             (rank, cfg, epoch, model, optimizer, dataloader, device)))
         train_results = [p.get() for p in results]
+        # dataloader = DataLoader(train_dataset,
+        #                         batch_size=cfg.train.batch_size,
+        #                         shuffle=True)
+        # train_results = train_worker(0, cfg, epoch, model, optimizer, dataloader, device)
         train_end = time.time()
         print("\t\tTraining time ", train_end - ep_start)
-
         scores_df, tp, fp, tn, fn = aggregate_results(train_results)
+        # scores_df, tp, fp, tn, fn = aggregate_results([train_results])
+
         # Log training accuracy metrics
         acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
         print_result(epoch,
@@ -387,7 +401,7 @@ def main(cfg):
                    model=model,
                    scores_df=scores_df)
 
-        if (epoch + 1) % cfg.val.every == 0:
+        if (epoch + 1) % cfg.val.every == 1:
             val_start = time.time()
             model.eval()
             pool = mp.Pool(processes=cfg.train.num_processes)
@@ -401,14 +415,19 @@ def main(cfg):
                 results.append(pool.apply_async(val_worker,
                                                 (cfg, epoch, model, dataloader, device)))
             val_results = [p.get() for p in results]
+            # dataloader = DataLoader(val_dataset,
+            #                         batch_size=cfg.train.batch_size,
+            #                         shuffle=True)
+            # val_results = val_worker(cfg, epoch, model, dataloader, device)
             val_end = time.time()
             print("\t\tValidation time ", val_end - val_start)
             scores_df, tp, fp, tn, fn = aggregate_results(val_results)
+            # scores_df, tp, fp, tn, fn = aggregate_results([val_results])
 
             acc, correct, total = calculate_accuracy(tp, fp, tn, fn)
             is_best = acc > best_acc
             if is_best:
-                best_acc = acc
+                best_acc = copy.copy(acc)
             # Log validation accuracy metrics
             print_result(epoch,
                          "Val",

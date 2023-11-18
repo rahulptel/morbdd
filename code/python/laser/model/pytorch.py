@@ -3,48 +3,50 @@ import torch.nn as nn
 
 
 class SetEncoder(nn.Module):
-    def __init__(self, in_dim=2, out_dim=4, hidden_dim=8):
+    def __init__(self, enc_net_dims=[2, 4], agg_net_dims=[4, 8]):
         super(SetEncoder, self).__init__()
-        self.in_dim = in_dim
-        self.out_dim = out_dim
+        self.enc_net_dims = enc_net_dims
+        self.agg_net_dims = agg_net_dims
 
-        self.linear1 = nn.Linear(in_dim, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, out_dim)
-        self.relu = nn.ReLU()
+        self.encoder_net = nn.ModuleList()
+        for i in range(1, len(self.enc_net_dims)):
+            self.encoder_net.append(nn.Linear(self.enc_net_dims[i - 1],
+                                              self.enc_net_dims[i]))
+            self.encoder_net.append(nn.ReLU())
+        self.encoder_net = nn.Sequential(*self.encoder_net)
+
+        self.aggregator_net = nn.ModuleList()
+        for i in range(1, len(self.agg_net_dims)):
+            self.aggregator_net.append(nn.Linear(self.agg_net_dims[i - 1],
+                                                 self.agg_net_dims[i]))
+            self.aggregator_net.append(nn.ReLU())
+        self.aggregator_net = nn.Sequential(*self.aggregator_net)
 
     def forward(self, x):
         # print(x.shape)
-        x1 = self.relu(self.linear1(x))
+        x_enc = self.encoder_net(x)
         # print(x1.shape)
-        x1_agg = torch.sum(x1, axis=1)
+        x_enc_agg = torch.sum(x_enc, axis=1)
         # print(x1_agg.shape)
 
-        return self.relu(self.linear2(x1_agg))
+        return self.aggregator_net(x_enc_agg)
 
 
 class ParetoStatePredictor(nn.Module):
     def __init__(self, cfg):
         super(ParetoStatePredictor, self).__init__()
         self.cfg = cfg
-        self.instance_encoder = SetEncoder(in_dim=self.cfg.ie.in_dim,
-                                           out_dim=self.cfg.ie.out_dim,
-                                           hidden_dim=self.cfg.ie.hidden_dim)
-        self.context_encoder = SetEncoder(in_dim=self.cfg.ce.in_dim,
-                                          out_dim=self.cfg.ce.out_dim,
-                                          hidden_dim=self.cfg.ce.hidden_dim)
-        self.parent_encoder = SetEncoder(in_dim=self.cfg.pe.in_dim,
-                                         out_dim=self.cfg.pe.out_dim,
-                                         hidden_dim=self.cfg.pe.hidden_dim)
+        self.instance_encoder = SetEncoder(list(self.cfg.ie.enc), list(self.cfg.ie.agg))
+        self.context_encoder = SetEncoder(list(self.cfg.ce.enc), list(self.cfg.ce.agg))
+        self.parent_encoder = SetEncoder(list(self.cfg.pe.enc), list(self.cfg.pe.agg))
 
         self.node_encoder = nn.ModuleList()
-        self.node_encoder.append(nn.Linear(2, self.cfg.ne[0]))
-        self.node_encoder.append(nn.ReLU())
         for i in range(1, len(self.cfg.ne)):
-            self.node_encoder.append(nn.Linear(self.cfg.ne[i-1], self.cfg.ne[i]))
+            self.node_encoder.append(nn.Linear(self.cfg.ne[i - 1], self.cfg.ne[i]))
             self.node_encoder.append(nn.ReLU())
         self.node_encoder = nn.Sequential(*self.node_encoder)
 
-        pred_in_dim = self.cfg.ie.out_dim + self.cfg.ce.out_dim + self.cfg.pe.out_dim + self.cfg.ne[-1]
+        pred_in_dim = self.cfg.ie.agg[-1] + self.cfg.ce.agg[-1] + self.cfg.pe.agg[-1] + self.cfg.ne[-1]
         self.predictor = nn.Sequential(nn.Linear(pred_in_dim, 1),
                                        nn.Sigmoid())
 
