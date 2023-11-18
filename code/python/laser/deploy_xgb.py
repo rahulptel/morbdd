@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 from torchmetrics.classification import BinaryStatScores
-
+import time
 from laser import resource_path
 from laser.utils import get_instance_data
 from laser.utils import get_order
@@ -106,12 +106,13 @@ def calculate_path_resistance(path, layers, threshold=0.5, round_upto=1):
     return resistance
 
 
-def stitch_layer(bdd, lidx, select_all_upto, heuristic, lookahead, threshold=0.5, round_upto=1):
+def stitch_layer(bdd, lidx, select_all_upto, heuristic, lookahead, time_stitching, threshold=0.5, round_upto=1):
     pl = bdd[lidx - 1] if lidx > 0 else None
     layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
 
     flag_stitched_layer = False
     # If BDD is disconnected on the first layer, select both nodes.
+    _time = time.time()
     if lidx < select_all_upto:
         for node in layers[0]:
             if np.round(node["pred"], round_upto) < threshold:
@@ -146,8 +147,10 @@ def stitch_layer(bdd, lidx, select_all_upto, heuristic, lookahead, threshold=0.5
                         flag_stitched_layer = True
         else:
             raise ValueError("Invalid heuristic!")
+    _time = time.time() - _time
+    time_stitching += _time
 
-    return flag_stitched_layer, bdd
+    return flag_stitched_layer, time_stitching, bdd
 
 
 def get_pareto_states_per_layer(bdd, threshold=0.5, round_upto=1):
@@ -218,7 +221,7 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
 
     bdd_stats = []
     for pid, data in zip(pids, bdd_data):
-        was_connected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
+        time_stitching, count_stitching, was_connected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
 
         sol_path = sol_pred_path / f"sol_{pid}.json"
         with open(sol_path, "w") as fp:
@@ -232,6 +235,8 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
                           pid,
                           cfg.deploy.split,
                           int(was_connected),
+                          count_stitching,
+                          time_stitching,
                           cfg.deploy.lookahead,
                           cfg.deploy.select_all_upto,
                           len(sol["x"]),
@@ -248,6 +253,8 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
                                           "pid",
                                           "split",
                                           "was_disconnected",
+                                          "count_stitching",
+                                          "time_stitching",
                                           "lookahead",
                                           "select_all_upto",
                                           "pred_nnds",
@@ -276,11 +283,15 @@ def worker(rank, cfg, mdl_hex):
 
         # Load BDD
         bdd_path = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}/pred_bdd/{pid}.json"
+        if not bdd_path.exists():
+            continue
         bdd = json.load(open(bdd_path, "r"))
         bdd = label_bdd(bdd, cfg.deploy.label)
 
         # Check connectedness of predicted Pareto BDD and perform stitching if necessary
         was_disconnected = False
+        time_stitching = 0
+        count_stitching = 0
         for lidx, layer in enumerate(bdd):
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
             is_connected = check_connectedness(prev_layer,
@@ -290,13 +301,15 @@ def worker(rank, cfg, mdl_hex):
             if not is_connected:
                 # print("Disconnected, layer: ", lidx)
                 was_disconnected = True
-                flag_stitched_layer, bdd = stitch_layer(bdd,
-                                                        lidx,
-                                                        cfg.deploy.select_all_upto,
-                                                        cfg.deploy.stitching_heuristic,
-                                                        cfg.deploy.lookahead,
-                                                        threshold=cfg.deploy.threshold,
-                                                        round_upto=cfg.deploy.round_upto)
+                count_stitching += 1
+                flag_stitched_layer, time_stitching, bdd = stitch_layer(bdd,
+                                                                        lidx,
+                                                                        cfg.deploy.select_all_upto,
+                                                                        cfg.deploy.stitching_heuristic,
+                                                                        cfg.deploy.lookahead,
+                                                                        time_stitching,
+                                                                        threshold=cfg.deploy.threshold,
+                                                                        round_upto=cfg.deploy.round_upto)
                 if flag_stitched_layer is False:
                     break
 
@@ -323,9 +336,11 @@ def worker(rank, cfg, mdl_hex):
                                                     threshold=cfg.deploy.threshold,
                                                     round_upto=cfg.deploy.round_upto)
         _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
+        _data1 = [time_stitching, count_stitching]
+        _data1.extend(_data)
 
         pids.append(pid)
-        bdd_data.append(_data)
+        bdd_data.append(_data1)
         print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
 
     return pids, bdd_data, pred_stats_per_layer
