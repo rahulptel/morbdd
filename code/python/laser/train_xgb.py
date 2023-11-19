@@ -14,9 +14,10 @@ from laser import resource_path
 
 
 def get_xgb_model_name(max_depth=None,
+                       eta=None,
                        min_child_weight=None,
                        subsample=None,
-                       eta=None,
+                       colsample_bytree=None,
                        objective=None,
                        num_round=None,
                        early_stopping_rounds=None,
@@ -52,12 +53,14 @@ def get_xgb_model_name(max_depth=None,
         name = ""
         if max_depth is not None:
             name += f"{max_depth}-"
+        if eta is not None:
+            name += f"{eta}-"
         if min_child_weight is not None:
             name += f"{min_child_weight}-"
         if subsample is not None:
             name += f"{subsample}-"
-        if eta is not None:
-            name += f"{eta}-"
+        if colsample_bytree is not None:
+            name += f"{colsample_bytree}-"
         if objective is not None:
             name += f"{objective}-"
         if num_round is not None:
@@ -240,8 +243,12 @@ def main(cfg):
             evals.append((dtrain, "train"))
         elif eval == "val":
             evals.append((dval, "val"))
+
     param = {"max_depth": cfg.max_depth,
              "eta": cfg.eta,
+             "min_child_weight": cfg.min_child_weight,
+             "subsample": cfg.subsample,
+             "colsample_bytree": cfg.colsample_bytree,
              "objective": cfg.objective,
              "device": cfg.device,
              "eval_metric": list(cfg.eval_metric),
@@ -259,9 +266,10 @@ def main(cfg):
     mdl_path = resource_path / f"pretrained/xgb/{cfg.prob.name}/{cfg.prob.size}"
     mdl_path.mkdir(parents=True, exist_ok=True)
     mdl_name = get_xgb_model_name(max_depth=cfg.max_depth,
+                                  eta=cfg.eta,
                                   min_child_weight=cfg.min_child_weight,
                                   subsample=cfg.subsample,
-                                  eta=cfg.eta,
+                                  colsample_bytree=cfg.colsample_bytree,
                                   objective=cfg.objective,
                                   num_round=cfg.num_round,
                                   early_stopping_rounds=cfg.early_stopping_rounds,
