@@ -942,9 +942,10 @@ def label_bdd(bdd, labeling_scheme):
 
 
 def get_xgb_model_name(max_depth=None,
+                       eta=None,
                        min_child_weight=None,
                        subsample=None,
-                       eta=None,
+                       colsample_bytree=None,
                        objective=None,
                        num_round=None,
                        early_stopping_rounds=None,
@@ -980,12 +981,14 @@ def get_xgb_model_name(max_depth=None,
         name = ""
         if max_depth is not None:
             name += f"{max_depth}-"
+        if eta is not None:
+            name += f"{eta}-"
         if min_child_weight is not None:
             name += f"{min_child_weight}-"
         if subsample is not None:
             name += f"{subsample}-"
-        if eta is not None:
-            name += f"{eta}-"
+        if colsample_bytree is not None:
+            name += f"{colsample_bytree}-"
         if objective is not None:
             name += f"{objective}-"
         if num_round is not None:
