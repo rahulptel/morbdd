@@ -21,6 +21,9 @@ from laser.utils import label_bdd
 def call_get_model_name(cfg):
     return get_xgb_model_name(max_depth=cfg.max_depth,
                               eta=cfg.eta,
+                              min_child_weight=cfg.min_child_weight,
+                              subsample=cfg.subsample,
+                              colsample_bytree=cfg.colsample_bytree,
                               objective=cfg.objective,
                               num_round=cfg.num_round,
                               early_stopping_rounds=cfg.early_stopping_rounds,
@@ -115,8 +118,8 @@ def switch_on_node(node, threshold):
 
 
 def generate_resistance_graph(bdd, threshold):
-    g = nx.Graph()
-    root, terminal = "0-0", f"{len(bdd) + 2}-0"
+    g = nx.DiGraph()
+    root, terminal = "0-0", f"{len(bdd) + 1}-0"
 
     edges = []
     # From root to penultimate layer
@@ -133,8 +136,10 @@ def generate_resistance_graph(bdd, threshold):
                 edges.append((f"{parent_pre}-{zp}", node_name, resistance))
 
     # From penultimate layer to terminal node
-    for nidx, _ in enumerate(bdd):
-        edges.append((f"{len(bdd) + 1}-{nidx}", terminal, 0))
+    for nidx, _ in enumerate(bdd[-1]):
+        edges.append((f"{len(bdd)}-{nidx}", terminal, 0))
+
+    g.add_weighted_edges_from(edges)
 
     return g, root, terminal
 
@@ -339,6 +344,7 @@ def worker(rank, cfg, mdl_hex):
     pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
     pids, bdd_data = [], []
     for pid in range(cfg.deploy.from_pid + rank, cfg.deploy.to_pid, cfg.deploy.num_processes):
+        print(pid)
         # Read instance
         inst_data = get_instance_data(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid)
         order = get_order(cfg.prob.name, cfg.deploy.order_type, inst_data)
@@ -361,7 +367,7 @@ def worker(rank, cfg, mdl_hex):
                                                threshold=cfg.deploy.threshold,
                                                round_upto=cfg.deploy.round_upto)
             if not is_connected:
-                # print("Disconnected, layer: ", lidx)
+                print(f"Disconnected {pid}, layer: ", lidx)
                 was_disconnected = True
                 count_stitching += 1
                 out = stitch(bdd,
@@ -377,36 +383,36 @@ def worker(rank, cfg, mdl_hex):
                     break
 
         # Compute Pareto frontier on predicted Pareto BDD
-        env.set_knapsack_inst(cfg.prob.num_vars,
-                              cfg.prob.num_objs,
-                              inst_data['value'],
-                              inst_data['weight'],
-                              inst_data['capacity'])
-        env.initialize_run(cfg.bin.problem_type,
-                           cfg.bin.preprocess,
-                           cfg.bin.bdd_type,
-                           cfg.bin.maxwidth,
-                           order)
-        pareto_states = get_pareto_states_per_layer(bdd,
-                                                    threshold=cfg.deploy.threshold,
-                                                    round_upto=cfg.deploy.round_upto)
-        env.compute_pareto_frontier_with_pruning(pareto_states)
+        # env.set_knapsack_inst(cfg.prob.num_vars,
+        #                       cfg.prob.num_objs,
+        #                       inst_data['value'],
+        #                       inst_data['weight'],
+        #                       inst_data['capacity'])
+        # env.initialize_run(cfg.bin.problem_type,
+        #                    cfg.bin.preprocess,
+        #                    cfg.bin.bdd_type,
+        #                    cfg.bin.maxwidth,
+        #                    order)
+        # pareto_states = get_pareto_states_per_layer(bdd,
+        #                                             threshold=cfg.deploy.threshold,
+        #                                             round_upto=cfg.deploy.round_upto)
+        # env.compute_pareto_frontier_with_pruning(pareto_states)
+        #
+        # # Extract run info
+        # pred_stats_per_layer = get_prediction_stats(bdd,
+        #                                             scorer,
+        #                                             pred_stats_per_layer,
+        #                                             threshold=cfg.deploy.threshold,
+        #                                             round_upto=cfg.deploy.round_upto)
+        # _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
+        # _data1 = [total_time_stitching, count_stitching]
+        # _data1.extend(_data)
+        #
+        # pids.append(pid)
+        # bdd_data.append(_data1)
+        # print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
 
-        # Extract run info
-        pred_stats_per_layer = get_prediction_stats(bdd,
-                                                    scorer,
-                                                    pred_stats_per_layer,
-                                                    threshold=cfg.deploy.threshold,
-                                                    round_upto=cfg.deploy.round_upto)
-        _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
-        _data1 = [time_stitching, count_stitching]
-        _data1.extend(_data)
-
-        pids.append(pid)
-        bdd_data.append(_data1)
-        print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
-
-    return pids, bdd_data, pred_stats_per_layer
+    # return pids, bdd_data, pred_stats_per_layer
 
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="deploy_xgb.yaml")
@@ -416,28 +422,29 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
+    print(mdl_hex)
 
     # Deploy model
-    pool = mp.Pool(processes=cfg.deploy.num_processes)
-    results = []
-    for rank in range(cfg.deploy.num_processes):
-        results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
+    # pool = mp.Pool(processes=cfg.deploy.num_processes)
+    # results = []
+    # for rank in range(cfg.deploy.num_processes):
+    #     results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
 
-    # results = worker(0, cfg, mdl_hex)
+    results = worker(0, cfg, mdl_hex)
 
     # Fetch results
-    results = [r.get() for r in results]
-    pids, bdd_data = [], []
-    pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
-    pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
-    for r in results:
-        pids.extend(r[0])
-        bdd_data.extend(r[1])
-        pred_stats_per_layer[:, 1:] += r[2][:, 1:]
-
-    # Save results
-    save_bdd_data(cfg, pids, bdd_data, mdl_hex)
-    save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
+    # results = [r.get() for r in results]
+    # pids, bdd_data = [], []
+    # pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
+    # pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
+    # for r in results:
+    #     pids.extend(r[0])
+    #     bdd_data.extend(r[1])
+    #     pred_stats_per_layer[:, 1:] += r[2][:, 1:]
+    #
+    # # Save results
+    # save_bdd_data(cfg, pids, bdd_data, mdl_hex)
+    # save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
 
 
 if __name__ == '__main__':
