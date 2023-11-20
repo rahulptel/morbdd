@@ -14,11 +14,16 @@ from laser.utils import get_instance_data
 from laser.utils import get_order
 from laser.utils import get_xgb_model_name
 from laser.utils import read_from_zip
+import time
+import pandas as pd
 
 
 def call_get_model_name(cfg):
     return get_xgb_model_name(max_depth=cfg.max_depth,
                               eta=cfg.eta,
+                              min_child_weight=cfg.min_child_weight,
+                              subsample=cfg.subsample,
+                              colsample_bytree=cfg.colsample_bytree,
                               objective=cfg.objective,
                               num_round=cfg.num_round,
                               early_stopping_rounds=cfg.early_stopping_rounds,
@@ -106,10 +111,13 @@ def convert_bdd_to_xgb_data_deploy(problem,
 
 
 def load_model(cfg, mdl_hex):
-    mdl_path = resource_path / f"pretrained/xgb/model_{mdl_hex}.json"
+    mdl_path = resource_path / f"pretrained/xgb/{cfg.prob.name}/{cfg.prob.size}/model_{mdl_hex}.json"
     model = None
     if mdl_path.exists():
         param = {"max_depth": cfg.max_depth,
+                 "min_child_weight": cfg.min_child_weight,
+                 "subsample": cfg.subsample,
+                 "colsample_bytree": cfg.colsample_bytree,
                  "eta": cfg.eta,
                  "objective": cfg.objective,
                  "device": cfg.device,
@@ -142,8 +150,15 @@ def save_bdd(problem, size, split, pid, bdd, mdl_hex):
         json.dump(bdd, fp)
 
 
+def save_time_result(r, problem, size, split, mdl_hex):
+    df = pd.DataFrame(r, columns=["size", "split", "pid", "order_type", "time_featurize", "time_predict",
+                                  "time_set_score"])
+    df.to_csv(resource_path / f"predictions/xgb/{problem}/{size}/{split}/{mdl_hex}/time_pred_result.csv", index=False)
+
+
 def worker(rank, cfg, mdl_hex):
     model = load_model(cfg, mdl_hex)
+    time_result = []
     for pid in range(cfg.deploy.from_pid + rank, cfg.deploy.to_pid, cfg.deploy.num_processes):
         # Read instance
         inst_data = get_instance_data(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid)
@@ -157,6 +172,7 @@ def worker(rank, cfg, mdl_hex):
             continue
 
         # Get BDD data
+        time_featurize = time.time()
         features = convert_bdd_to_xgb_data_deploy(cfg.prob.name,
                                                   bdd=bdd,
                                                   inst_data=inst_data,
@@ -166,11 +182,22 @@ def worker(rank, cfg, mdl_hex):
 
         # Predict
         dfeatures = xgb.DMatrix(features)
+        time_featurize = time.time() - time_featurize
+
+        time_prediction = time.time()
         preds = model.predict(dfeatures, iteration_range=(0, model.best_iteration + 1))
+        time_prediction = time.time() - time_prediction
+
+        time_set_score = time.time()
         bdd = set_prediction_score_on_node(bdd, preds)
+        time_set_score = time.time() - time_set_score
+
         save_bdd(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid, bdd, mdl_hex)
         print("Processed: ", pid)
-    return
+        time_result.append([cfg.prob.size, cfg.deploy.split, pid, cfg.deploy.order_type,
+                            time_featurize, time_prediction, time_set_score])
+
+    return time_result
 
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="deploy_xgb.yaml")
@@ -189,6 +216,11 @@ def main(cfg):
 
     # Fetch results
     results = [r.get() for r in results]
+    r = []
+    for result in results:
+        r.extend(result)
+
+    save_time_result(r, cfg.prob.name, cfg.prob.size, cfg.deploy.split, mdl_hex)
     # worker(0, cfg, mdl_hex)
 
 
