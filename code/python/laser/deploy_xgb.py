@@ -1,14 +1,16 @@
 import hashlib
 import json
 import multiprocessing as mp
+import time
 
 import hydra
 import libbddenvv1
+import networkx as nx
 import numpy as np
 import pandas as pd
 import torch
 from torchmetrics.classification import BinaryStatScores
-import time
+
 from laser import resource_path
 from laser.utils import get_instance_data
 from laser.utils import get_order
@@ -106,51 +108,111 @@ def calculate_path_resistance(path, layers, threshold=0.5, round_upto=1):
     return resistance
 
 
-def stitch_layer(bdd, lidx, select_all_upto, heuristic, lookahead, time_stitching, threshold=0.5, round_upto=1):
-    pl = bdd[lidx - 1] if lidx > 0 else None
-    layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
+def switch_on_node(node, threshold):
+    node["prev_pred"] = float(node["pred"])
+    node["pred"] = float(threshold + 0.001)
+    return node
 
+
+def generate_resistance_graph(bdd, threshold):
+    g = nx.Graph()
+    root, terminal = "0-0", f"{len(bdd) + 2}-0"
+
+    edges = []
+    # From root to penultimate layer
+    for lidx, layer in enumerate(bdd):
+        for nidx, node in enumerate(layer):
+            parent_pre = f"{lidx}"
+            node_name = f"{lidx + 1}-{nidx}"
+            resistance = max(0, threshold - node["pred"])
+
+            for op in node['op']:
+                edges.append((f"{parent_pre}-{op}", node_name, resistance))
+
+            for zp in node['zp']:
+                edges.append((f"{parent_pre}-{zp}", node_name, resistance))
+
+    # From penultimate layer to terminal node
+    for nidx, _ in enumerate(bdd):
+        edges.append((f"{len(bdd) + 1}-{nidx}", terminal, 0))
+
+    return g, root, terminal
+
+
+def switch_on_nodes_in_shortest_path(path, bdd, threshold, round_upto):
+    assert len(path[1:-1]) == len(bdd)
+    for lidx, node_name in enumerate(path[1:-1]):
+        _, nidx = list(map(int, node_name.split("-")))
+        node = bdd[lidx][nidx]
+        if np.round(node["pred"], round_upto) < threshold:
+            bdd[lidx][nidx] = switch_on_node(node, threshold)
+
+    return bdd
+
+
+def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitching, threshold=0.5, round_upto=1):
     flag_stitched_layer = False
+
     # If BDD is disconnected on the first layer, select both nodes.
-    _time = time.time()
-    if lidx < select_all_upto:
-        for node in layers[0]:
+    time_stitching = time.time()
+    actual_lidx = lidx + 1
+    if actual_lidx < select_all_upto:
+        for node in bdd[lidx]:
             if np.round(node["pred"], round_upto) < threshold:
-                node["prev_pred"] = float(node["pred"])
-                node["pred"] = float(threshold + 0.001)
+                node = switch_on_node(node, threshold)
                 flag_stitched_layer = True
+
+        time_stitching = time.time() - time_stitching
+        return flag_stitched_layer, time_stitching, bdd
+
+    time_stitching = time.time()
+    if heuristic == "shortest_path":
+        resistance_graph, root, terminal = generate_resistance_graph(bdd, threshold)
+        sp = nx.shortest_path(resistance_graph, root, terminal)
+        bdd = switch_on_nodes_in_shortest_path(sp, bdd, threshold, round_upto)
+        flag_stitched_layer = True
+        time_stitching = time.time() - time_stitching
+        total_time_stitching += time_stitching
+        return flag_stitched_layer, time_stitching, bdd
+
+    elif heuristic == "min_resistance":
+        previous_layer = bdd[lidx - 1] if lidx > 0 else None
+        layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
+        partial_paths = [[node_idx] for node_idx, node in enumerate(previous_layer)
+                         if np.round(node["pred"], round_upto) >= threshold]
+        # Extend partial paths
+        for i in range(lookahead - 1):
+            partial_paths = extend_paths(layers[i], partial_paths)
+        paths = extend_paths(layers[-1], partial_paths)
+
+        # Calculate path resistances
+        resistances = [calculate_path_resistance(path, layers, threshold=threshold, round_upto=round_upto)
+                       for path in paths]
+
+        # Sort paths based on resistance and select the one offering minimum resistance
+        resistances, paths = zip(*sorted(zip(resistances, paths), key=lambda x: x[0]))
+        k = 1
+        for r in resistances[1:]:
+            if r > resistances[0]:
+                break
+            else:
+                k += 1
+
+        # Switch on the nodes in the minimum resistance paths
+        for path in paths[:k]:
+            for node_idx, layer in zip(path[1:], layers):
+                node = layer[node_idx]
+                if np.round(node, round_upto) < threshold:
+                    node = switch_on_node(node, threshold)
+                    flag_stitched_layer = True
+
+        time_stitching = time.time() - time_stitching
+        total_time_stitching += time_stitching
+
+        return flag_stitched_layer, total_time_stitching, bdd
+
     else:
-        if heuristic == "min_resistance":
-            partial_paths = [[node_idx] for node_idx, node in enumerate(pl) if
-                             np.round(node["pred"], round_upto) >= threshold]
-
-            for i in range(lookahead - 1):
-                partial_paths = extend_paths(layers[i], partial_paths)
-            paths = extend_paths(layers[-1], partial_paths)
-
-            resistances = [calculate_path_resistance(path, layers, threshold=threshold, round_upto=round_upto)
-                           for path in paths]
-
-            resistances, paths = zip(*sorted(zip(resistances, paths), key=lambda x: x[0]))
-            k = 1
-            for r in resistances[1:]:
-                if r > resistances[0]:
-                    break
-                else:
-                    k += 1
-
-            for path in paths[:k]:
-                for node_idx, layer in zip(path[1:], layers):
-                    if np.round(layer[node_idx]["pred"], round_upto) < threshold:
-                        layer[node_idx]["prev_pred"] = float(layer[node_idx]["pred"])
-                        layer[node_idx]["pred"] = float(threshold + 0.001)
-                        flag_stitched_layer = True
-        else:
-            raise ValueError("Invalid heuristic!")
-    _time = time.time() - _time
-    time_stitching += _time
-
-    return flag_stitched_layer, time_stitching, bdd
+        raise ValueError("Invalid heuristic!")
 
 
 def get_pareto_states_per_layer(bdd, threshold=0.5, round_upto=1):
@@ -290,7 +352,7 @@ def worker(rank, cfg, mdl_hex):
 
         # Check connectedness of predicted Pareto BDD and perform stitching if necessary
         was_disconnected = False
-        time_stitching = 0
+        total_time_stitching = 0
         count_stitching = 0
         for lidx, layer in enumerate(bdd):
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
@@ -302,14 +364,15 @@ def worker(rank, cfg, mdl_hex):
                 # print("Disconnected, layer: ", lidx)
                 was_disconnected = True
                 count_stitching += 1
-                flag_stitched_layer, time_stitching, bdd = stitch_layer(bdd,
-                                                                        lidx,
-                                                                        cfg.deploy.select_all_upto,
-                                                                        cfg.deploy.stitching_heuristic,
-                                                                        cfg.deploy.lookahead,
-                                                                        time_stitching,
-                                                                        threshold=cfg.deploy.threshold,
-                                                                        round_upto=cfg.deploy.round_upto)
+                out = stitch(bdd,
+                             lidx,
+                             cfg.deploy.select_all_upto,
+                             cfg.deploy.stitching_heuristic,
+                             cfg.deploy.lookahead,
+                             total_time_stitching,
+                             threshold=cfg.deploy.threshold,
+                             round_upto=cfg.deploy.round_upto)
+                flag_stitched_layer, total_time_stitching, bdd = out
                 if flag_stitched_layer is False:
                     break
 
