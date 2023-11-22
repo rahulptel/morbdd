@@ -16,6 +16,7 @@ from laser.utils import get_instance_data
 from laser.utils import get_order
 from laser.utils import get_xgb_model_name
 from laser.utils import label_bdd
+from laser.utils import statscore
 
 
 def call_get_model_name(cfg):
@@ -182,13 +183,19 @@ def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitchin
 
     elif heuristic == "min_resistance":
         previous_layer = bdd[lidx - 1] if lidx > 0 else None
+        if previous_layer is None:
+            return flag_stitched_layer, time.time() - time_stitching, bdd
+
         layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
         partial_paths = [[node_idx] for node_idx, node in enumerate(previous_layer)
                          if np.round(node["pred"], round_upto) >= threshold]
+        # print("Partial paths len:", len(partial_paths))
         # Extend partial paths
         for i in range(lookahead - 1):
             partial_paths = extend_paths(layers[i], partial_paths)
+            # print(np.unique([p[-1] for p in partial_paths]).shape[0])
         paths = extend_paths(layers[-1], partial_paths)
+        # print(np.unique([p[-1] for p in paths]).shape[0])
 
         # Calculate path resistances
         resistances = [calculate_path_resistance(path, layers, threshold=threshold, round_upto=round_upto)
@@ -202,17 +209,21 @@ def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitchin
                 break
             else:
                 k += 1
-
+        # print(resistances[:5])
         # Switch on the nodes in the minimum resistance paths
         for path in paths[:k]:
             for node_idx, layer in zip(path[1:], layers):
                 node = layer[node_idx]
-                if np.round(node, round_upto) < threshold:
+                if np.round(node["pred"], round_upto) < threshold:
                     node = switch_on_node(node, threshold)
                     flag_stitched_layer = True
 
         time_stitching = time.time() - time_stitching
         total_time_stitching += time_stitching
+
+        # for i in range(lidx, lidx + lookahead):
+        #     layer = bdd[i]
+        #     print(i, len([1 for node in layer if np.round(node["pred"], round_upto) >= threshold]))
 
         return flag_stitched_layer, total_time_stitching, bdd
 
@@ -250,13 +261,15 @@ def get_run_data_from_env(env, order_type, was_disconnected):
     return data
 
 
-def get_prediction_stats(bdd, scorer, pred_stats_per_layer, threshold=0.5, round_upto=1):
+def get_prediction_stats(bdd, pred_stats_per_layer, threshold=0.5, round_upto=1):
     for lidx, layer in enumerate(bdd):
-        labels = np.array([np.round(node["l"], round_upto) >= threshold for node in layer])
-        preds = np.array([np.round(node["pred"], round_upto) >= threshold for node in layer])
-        tp, fp, tn, fn, sup = scorer(torch.from_numpy(preds),
-                                     torch.from_numpy(labels))
+        labels = np.array([node["l"] for node in layer])
+        assert np.max(labels) >= threshold
 
+        preds = np.array([node["pred"] for node in layer])
+        score = statscore(preds=preds, labels=labels, threshold=threshold, round_upto=round_upto,
+                          is_type="numpy")
+        tp, fp, tn, fn = np.sum(score[:, 0]), np.sum(score[:, 1]), np.sum(score[:, 2]), np.sum(score[:, 3])
         pred_stats_per_layer[lidx + 1][1] += tp
         pred_stats_per_layer[lidx + 1][2] += fp
         pred_stats_per_layer[lidx + 1][3] += tn
@@ -265,80 +278,112 @@ def get_prediction_stats(bdd, scorer, pred_stats_per_layer, threshold=0.5, round
     return pred_stats_per_layer
 
 
-def save_bdd(problem, size, split, pid, bdd, mdl_hex):
-    pred_bdd_path = resource_path / f"predictions/xgb/{problem}/{size}/{split}/{mdl_hex}/pred_bdd"
-    pred_bdd_path.mkdir(parents=True, exist_ok=True)
-    pred_bdd_path = pred_bdd_path / f"{pid}.json"
-    with open(pred_bdd_path, "w") as fp:
-        json.dump(bdd, fp)
-
-
 def save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex):
     df = pd.DataFrame(pred_stats_per_layer,
                       columns=["layer", "tp", "fp", "tn", "fn"])
     name = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}"
-    name /= f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-spl.csv"
+    # if cfg.deploy.stitching_heuristic == "min_resistance":
+    #     name /= f"{cfg.deploy.select_all_upto}-mrh{cfg.deploy.lookahead}-spl.csv"
+    # elif cfg.deploy.stitching_heuristic:
+    #     name /= f"{cfg.deploy.select_all_upto}-sph-spl.csv"
+    # else:
+    #     raise ValueError("Invalid heuristic!")
+    name /= "spl.csv"
     df.to_csv(name, index=False)
 
 
 def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
     out_path = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}"
-    sol_pred_path = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-sols_pred"
-    sol_pred_path.mkdir(exist_ok=True, parents=True)
+    if cfg.deploy.stitching_heuristic == "min_resistance":
+        disconnected_prefix = f"{cfg.deploy.select_all_upto}-mrh{cfg.deploy.lookahead}"
+    elif cfg.deploy.stitching_heuristic == "shortest_path":
+        disconnected_prefix = f"{cfg.deploy.select_all_upto}-sph"
+    else:
+        raise ValueError("Invalid heuristic!")
 
     bdd_stats = []
+    bdd_stats_disconnected = []
     for pid, data in zip(pids, bdd_data):
-        time_stitching, count_stitching, was_connected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
+        time_stitching, count_stitching, was_disconnected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
 
+        sol_pred_path = out_path / f"{disconnected_prefix}-sols_pred" \
+            if was_disconnected else out_path / "sols_pred"
+        sol_pred_path.mkdir(exist_ok=True, parents=True)
         sol_path = sol_pred_path / f"sol_{pid}.json"
         with open(sol_path, "w") as fp:
             json.dump(sol, fp)
-
         time_path = sol_pred_path / f"time_{pid}.json"
         with open(time_path, "w") as fp:
             json.dump(_time, fp)
 
-        bdd_stats.append([cfg.prob.size,
-                          pid,
-                          cfg.deploy.split,
-                          int(was_connected),
-                          count_stitching,
-                          time_stitching,
-                          cfg.deploy.lookahead,
-                          cfg.deploy.select_all_upto,
-                          len(sol["x"]),
-                          inc,
-                          rnc,
-                          iac,
-                          rac,
-                          num_comparisons,
-                          _time["compilation"],
-                          _time["reduction"],
-                          _time["pareto"]])
+        if was_disconnected:
+            bdd_stats_disconnected.append([cfg.prob.size,
+                                           pid,
+                                           cfg.deploy.split,
+                                           1,
+                                           count_stitching,
+                                           time_stitching,
+                                           cfg.deploy.stitching_heuristic,
+                                           cfg.deploy.lookahead,
+                                           cfg.deploy.select_all_upto,
+                                           len(sol["x"]),
+                                           inc,
+                                           rnc,
+                                           iac,
+                                           rac,
+                                           num_comparisons,
+                                           _time["compilation"],
+                                           _time["reduction"],
+                                           _time["pareto"]])
+        else:
+            bdd_stats.append([cfg.prob.size,
+                              pid,
+                              cfg.deploy.split,
+                              0,
+                              0,
+                              0,
+                              "",
+                              "",
+                              cfg.deploy.select_all_upto,
+                              len(sol["x"]),
+                              inc,
+                              rnc,
+                              iac,
+                              rac,
+                              num_comparisons,
+                              _time["compilation"],
+                              _time["reduction"],
+                              _time["pareto"]])
 
-    df = pd.DataFrame(bdd_stats, columns=["size",
-                                          "pid",
-                                          "split",
-                                          "was_disconnected",
-                                          "count_stitching",
-                                          "time_stitching",
-                                          "lookahead",
-                                          "select_all_upto",
-                                          "pred_nnds",
-                                          "pred_inc",
-                                          "pred_rnc",
-                                          "pred_iac",
-                                          "pred_rac",
-                                          "pred_num_comparisons",
-                                          "pred_compile",
-                                          "pred_reduce",
-                                          "pred_pareto"])
-    df.to_csv(out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-pred_result.csv", index=False)
+    columns = ["size",
+               "pid",
+               "split",
+               "was_disconnected",
+               "count_stitching",
+               "time_stitching",
+               "stitching_heuristic",
+               "lookahead",
+               "select_all_upto",
+               "pred_nnds",
+               "pred_inc",
+               "pred_rnc",
+               "pred_iac",
+               "pred_rac",
+               "pred_num_comparisons",
+               "pred_compile",
+               "pred_reduce",
+               "pred_pareto"]
+    if len(bdd_stats):
+        df = pd.DataFrame(bdd_stats, columns=columns)
+        df.to_csv(out_path / f"pred_result.csv", index=False)
+
+    if len(bdd_stats_disconnected):
+        df = pd.DataFrame(bdd_stats_disconnected, columns=columns)
+        df.to_csv(out_path / f"{disconnected_prefix}-pred_result.csv", index=False)
 
 
 def worker(rank, cfg, mdl_hex):
     env = libbddenvv1.BDDEnv()
-    scorer = BinaryStatScores()
 
     pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
     pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
@@ -351,17 +396,25 @@ def worker(rank, cfg, mdl_hex):
 
         # Load BDD
         bdd_path = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}/pred_bdd/{pid}.json"
+        print(bdd_path)
         if not bdd_path.exists():
             continue
         bdd = json.load(open(bdd_path, "r"))
         bdd = label_bdd(bdd, cfg.deploy.label)
+        pred_stats_per_layer = get_prediction_stats(bdd,
+                                                    pred_stats_per_layer,
+                                                    threshold=cfg.deploy.threshold,
+                                                    round_upto=cfg.deploy.round_upto)
 
         # Check connectedness of predicted Pareto BDD and perform stitching if necessary
         was_disconnected = False
         total_time_stitching = 0
         count_stitching = 0
+        flag_stitched_layer = False
         for lidx, layer in enumerate(bdd):
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
+            # if prev_layer is not None:
+            #     print("For ", lidx - 1, len([1 for node in prev_layer if np.round(node["pred"], 1) >= 0.5]))
             is_connected = check_connectedness(prev_layer,
                                                layer,
                                                threshold=cfg.deploy.threshold,
@@ -379,40 +432,55 @@ def worker(rank, cfg, mdl_hex):
                              threshold=cfg.deploy.threshold,
                              round_upto=cfg.deploy.round_upto)
                 flag_stitched_layer, total_time_stitching, bdd = out
+                # print(flag_stitched_layer)
                 if flag_stitched_layer is False:
                     break
 
-        # Compute Pareto frontier on predicted Pareto BDD
-        # env.set_knapsack_inst(cfg.prob.num_vars,
-        #                       cfg.prob.num_objs,
-        #                       inst_data['value'],
-        #                       inst_data['weight'],
-        #                       inst_data['capacity'])
-        # env.initialize_run(cfg.bin.problem_type,
-        #                    cfg.bin.preprocess,
-        #                    cfg.bin.bdd_type,
-        #                    cfg.bin.maxwidth,
-        #                    order)
-        # pareto_states = get_pareto_states_per_layer(bdd,
-        #                                             threshold=cfg.deploy.threshold,
-        #                                             round_upto=cfg.deploy.round_upto)
-        # env.compute_pareto_frontier_with_pruning(pareto_states)
-        #
-        # # Extract run info
-        # pred_stats_per_layer = get_prediction_stats(bdd,
-        #                                             scorer,
-        #                                             pred_stats_per_layer,
-        #                                             threshold=cfg.deploy.threshold,
-        #                                             round_upto=cfg.deploy.round_upto)
-        # _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
-        # _data1 = [total_time_stitching, count_stitching]
-        # _data1.extend(_data)
-        #
-        # pids.append(pid)
-        # bdd_data.append(_data1)
-        # print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
+        # for lidx, layer in enumerate(bdd):
+        #     prev_layer = bdd[lidx - 1] if lidx > 0 else None
+        #     # if prev_layer is not None:
+        #     #     print("For ", lidx - 1, len([1 for node in prev_layer if np.round(node["pred"], 1) >= 0.5]))
+        #     is_connected = check_connectedness(prev_layer,
+        #                                        layer,
+        #                                        threshold=cfg.deploy.threshold,
+        #                                        round_upto=cfg.deploy.round_upto)
+        #     print(lidx, is_connected)
+        #     if not is_connected:
+        #         break
 
-    # return pids, bdd_data, pred_stats_per_layer
+        if was_disconnected and flag_stitched_layer is False:
+            continue
+
+        if cfg.deploy.process_connected is True or was_disconnected:
+            # Compute Pareto frontier on predicted Pareto BDD
+            env.set_knapsack_inst(cfg.prob.num_vars,
+                                  cfg.prob.num_objs,
+                                  inst_data['value'],
+                                  inst_data['weight'],
+                                  inst_data['capacity'])
+            env.initialize_run(cfg.bin.problem_type,
+                               cfg.bin.preprocess,
+                               cfg.bin.bdd_type,
+                               cfg.bin.maxwidth,
+                               order)
+            pareto_states = get_pareto_states_per_layer(bdd,
+                                                        threshold=cfg.deploy.threshold,
+                                                        round_upto=cfg.deploy.round_upto)
+            # print([len(ps) for ps in pareto_states])
+            env.compute_pareto_frontier_with_pruning(pareto_states)
+            print(env.initial_num_nodes_per_layer)
+            print(env.reduced_num_nodes_per_layer)
+            # Extract run info
+            _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
+            _data1 = [total_time_stitching, count_stitching]
+            _data1.extend(_data)
+
+            # print(_data)
+            pids.append(pid)
+            bdd_data.append(_data1)
+            print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
+
+    return pids, bdd_data, pred_stats_per_layer
 
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="deploy_xgb.yaml")
@@ -422,27 +490,26 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
-    print(mdl_hex)
 
     # Deploy model
-    # pool = mp.Pool(processes=cfg.deploy.num_processes)
-    # results = []
-    # for rank in range(cfg.deploy.num_processes):
-    #     results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
+    pool = mp.Pool(processes=cfg.deploy.num_processes)
+    results = []
+    for rank in range(cfg.deploy.num_processes):
+        results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
 
-    results = worker(0, cfg, mdl_hex)
+    # results = [worker(0, cfg, mdl_hex)]
 
     # Fetch results
-    # results = [r.get() for r in results]
-    # pids, bdd_data = [], []
-    # pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
-    # pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
-    # for r in results:
-    #     pids.extend(r[0])
-    #     bdd_data.extend(r[1])
-    #     pred_stats_per_layer[:, 1:] += r[2][:, 1:]
-    #
-    # # Save results
+    results = [r.get() for r in results]
+    pids, bdd_data = [], []
+    pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
+    pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
+    for r in results:
+        pids.extend(r[0])
+        bdd_data.extend(r[1])
+        pred_stats_per_layer[:, 1:] += r[2][:, 1:]
+
+    # Save results
     # save_bdd_data(cfg, pids, bdd_data, mdl_hex)
     # save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
 

@@ -14,6 +14,9 @@ from laser.utils import get_xgb_model_name
 def call_get_model_name(cfg):
     return get_xgb_model_name(max_depth=cfg.max_depth,
                               eta=cfg.eta,
+                              min_child_weight=cfg.min_child_weight,
+                              subsample=cfg.subsample,
+                              colsample_bytree=cfg.colsample_bytree,
                               objective=cfg.objective,
                               num_round=cfg.num_round,
                               early_stopping_rounds=cfg.early_stopping_rounds,
@@ -87,7 +90,7 @@ def find_ndps_in_preds(true_pf, pred_pf, i, mdl_hex):
 
 
 def save_found_ndps(cfg, out_path, i, found_ndps):
-    p = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-count_pareto"
+    p = out_path / "count_pareto"
     p.mkdir(exist_ok=True, parents=True)
     with open(p / f"found_ndps_{i}.npy", "wb") as fp:
         np.save(fp, found_ndps)
@@ -99,17 +102,31 @@ def save_count_pareto(cfg, out_path, i,
                       num_total_ndps,
                       frac_true_ndps_in_pred,
                       frac_ndps_recovered):
-    count_pareto_path = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-count_pareto"
+    count_pareto_path = out_path / f"count_pareto"
     count_pareto_path.mkdir(exist_ok=True, parents=True)
     count_pareto_file = count_pareto_path / f"{i}.txt"
     count_pareto_file.write_text(f"{ndps_in_pred}, {num_pred_ndps}, {num_total_ndps}, "
                                  f"{frac_true_ndps_in_pred}, {frac_ndps_recovered}")
 
 
+def get_prefix(cfg):
+    if cfg.deploy.stitching_heuristic == "min_resistance":
+        prefix = f"{cfg.deploy.select_all_upto}-mrh{cfg.deploy.lookahead}"
+    elif cfg.deploy.stitching_heuristic == "shortest_path":
+        prefix = f"{cfg.deploy.select_all_upto}-sph"
+    else:
+        raise ValueError("Invalid heuristic!")
+
+    return prefix
+
+
 def worker(i, cfg, mdl_hex):
     # Load predicted solution
     out_path = resource_path / f"predictions/xgb/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/{mdl_hex}"
-    sols_pred_path = out_path / f"{cfg.deploy.select_all_upto}-{cfg.deploy.lookahead}-sols_pred"
+    prefix = "" if cfg.deploy.process_connected else get_prefix(cfg)
+    prefix = "sols_pred" if cfg.deploy.process_connected else f"{prefix}-sols_pred"
+    sols_pred_path = out_path / prefix
+
     sol_path = sols_pred_path / f"sol_{i}.json"
     if sol_path.exists():
         with open(sol_path, "r") as fp:
@@ -120,7 +137,7 @@ def worker(i, cfg, mdl_hex):
         # weight = np.array(inst_data["weight"])[order]
         # num_nodes = get_node_count(sol_pred["x"], weight)
         zfp = zipfile.Path(resource_path / f"sols/{cfg.prob.name}/{cfg.prob.size}.zip")
-        if zfp.joinpath(f"{cfg.prob.size}/{cfg.deploy.split}/{i}.json"):
+        if zfp.joinpath(f"{cfg.prob.size}/{cfg.deploy.split}/{i}.json").exists():
             zf = zipfile.ZipFile(resource_path / f"sols/{cfg.prob.name}/{cfg.prob.size}.zip")
             with zf.open(f"{cfg.prob.size}/{cfg.deploy.split}/{i}.json") as fp:
                 sol = json.load(fp)
@@ -136,8 +153,8 @@ def worker(i, cfg, mdl_hex):
                   frac_true_ndps_in_pred,
                   frac_ndps_recovered)
 
-            save_found_ndps(cfg, out_path, i, found_ndps)
-            save_count_pareto(cfg, out_path, i,
+            save_found_ndps(cfg, sols_pred_path, i, found_ndps)
+            save_count_pareto(cfg, sols_pred_path, i,
                               ndps_in_pred,
                               num_pred_ndps,
                               num_total_ndps,

@@ -719,6 +719,7 @@ def statscore(preds=None, labels=None, threshold=0.5, round_upto=1, is_type="tor
         preds = torch.from_numpy(preds)
         labels = torch.from_numpy(labels)
 
+    # print(preds, labels)
     # Binarize preds
     preds = torch.round(preds, decimals=round_upto)
     one_idxs = preds >= threshold
@@ -729,13 +730,15 @@ def statscore(preds=None, labels=None, threshold=0.5, round_upto=1, is_type="tor
     labels[one_idxs], labels[~one_idxs] = 1, 0
 
     # Scores
-    tp = ((labels == preds) & (labels == 1))
-    fn = ((labels != preds) & (labels == 1))
-    fp = ((labels != preds) & (labels == 0))
-    tn = ((labels == preds) & (labels == 0))
+    tp = ((labels == preds) & (labels == 1)).reshape(-1, 1)
+    fn = ((labels != preds) & (labels == 1)).reshape(-1, 1)
+    fp = ((labels != preds) & (labels == 0)).reshape(-1, 1)
+    tn = ((labels == preds) & (labels == 0)).reshape(-1, 1)
     result = torch.cat((tp, fp, tn, fn), axis=1)
     result[result is True] = 1
     result[result is False] = 0
+    if is_type == "numpy":
+        result = result.numpy()
 
     return result
 
