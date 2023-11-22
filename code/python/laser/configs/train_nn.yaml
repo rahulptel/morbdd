@@ -1,3 +1,8 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
 # Prediction task
 # classification or regression
 pred_task: classification

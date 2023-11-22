@@ -1,3 +1,8 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+    
 # Tensor: PyTorch Dataset
 # DMatrix: XGBoost Dataset
 dtype: DMatrix
@@ -11,16 +16,16 @@ task: classification
 # mos(margin_one_score): Negative samples: -1, positive samples: 1+score
 # nms(neg_margin_score): Negative samples: -1, positive samples: score
 label: binary
-num_processes: 2
+num_processes: 10
 
 # Problem parameters
 prob: knapsack
-num_objs: 7
-num_vars: 40
+num_objs: 4
+num_vars: 50
 size: ${num_objs}_${num_vars}
 split: train
 from_pid: 0
-to_pid: 1
+to_pid: 100
 
 # C++ lib parameters
 # 1: Knapsack
@@ -54,7 +59,7 @@ flag_layer_penalty: true
 # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
 layer_penalty: exponential
 flag_imbalance_penalty: false
-flag_importance_penalty: false
+flag_importance_penalty: 1
 # sum: Add all the penalties
 # product: Multiply all the penalties
 penalty_aggregation: sum

@@ -1,3 +1,8 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
 device: cpu
 nthread: 16
 # Tensor: PyTorch Dataset
@@ -14,8 +19,11 @@ task: classification
 # nms(neg_margin_score): Negative samples: -1, positive samples: score
 label: binary
 
-max_depth: 10
+max_depth: 7
 eta: 0.3
+min_child_weight: 1000
+subsample: 1
+colsample_bytree: 1
 objective: binary:logistic
 num_round: 250
 early_stopping_rounds: 20
@@ -23,6 +31,7 @@ evals:
   - train
   - val
 eval_metric:
+  - mae
   - error
   - auc
   - logloss
@@ -31,8 +40,8 @@ seed: 789541
 # Problem parameters
 prob:
   name: knapsack
-  num_objs: 7
-  num_vars: 40
+  num_objs: 4
+  num_vars: 50
   size: ${prob.num_objs}_${prob.num_vars}
   state_norm_const: 1000
   layer_norm_const: 100
@@ -71,22 +80,21 @@ val:
 
 deploy:
   split: val
-  from_pid: 1000
-  to_pid: 1100
+  from_pid: 1097
+  to_pid: 1098
   neg_pos_ratio: -1
   min_samples: 0
-  batch_size: 1024
   threshold: 0.5
   round_upto: 1
-  select_all_upto: 1
+  select_all_upto: 0
   stitching_heuristic: min_resistance
   lookahead: 2
   best: true
   epoch: false
-  mdl: xgb
-  label: mos
+  label: binary
   order_type: MinWt
-  num_processes: 16
+  num_processes: 1
+  process_connected: false
 
 # C++ lib parameters
 bin:
