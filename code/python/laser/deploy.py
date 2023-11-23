@@ -12,12 +12,17 @@ from laser.utils import get_context_features
 from laser.utils import get_dataset
 from laser.utils import get_log_dir_name
 from laser.utils import set_device
+import os
 
 dataset_dict = {}
 
 CONNECTED = 0
 NOT_CONNECTED = 1
 NOT_CONNECTED_EMPTY_LAYER = 2
+
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '1'
 
 
 def initialize_model(cfg, model):
@@ -53,12 +58,12 @@ def get_preds(model, dataloader, num_objs, num_vars, device, layer_norm_const=10
             nf, pf, inst_feat, label = batch['nf'], batch['pf'], batch['if'], batch['label']
 
             # Get layer ids of the nodes in the current batch
-            lidxs_t = nf[:, 1] * layer_norm_const
+            lidxs_t = torch.round(nf[:, 1] * layer_norm_const)
             lidxs = list(map(int, lidxs_t.cpu().numpy()))
-            print(lidxs)
             context_feat = get_context_features(lidxs, inst_feat, num_objs, num_vars, device)
-
             preds = model(inst_feat, context_feat, nf, pf)
+
+            score = statscores(preds.clone().detach(), label)
             if all_preds is None:
                 all_preds = preds.clone().detach()
             else:
