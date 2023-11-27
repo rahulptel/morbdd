@@ -63,19 +63,29 @@ def check_connectedness(prev_layer, layer, threshold=0.5, round_upto=1):
     if prev_layer is None:
         # On the first layer, we only check if there exists at least one node with a score higher than threshold
         # to check for connectedness as the root node is always selected.
-        scores = [np.round(node["pred"], round_upto) for node in layer]
-        is_connected = np.max(scores) >= threshold
+        for node in layer:
+            if np.round(node["pred"], round_upto) >= threshold:
+                is_connected = True
+                node["conn"] = True
     else:
         # Check if we have a high scoring node. If yes, then check if at least one of the parents is also high scoring.
         for node in layer:
+            is_node_connected = False
             if np.round(node["pred"], round_upto) >= threshold:
                 for prev_one_id in node["op"]:
-                    if np.round(prev_layer[prev_one_id]["pred"], round_upto) >= threshold:
+                    if (np.round(prev_layer[prev_one_id]["pred"], round_upto) >= threshold and
+                            "conn" in prev_layer[prev_one_id]):
                         is_connected = True
+                        is_node_connected = True
+                        node["conn"] = True
                         break
-                for prev_zero_id in node["zp"]:
-                    if np.round(prev_layer[prev_zero_id]["pred"], round_upto) >= threshold:
-                        is_connected = True
+
+                if not is_node_connected:
+                    for prev_zero_id in node["zp"]:
+                        if (np.round(prev_layer[prev_zero_id]["pred"], round_upto) >= threshold and
+                                "conn" in prev_layer[prev_zero_id]):
+                            is_connected = True
+                            node["conn"] = True
                         break
 
     return is_connected
@@ -104,7 +114,7 @@ def extend_paths(layer, partial_paths):
 # def calculate_path_resistance(paths, cl, nl, threshold=0.5, round_upto=1):
 def calculate_path_resistance(path, layers, threshold=0.5, round_upto=1):
     resistance = 0
-    for node_idx, layer in zip(path[1:], layers):
+    for node_idx, layer in zip(path[1:], layers[1:]):
         pred_score = layer[node_idx]["pred"]
         _resistance = 0 if np.round(pred_score, round_upto) >= threshold else threshold - pred_score
         resistance += _resistance
@@ -181,18 +191,27 @@ def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitchin
         total_time_stitching += time_stitching
         return flag_stitched_layer, time_stitching, bdd
 
+    elif heuristic == "shortest_path_ud":
+        # Shortest path up down
+        # TODO
+        pass
+
+
+
     elif heuristic == "min_resistance":
-        previous_layer = bdd[lidx - 1] if lidx > 0 else None
-        if previous_layer is None:
+        layers = [bdd[lidx - 1]] if lidx > 0 else None
+        if layers is None:
             return flag_stitched_layer, time.time() - time_stitching, bdd
 
-        layers = [bdd[i] for i in range(lidx, lidx + lookahead)]
-        partial_paths = [[node_idx] for node_idx, node in enumerate(previous_layer)
-                         if np.round(node["pred"], round_upto) >= threshold]
+        for i in range(lidx, lidx + lookahead):
+            layers.append(bdd[i])
+
+        partial_paths = [[node_idx] for node_idx, node in enumerate(layers[0])
+                         if np.round(node["pred"], round_upto) >= threshold and "conn" in node]
         # print("Partial paths len:", len(partial_paths))
         # Extend partial paths
         for i in range(lookahead - 1):
-            partial_paths = extend_paths(layers[i], partial_paths)
+            partial_paths = extend_paths(layers[i + 1], partial_paths)
             # print(np.unique([p[-1] for p in partial_paths]).shape[0])
         paths = extend_paths(layers[-1], partial_paths)
         # print(np.unique([p[-1] for p in paths]).shape[0])
@@ -212,11 +231,11 @@ def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitchin
         # print(resistances[:5])
         # Switch on the nodes in the minimum resistance paths
         for path in paths[:k]:
-            for node_idx, layer in zip(path[1:], layers):
+            for node_idx, layer in zip(path[1:], layers[1:]):
                 node = layer[node_idx]
-                if np.round(node["pred"], round_upto) < threshold:
-                    node = switch_on_node(node, threshold)
-                    flag_stitched_layer = True
+                node["conn"] = True
+                node = switch_on_node(node, threshold)
+            flag_stitched_layer = True
 
         time_stitching = time.time() - time_stitching
         total_time_stitching += time_stitching
@@ -419,6 +438,11 @@ def worker(rank, cfg, mdl_hex):
                                                layer,
                                                threshold=cfg.deploy.threshold,
                                                round_upto=cfg.deploy.round_upto)
+
+            if lidx == 0:
+                for node in bdd[0]:
+                    if "conn" in node:
+                        print("Conn in node!")
             if not is_connected:
                 print(f"Disconnected {pid}, layer: ", lidx)
                 was_disconnected = True
@@ -432,21 +456,8 @@ def worker(rank, cfg, mdl_hex):
                              threshold=cfg.deploy.threshold,
                              round_upto=cfg.deploy.round_upto)
                 flag_stitched_layer, total_time_stitching, bdd = out
-                # print(flag_stitched_layer)
                 if flag_stitched_layer is False:
                     break
-
-        # for lidx, layer in enumerate(bdd):
-        #     prev_layer = bdd[lidx - 1] if lidx > 0 else None
-        #     # if prev_layer is not None:
-        #     #     print("For ", lidx - 1, len([1 for node in prev_layer if np.round(node["pred"], 1) >= 0.5]))
-        #     is_connected = check_connectedness(prev_layer,
-        #                                        layer,
-        #                                        threshold=cfg.deploy.threshold,
-        #                                        round_upto=cfg.deploy.round_upto)
-        #     print(lidx, is_connected)
-        #     if not is_connected:
-        #         break
 
         if was_disconnected and flag_stitched_layer is False:
             continue
@@ -466,16 +477,13 @@ def worker(rank, cfg, mdl_hex):
             pareto_states = get_pareto_states_per_layer(bdd,
                                                         threshold=cfg.deploy.threshold,
                                                         round_upto=cfg.deploy.round_upto)
-            # print([len(ps) for ps in pareto_states])
             env.compute_pareto_frontier_with_pruning(pareto_states)
-            print(env.initial_num_nodes_per_layer)
-            print(env.reduced_num_nodes_per_layer)
+
             # Extract run info
             _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
             _data1 = [total_time_stitching, count_stitching]
             _data1.extend(_data)
 
-            # print(_data)
             pids.append(pid)
             bdd_data.append(_data1)
             print(f'Processed: {pid}, was_disconnected: {_data[0]}, n_sols: {len(_data[-2]["x"])}')
@@ -490,7 +498,7 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
-
+    print(mdl_hex)
     # Deploy model
     pool = mp.Pool(processes=cfg.deploy.num_processes)
     results = []
@@ -510,8 +518,8 @@ def main(cfg):
         pred_stats_per_layer[:, 1:] += r[2][:, 1:]
 
     # Save results
-    # save_bdd_data(cfg, pids, bdd_data, mdl_hex)
-    # save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
+    save_bdd_data(cfg, pids, bdd_data, mdl_hex)
+    save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
 
 
 if __name__ == '__main__':
