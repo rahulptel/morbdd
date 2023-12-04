@@ -87,8 +87,8 @@ deploy:
   threshold: 0.5
   round_upto: 1
   select_all_upto: 0
-  stitching_heuristic: min_resistance
-  lookahead: 2
+  stitching_heuristic: mip
+  lookahead: 1
   best: true
   epoch: false
   label: binary

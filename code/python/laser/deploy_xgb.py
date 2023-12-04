@@ -17,6 +17,7 @@ from laser.utils import get_order
 from laser.utils import get_xgb_model_name
 from laser.utils import label_bdd
 from laser.utils import statscore
+import gurobipy as gp
 
 
 def call_get_model_name(cfg):
@@ -166,6 +167,91 @@ def switch_on_nodes_in_shortest_path(path, bdd, threshold, round_upto):
     return bdd
 
 
+def generate_min_resistance_mip_model(bdd, threshold=0.5, profile=None):
+    root, terminal = "0-0", f"{len(bdd) + 1}-0"
+    node_vars, outgoing_arcs = [], {}
+
+    m = gp.Model("Min-resistance Graph")
+    # From root to penultimate layer
+    for lidx, layer in enumerate(bdd):
+        layer_node_vars = []
+        for nidx, node in enumerate(layer):
+            node_name = f"{lidx}-{nidx}"
+            resistance = max(0, threshold - node["pred"])
+            node_var = m.addVar(vtype="B", name=node_name, obj=resistance)
+            # node_vars.append(node_var)
+            layer_node_vars.append(node_var)
+
+            if lidx > 0:
+                parent_prefix = f"{lidx - 1}"
+                incoming_arcs = []
+
+                for op in node['op']:
+                    parent_node_name = f"{parent_prefix}-{op}"
+                    arc_name = f"{parent_node_name}-{node_name}-1"
+                    if parent_node_name not in outgoing_arcs:
+                        outgoing_arcs[parent_node_name] = []
+
+                    arc = m.addVar(vtype="B", name=arc_name, obj=0)
+                    outgoing_arcs[parent_node_name].append(arc)
+                    incoming_arcs.append(arc)
+
+                for zp in node['zp']:
+                    parent_node_name = f"{parent_prefix}-{zp}"
+                    arc_name = f"{parent_node_name}-{node_name}-1"
+                    if parent_node_name not in outgoing_arcs:
+                        outgoing_arcs[parent_node_name] = []
+
+                    arc = m.addVar(vtype="B", name=arc_name, obj=0)
+                    outgoing_arcs[parent_node_name].append(arc)
+                    incoming_arcs.append(arc)
+
+                # Select node if at least one in coming arc is selected
+                m.addConstr(gp.quicksum(incoming_arcs) <= len(incoming_arcs) * node_var)
+                # Don't select node if none of the incoming arcs are selected
+                m.addConstr(node_var <= gp.quicksum(incoming_arcs))
+
+        node_vars.append(layer_node_vars)
+
+        # For the first (root + 1) and the last (terminal - 1) layers, select at least one node
+        if lidx == 0 or lidx == len(bdd) - 1:
+            m.addConstr(gp.quicksum(layer_node_vars) >= 1)
+
+        # Select at least on outgoing arc if a node is selected
+        if lidx > 0:
+            for nidx, node_var in enumerate(node_vars[lidx - 1]):
+                parent_node_name = f"{lidx - 1}-{nidx}"
+                if parent_node_name not in outgoing_arcs:
+                    print("Parent node not found!")
+                else:
+                    m.addConstr(gp.quicksum(outgoing_arcs[parent_node_name]) >= node_var)
+
+    m._node_vars = node_vars
+    return m
+
+
+def get_mip_solution(mip):
+    node_vars = mip._node_vars
+    solution = []
+    for layer in node_vars:
+        _sol = []
+        for node in layer:
+            _sol.append(np.round(node.x + 0.5))
+        solution.append(_sol)
+
+    return solution
+
+
+def switch_on_nodes_in_mip_solution(bdd, sol):
+    for bdd_layer, sol_layer in zip(bdd, sol):
+        for bdd_node, is_selected in zip(bdd_layer, sol_layer):
+            if is_selected:
+                bdd_node["prev_pred"] = bdd_node["pred"]
+                bdd_node["pred"] += 0.5
+
+    return bdd
+
+
 def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitching, threshold=0.5, round_upto=1):
     flag_stitched_layer = False
 
@@ -191,12 +277,20 @@ def stitch(bdd, lidx, select_all_upto, heuristic, lookahead, total_time_stitchin
         total_time_stitching += time_stitching
         return flag_stitched_layer, time_stitching, bdd
 
-    elif heuristic == "shortest_path_ud":
+    elif heuristic == "shortest_path_up_down":
         # Shortest path up down
         # TODO
         pass
 
+    elif heuristic == "mip":
+        mip = generate_min_resistance_mip_model(bdd)
+        mip.optimize()
+        sol = get_mip_solution(mip)
+        bdd = switch_on_nodes_in_mip_solution(bdd, sol)
+        time_stitching = time.time() - time_stitching
+        flag_stitched_layer = True
 
+        return flag_stitched_layer, time_stitching, bdd
 
     elif heuristic == "min_resistance":
         layers = [bdd[lidx - 1]] if lidx > 0 else None
