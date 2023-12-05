@@ -19,22 +19,24 @@ task: classification
 # nms(neg_margin_score): Negative samples: -1, positive samples: score
 label: binary
 
-max_depth: 7
-eta: 0.3
-min_child_weight: 1000
-subsample: 1
-colsample_bytree: 1
-objective: binary:logistic
-num_round: 250
-early_stopping_rounds: 20
-evals:
-  - train
-  - val
-eval_metric:
-  - mae
-  - error
-  - auc
-  - logloss
+xgb:
+  max_depth: 7
+  eta: 0.3
+  min_child_weight: 1000
+  subsample: 1
+  colsample_bytree: 1
+  objective: binary:logistic
+  num_round: 250
+  early_stopping_rounds: 20
+  evals:
+    - train
+    - val
+  eval_metric:
+    - mae
+    - error
+    - auc
+    - logloss
+
 seed: 789541
 
 # Problem parameters
@@ -79,6 +81,7 @@ val:
   penalty_aggregation: ${train.penalty_aggregation}
 
 deploy:
+  mdl: xgb
   split: val
   from_pid: 1097
   to_pid: 1098

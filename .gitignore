@@ -159,5 +159,10 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 .vscode/
+*.lp
 
 resources
+code/cpp/network2022/sources/code_kirlik/
+code/cpp/network2022/sources/code_melihozlen/
+code/cpp/network2022/sources/code_tamby/
+code/cpp/network2022/sources/format_conversion/
