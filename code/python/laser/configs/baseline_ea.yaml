@@ -1,0 +1,25 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+prob:
+  name: knapsack
+  num_objs: 7
+  num_vars: 40
+  size: ${prob.num_objs}_${prob.num_vars}
+
+deploy:
+  split: test
+  pid: 1100
+  algorithm: nsga2
+  population_size: 25000
+  time_limit: 00:15:00
+
+
+seed: 789541
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
