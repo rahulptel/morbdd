@@ -3,6 +3,7 @@ import signal
 
 import hydra
 import libbddenvv1
+import pandas as pd
 
 from laser import resource_path
 from laser.utils import get_instance_data
@@ -51,14 +52,30 @@ def worker(rank, cfg):
             with open(file_path, "w") as fp:
                 json.dump(sol, fp)
 
+            df = pd.DataFrame([[cfg.size, pid, cfg.split,
+                                env.nnds,
+                                env.initial_node_count,
+                                env.reduced_node_count,
+                                env.initial_arcs_count,
+                                env.reduced_arcs_count,
+                                env.num_comparisons,
+                                env.time_result["compilation"],
+                                env.time_result["reduction"],
+                                env.time_result["pareto"]
+                                ]], columns=["size", "pid", "split", "nnds", "inc", "rnc", "iac", "rac", "Comp.",
+                                             "compilation", "reduction", "pareto"])
+            df.to_csv(file_path.parent / f"{pid}.csv", index=False)
+
 
 @hydra.main(version_base="1.2", config_path="./configs", config_name="bdd_dataset.yaml")
 def main(cfg):
-    pool = mp.Pool(processes=cfg.num_processes)
-    results = []
-    for rank in range(cfg.num_processes):
-        results.append(pool.apply_async(worker, args=(rank, cfg)))
-    results = [r.get() for r in results]
+    # pool = mp.Pool(processes=cfg.num_processes)
+    # results = []
+    # for rank in range(cfg.num_processes):
+    #     results.append(pool.apply_async(worker, args=(rank, cfg)))
+    # results = [r.get() for r in results]
+
+    worker(0, cfg)
 
 
 if __name__ == '__main__':

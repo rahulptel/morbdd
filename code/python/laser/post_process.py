@@ -50,41 +50,60 @@ def call_get_model_name(cfg):
                               device=cfg.device)
 
 
+# def find_ndps_in_preds(true_pf, pred_pf, i, mdl_hex):
+#     z, z_pred = np.array(true_pf), np.array(pred_pf)
+#     assert z.shape[1] == z_pred.shape[1]
+#     num_objs = z.shape[1]
+#
+#     z = z[np.lexsort([z[:, num_objs - i - 1] for i in range(num_objs)])]
+#     z_pred = z_pred[np.lexsort([z_pred[:, num_objs - i - 1] for i in range(num_objs)])]
+#
+#     j_prev = 0
+#     counter = 0
+#     found_ndps = []
+#     for i in range(z.shape[0]):
+#         # print(i, counter)
+#         j = copy.deepcopy(j_prev)
+#         while j < z_pred.shape[0]:
+#             if np.array_equal(z[i], z_pred[j]):
+#                 counter += 1
+#                 j_prev = copy.deepcopy(j + 1)
+#                 found_ndps.append(z[i])
+#                 break
+#
+#             j += 1
+#
+#     found_ndps = np.array(found_ndps)
+#     # p = resource_path / f"predictions/xgb/{mdl_hex}/count_pareto"
+#     # p.mkdir(exist_ok=True, parents=True)
+#     # with open(resource_path / f"predictions/xgb/{mdl_hex}/count_pareto/found_ndps_{i}.npy", "wb") as fp:
+#     #     np.save(fp, found_ndps)
+#     #
+#     # with open("true_ndps.npy", "wb") as fp:
+#     #     np.save(fp, z)
+#     #
+#     # with open("pred_ndps.npy", "wb") as fp:
+#     #     np.save(fp, z_pred)
+#     # return counter
+#
+#     return found_ndps
+
+
 def find_ndps_in_preds(true_pf, pred_pf, i, mdl_hex):
     z, z_pred = np.array(true_pf), np.array(pred_pf)
     assert z.shape[1] == z_pred.shape[1]
-    num_objs = z.shape[1]
 
-    z = z[np.lexsort([z[:, num_objs - i - 1] for i in range(num_objs)])]
-    z_pred = z_pred[np.lexsort([z_pred[:, num_objs - i - 1] for i in range(num_objs)])]
+    # Defining a data type
+    rows, cols = z.shape
+    dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
+            'formats': cols * [z.dtype]}
 
-    j_prev = 0
-    counter = 0
-    found_ndps = []
-    for i in range(z.shape[0]):
-        # print(i, counter)
-        j = copy.deepcopy(j_prev)
-        while j < z_pred.shape[0]:
-            if np.array_equal(z[i], z_pred[j]):
-                counter += 1
-                j_prev = copy.deepcopy(j + 1)
-                found_ndps.append(z[i])
-                break
+    rows, cols = z_pred.shape
+    dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                 'formats': cols * [z_pred.dtype]}
 
-            j += 1
-
-    found_ndps = np.array(found_ndps)
-    # p = resource_path / f"predictions/xgb/{mdl_hex}/count_pareto"
-    # p.mkdir(exist_ok=True, parents=True)
-    # with open(resource_path / f"predictions/xgb/{mdl_hex}/count_pareto/found_ndps_{i}.npy", "wb") as fp:
-    #     np.save(fp, found_ndps)
-    #
-    # with open("true_ndps.npy", "wb") as fp:
-    #     np.save(fp, z)
-    #
-    # with open("pred_ndps.npy", "wb") as fp:
-    #     np.save(fp, z_pred)
-    # return counter
+    # Finding intersection
+    found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
 
     return found_ndps
 
@@ -105,7 +124,7 @@ def save_count_pareto(cfg, out_path, i,
     count_pareto_path = out_path / f"count_pareto"
     count_pareto_path.mkdir(exist_ok=True, parents=True)
     count_pareto_file = count_pareto_path / f"{i}.txt"
-    count_pareto_file.write_text(f"{ndps_in_pred}, {num_pred_ndps}, {num_total_ndps}, "
+    count_pareto_file.write_text(f"{i}, {ndps_in_pred}, {num_pred_ndps}, {num_total_ndps}, "
                                  f"{frac_true_ndps_in_pred}, {frac_ndps_recovered}")
 
 
@@ -114,6 +133,8 @@ def get_prefix(cfg):
         prefix = f"{cfg.deploy.select_all_upto}-mrh{cfg.deploy.lookahead}"
     elif cfg.deploy.stitching_heuristic == "shortest_path":
         prefix = f"{cfg.deploy.select_all_upto}-sph"
+    elif cfg.deploy.stitching_heuristic == "mip":
+        prefix = f"{cfg.deploy.select_all_upto}-mip"
     else:
         raise ValueError("Invalid heuristic!")
 
@@ -170,11 +191,11 @@ def main(cfg):
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
 
-    pool = mp.Pool(processes=cfg.nthread)
-    results = [pool.apply_async(worker, args=(i, cfg, mdl_hex)) for i in range(cfg.deploy.from_pid, cfg.deploy.to_pid)]
-    results = [r.get() for r in results]
+    # pool = mp.Pool(processes=cfg.nthread)
+    # results = [pool.apply_async(worker, args=(i, cfg, mdl_hex)) for i in range(cfg.deploy.from_pid, cfg.deploy.to_pid)]
+    # results = [r.get() for r in results]
 
-    # worker(1000, cfg, mdl_hex)
+    worker(cfg.deploy.from_pid, cfg, mdl_hex)
 
 
 if __name__ == '__main__':

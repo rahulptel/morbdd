@@ -87,7 +87,7 @@ def read_instance_knapsack(archive, inst):
 
 def read_instance(problem, archive, inst):
     data = None
-    if problem == "knapsack":
+    if problem == "knapsack" or problem == "knapsackc":
         data = read_instance_knapsack(archive, inst)
 
     return data
@@ -95,7 +95,7 @@ def read_instance(problem, archive, inst):
 
 def get_instance_prefix(problem):
     prefix = None
-    if problem == 'knapsack':
+    if problem == 'knapsack' or problem == 'knapsackc':
         prefix = 'kp_7'
 
     return prefix
@@ -214,7 +214,7 @@ def get_knapsack_order(order_type, data):
 
 def get_order(problem, order_type, data):
     order = None
-    if problem == 'knapsack':
+    if problem == 'knapsack' or problem == 'knapsackc':
         order = get_knapsack_order(order_type, data)
 
     assert order is not None
@@ -224,7 +224,7 @@ def get_order(problem, order_type, data):
 
 def get_featurizer(problem, cfg):
     featurizer = None
-    if problem == "knapsack":
+    if problem == "knapsack" or problem == "knapsackc":
         from laser.featurizer import KnapsackFeaturizer
 
         featurizer = KnapsackFeaturizer(cfg)
@@ -664,6 +664,156 @@ def convert_bdd_to_xgb_data(problem,
     if weights_lst is not None:
         weights_np = np.array(weights_lst)
         np.save(open(weights_data_path.joinpath(f"{pid}.npy"), "wb"), weights_np)
+
+
+def convert_bdd_to_xgb_mixed_data(problem,
+                                  counter=None,
+                                  bdd=None,
+                                  num_objs=None,
+                                  num_vars=None,
+                                  split=None,
+                                  pid=None,
+                                  order_type=None,
+                                  state_norm_const=1000,
+                                  layer_norm_const=100,
+                                  task="classification",
+                                  label_type="binary",
+                                  neg_pos_ratio=1,
+                                  min_samples=0,
+                                  flag_layer_penalty=True,
+                                  layer_penalty=None,
+                                  flag_imbalance_penalty=False,
+                                  flag_importance_penalty=False,
+                                  penalty_aggregation="sum",
+                                  random_seed=100):
+    size = f"{num_objs}_{num_vars}"
+    dataset_type = "mixed"
+
+    sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
+    sampling_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type
+    sampling_data_path.mkdir(parents=True, exist_ok=True)
+    features_exists = sampling_data_path.joinpath(f"{counter}.npy").exists()
+
+    labels_data_path = resource_path / "xgb_data" / problem / dataset_type / split / "labels" / label_type
+    labels_data_path.mkdir(parents=True, exist_ok=True)
+    labels_exists = labels_data_path.joinpath(f"{counter}.npy").exists()
+
+    weights_type = ""
+    if flag_layer_penalty:
+        weights_type += f"{layer_penalty}-"
+    weights_type += "1-" if flag_imbalance_penalty else "0-"
+    weights_type += "1-" if flag_importance_penalty else "0-"
+    weights_type += penalty_aggregation
+    weights_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
+    weights_data_path.mkdir(parents=True, exist_ok=True)
+    weights_exists = weights_data_path.joinpath(f"{counter}.npy").exists()
+
+    print(f"Processed {counter}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
+
+    def convert_bdd_to_xgb_mixed_data_knapsack():
+        rng = random.Random(random_seed)
+        features_lst = None if features_exists else []
+        weights_lst = None if weights_exists else []
+        labels_lst = None if labels_exists else []
+        layer_weight_lst = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
+
+        inst_data, order, features, inst_features, var_features, num_var_features = None, None, None, None, None, None
+        if not features_exists:
+            # Read instance
+            inst_data = get_instance_data(problem, size, split, pid)
+            order = get_order(problem, order_type, inst_data)
+            # Extract instance and variable features
+            featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
+                                                                  raw=False,
+                                                                  context=True))
+            features = featurizer.get(inst_data)
+            # Instance features
+            inst_features = features["inst"][0]
+            # Variable features. Reordered features based on ordering
+            var_features = features["var"][order]
+            num_var_features = features["var"].shape[1]
+
+        # features_lst, labels_lst, weights_lst = [], [], []
+        for lidx, layer in enumerate(bdd):
+            # _features_lst, _labels_lst, _weights_lst = [], [], []
+            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
+
+            # Subsample negative samples
+            num_pos_samples = len(pos_ids)
+            if neg_pos_ratio < 1:
+                num_neg_samples = len(neg_ids)
+            else:
+                num_neg_samples = np.max([int(neg_pos_ratio * num_pos_samples),
+                                          min_samples])
+                num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
+                rng.shuffle(neg_ids)
+            neg_ids = neg_ids[:num_neg_samples]
+
+            # Imbalance weights for the current layer
+            pos_imb_wt = num_neg_samples / (num_pos_samples + num_neg_samples)
+            neg_imb_wt = 1 - pos_imb_wt
+
+            _parent_var_feat, _var_feat = None, None
+            if not features_exists:
+                # Variable features: Parent and current layer
+                _parent_var_feat = -1 * np.ones(num_var_features) \
+                    if lidx == 0 \
+                    else var_features[lidx - 1]
+                _var_feat = var_features[lidx]
+
+            prev_layer = bdd[lidx - 1] if lidx > 0 else None
+            node_ids = pos_ids[:]
+            node_ids.extend(neg_ids)
+            for i, node_id in enumerate(node_ids):
+                node = layer[node_id]
+
+                if not features_exists:
+                    _node_feat, _parent_node_feat = extract_node_features("knapsack",
+                                                                          lidx,
+                                                                          node,
+                                                                          prev_layer,
+                                                                          inst_data,
+                                                                          layer_norm_const=layer_norm_const,
+                                                                          state_norm_const=state_norm_const)
+                    features_lst.append(np.concatenate((inst_features,
+                                                        _parent_var_feat,
+                                                        _parent_node_feat,
+                                                        _var_feat,
+                                                        _node_feat)))
+
+                if not labels_exists:
+                    labels_lst.append(node["l"])
+
+                if not weights_exists:
+                    weights_lst.append(get_aggregated_weight(
+                        aggregation=penalty_aggregation,
+                        flag_layer_penalty=flag_layer_penalty,
+                        layer_weight=layer_weight_lst[lidx],
+                        flag_imbalance_penalty=flag_imbalance_penalty,
+                        imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
+                        flag_importance_penalty=flag_importance_penalty if i < num_pos_samples else False,
+                        score=node["score"]))
+
+        return features_lst, labels_lst, weights_lst
+
+    if problem == "knapsack":
+        data = convert_bdd_to_xgb_mixed_data_knapsack()
+    else:
+        raise ValueError("Invalid problem type!")
+
+    features_lst, labels_lst, weights_lst = data
+    if features_lst is not None:
+        features_np = np.array(features_lst)
+        np.save(open(sampling_data_path.joinpath(f"{counter}.npy"), "wb"), features_np)
+
+    if labels_lst is not None:
+        labels_np = np.array(labels_lst)
+        np.save(open(labels_data_path.joinpath(f"{counter}.npy"), "wb"), labels_np)
+
+    if weights_lst is not None:
+        weights_np = np.array(weights_lst)
+        np.save(open(weights_data_path.joinpath(f"{counter}.npy"), "wb"), weights_np)
 
 
 def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device):

@@ -5,11 +5,11 @@ import time
 
 import hydra
 import libbddenvv1
-import networkx as nx
+# import networkx as nx
 import numpy as np
 import pandas as pd
-import torch
-from torchmetrics.classification import BinaryStatScores
+# import torch
+# from torchmetrics.classification import BinaryStatScores
 
 from laser import resource_path
 from laser.utils import get_instance_data
@@ -78,6 +78,7 @@ def check_connectedness(prev_layer, layer, threshold=0.5, round_upto=1):
         # Check if we have a high scoring node. If yes, then check if at least one of the parents is also high scoring.
         for node in layer:
             is_node_connected = False
+            node["conn"] = False
             if np.round(node["pred"], round_upto) >= threshold:
                 for op in node["op"]:
                     if prev_layer[op]["conn"]:
@@ -163,13 +164,15 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
         disconnected_prefix = f"{cfg.deploy.select_all_upto}-mrh{cfg.deploy.lookahead}"
     elif cfg.deploy.stitching_heuristic == "shortest_path":
         disconnected_prefix = f"{cfg.deploy.select_all_upto}-sph"
+    elif cfg.deploy.stitching_heuristic == "mip":
+        disconnected_prefix = f"{cfg.deploy.select_all_upto}-mip"
     else:
         raise ValueError("Invalid heuristic!")
 
     bdd_stats = []
     bdd_stats_disconnected = []
     for pid, data in zip(pids, bdd_data):
-        time_stitching, count_stitching, was_disconnected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
+        time_stitching, time_mip, count_stitching, was_disconnected, inc, rnc, iac, rac, num_comparisons, sol, _time = data
 
         sol_pred_path = out_path / f"{disconnected_prefix}-sols_pred" \
             if was_disconnected else out_path / "sols_pred"
@@ -188,6 +191,7 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
                                            1,
                                            count_stitching,
                                            time_stitching,
+                                           time_mip,
                                            cfg.deploy.stitching_heuristic,
                                            cfg.deploy.lookahead,
                                            cfg.deploy.select_all_upto,
@@ -204,6 +208,7 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
             bdd_stats.append([cfg.prob.size,
                               pid,
                               cfg.deploy.split,
+                              0,
                               0,
                               0,
                               0,
@@ -226,6 +231,7 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
                "was_disconnected",
                "count_stitching",
                "time_stitching",
+               "time_mip",
                "stitching_heuristic",
                "lookahead",
                "select_all_upto",
@@ -240,11 +246,11 @@ def save_bdd_data(cfg, pids, bdd_data, mdl_hex):
                "pred_pareto"]
     if len(bdd_stats):
         df = pd.DataFrame(bdd_stats, columns=columns)
-        df.to_csv(out_path / f"pred_result.csv", index=False)
+        df.to_csv(out_path / f"pred_result_{pids[0]}.csv", index=False)
 
     if len(bdd_stats_disconnected):
         df = pd.DataFrame(bdd_stats_disconnected, columns=columns)
-        df.to_csv(out_path / f"{disconnected_prefix}-pred_result.csv", index=False)
+        df.to_csv(out_path / f"{disconnected_prefix}-pred_result_{pids[0]}.csv", index=False)
 
 
 def compute_pareto_frontier_on_pareto_bdd(cfg, env, pareto_states, inst_data, order):
@@ -293,7 +299,7 @@ def worker(rank, cfg, mdl_hex):
                                                     round_upto=cfg.deploy.round_upto)
 
         # Check connectedness of predicted Pareto BDD and perform stitching if necessary
-        was_disconnected, total_time_stitching, count_stitching = False, 0, 0
+        was_disconnected, total_time_stitching, time_mip, count_stitching = False, 0, 0, 0
         for lidx, layer in enumerate(bdd):
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
             is_connected = check_connectedness(prev_layer,
@@ -304,12 +310,17 @@ def worker(rank, cfg, mdl_hex):
                 print(f"Disconnected {pid}, layer: ", lidx)
                 was_disconnected = True
                 count_stitching += 1
-                bdd, total_time_stitching = stitch(cfg.deploy,
-                                                   bdd,
-                                                   lidx,
-                                                   total_time_stitching)
+                bdd, total_time_stitching, time_mip = stitch("knapsack",
+                                                             cfg,
+                                                             bdd,
+                                                             lidx,
+                                                             total_time_stitching)
 
-        if cfg.deploy.process_connected or was_disconnected:
+        # cfg.deploy.stitching_heuristic = "mip"
+        # bdd, total_time_stitching, time_mip = stitch("knapsack", cfg, bdd, lidx, total_time_stitching)
+
+        if ((was_disconnected is False and cfg.deploy.process_connected) or
+                (was_disconnected is True and cfg.deploy.process_disconnected)):
             # Compute Pareto frontier on predicted Pareto BDD
             pareto_states = get_pareto_states_per_layer(bdd,
                                                         threshold=cfg.deploy.threshold,
@@ -318,7 +329,7 @@ def worker(rank, cfg, mdl_hex):
 
             # Extract run info
             _data = get_run_data_from_env(env, cfg.deploy.order_type, was_disconnected)
-            _data1 = [total_time_stitching, count_stitching]
+            _data1 = [total_time_stitching, time_mip, count_stitching]
             _data1.extend(_data)
 
             pids.append(pid)
@@ -335,17 +346,18 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
-    print(mdl_hex)
+    print(f"Using model: ", mdl_hex)
     # Deploy model
-    pool = mp.Pool(processes=cfg.deploy.num_processes)
-    results = []
-    for rank in range(cfg.deploy.num_processes):
-        results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
+    # pool = mp.Pool(processes=cfg.deploy.num_processes)
+    # results = []
+    # for rank in range(cfg.deploy.num_processes):
+    #     results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
 
-    # results = [worker(0, cfg, mdl_hex)]
+    results = [worker(0, cfg, mdl_hex)]
 
     # Fetch results
     results = [r.get() for r in results]
+
     pids, bdd_data = [], []
     pred_stats_per_layer = np.zeros((cfg.prob.num_vars, 5))
     pred_stats_per_layer[:, 0] = np.arange(pred_stats_per_layer.shape[0])
@@ -354,9 +366,10 @@ def main(cfg):
         bdd_data.extend(r[1])
         pred_stats_per_layer[:, 1:] += r[2][:, 1:]
 
-    # Save results
-    save_bdd_data(cfg, pids, bdd_data, mdl_hex)
-    save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
+    if len(pids):
+        # Save results
+        save_bdd_data(cfg, pids, bdd_data, mdl_hex)
+        # save_stats_per_layer(cfg, pred_stats_per_layer, mdl_hex)
 
 
 if __name__ == '__main__':

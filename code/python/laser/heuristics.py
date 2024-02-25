@@ -1,9 +1,15 @@
 import networkx as nx
 import time
 import numpy as np
-import gurobipy as gp
+# import gurobipy as gp
 from pathlib import Path
 import pandas as pd
+
+
+# gp.setParam("Threads", 1)
+# # Focus on feasibility
+# gp.setParam("MIPFocus", 1)
+# gp.setParam("TimeLimit", 300)
 
 
 def get_node_resistance(pred_score, threshold=0.5, round_upto=1):
@@ -132,7 +138,10 @@ def generate_min_resistance_mip_model(bdd, threshold=0.5, round_upto=1, profile=
             resistance = get_node_resistance(node["pred"],
                                              threshold=threshold,
                                              round_upto=round_upto)
-            node_var = m.addVar(vtype="B", name=node_name, obj=resistance)
+            # Select nodes above threshold
+            lb = 1 if resistance == 0 else 0
+            node_var = m.addVar(vtype="B", name=node_name, obj=resistance, lb=lb)
+
             # node_vars.append(node_var)
             layer_node_vars.append(node_var)
 
@@ -199,12 +208,12 @@ def get_mip_solution(mip):
     return solution
 
 
-def switch_on_nodes_in_mip_solution(bdd, sol):
+def switch_on_nodes_in_mip_solution(bdd, sol, threshold=0.5, round_upto=1):
     for bdd_layer, sol_layer in zip(bdd, sol):
         for bdd_node, is_selected in zip(bdd_layer, sol_layer):
-            if is_selected:
-                bdd_node["prev_pred"] = bdd_node["pred"]
-                bdd_node["pred"] += 0.5
+            if is_selected and np.round(bdd_node["pred"], round_upto) < threshold:
+                bdd_node = switch_on_node(bdd_node, threshold=0.5)
+                bdd_node["conn"] = True
 
     return bdd
 
@@ -289,55 +298,72 @@ def run_shortest_path_up_down(bdd, lidx, threshold=0.5, round_upto=1):
 
 
 def run_mip(bdd, threshold=0.5, round_upto=1, profile=None):
-    time_stitching = time.time()
+    incs = None
+    # incs = []
+
+    # def callback(model, where):
+    #     if where == gp.GRB.Callback.MIPSOL:
+    #         time = model.cbGet(gp.GRB.Callback.RUNTIME)
+    #         best = model.cbGet(gp.GRB.Callback.MIPSOL_OBJBST)
+    #         incs.append([time, best])
+
+    time_mip = time.time()
     mip = generate_min_resistance_mip_model(bdd,
                                             threshold=threshold,
                                             round_upto=round_upto,
                                             profile=profile)
+    time_mip = time.time() - time_mip
+
+    time_stitching = time.time()
+    # mip.optimize(callback)
     mip.optimize()
     sol = get_mip_solution(mip)
     bdd = switch_on_nodes_in_mip_solution(bdd, sol)
     time_stitching = time.time() - time_stitching
 
-    return bdd, time_stitching
+    return bdd, time_stitching, time_mip, incs
 
 
-def stitch(cfg, bdd, lidx, total_time_stitching):
+def stitch(problem, cfg, bdd, lidx, total_time_stitching):
     # If BDD is disconnected on the first layer, select both nodes.
+    time_stitching, time_mip = None, None
     invalid_heuristic = False
     actual_lidx = lidx + 1
 
-    if actual_lidx < cfg.select_all_upto:
-        bdd, total_time_stitching = run_select_all(bdd, lidx,
-                                                   threshold=cfg.threshold,
-                                                   round_upto=cfg.round_upto)
+    if actual_lidx < cfg.deploy.select_all_upto:
+        bdd, time_stitching = run_select_all(bdd, lidx,
+                                             threshold=cfg.deploy.threshold,
+                                             round_upto=cfg.deploy.round_upto)
 
-    elif cfg.stitching_heuristic == "min_resistance":
+    elif cfg.deploy.stitching_heuristic == "min_resistance":
         bdd, time_stitching = run_lookahead(bdd, lidx,
-                                            cfg.lookahead,
-                                            threshold=cfg.threshold,
-                                            round_upto=cfg.round_upto)
+                                            cfg.deploy.lookahead,
+                                            threshold=cfg.deploy.threshold,
+                                            round_upto=cfg.deploy.round_upto)
 
-    elif cfg.stitching_heuristic == "shortest_path":
+    elif cfg.deploy.stitching_heuristic == "shortest_path":
         bdd, time_stitching = run_shortest_path(bdd,
-                                                threshold=cfg.threshold,
-                                                round_upto=cfg.round_upto)
+                                                threshold=cfg.deploy.threshold,
+                                                round_upto=cfg.deploy.round_upto)
 
-    elif cfg.stitching_heuristic == "shortest_path_up_down":
+    elif cfg.deploy.stitching_heuristic == "shortest_path_up_down":
         bdd, time_stitching = run_shortest_path_up_down(bdd,
                                                         lidx,
-                                                        threshold=cfg.threshold,
-                                                        round_upto=cfg.round_upto)
+                                                        threshold=cfg.deploy.threshold,
+                                                        round_upto=cfg.deploy.round_upto)
 
-    elif cfg.stitching_heuristic == "mip":
+    elif cfg.deploy.stitching_heuristic == "mip":
         # return flag_stitched_layer, time_stitching, bdd
-        profile = pd.read_csv(
-            Path(__file__).parent / f"dist/{cfg.problem.name}/"
-                                    f"{cfg.problem.n_objs}-{cfg.problem.n_vars}.csv")
-        bdd, time_stitching = run_mip(bdd,
-                                      threshold=cfg.threshold,
-                                      round_upto=cfg.round_upto,
-                                      profile=profile["8"].values)
+        # profile = pd.read_csv(
+        #     Path(__file__).parent / f"dist/{cfg.problem.name}/"
+        #                             f"{cfg.problem.n_objs}-{cfg.problem.n_vars}.csv")
+        # bdd, time_stitching, time_mip = run_mip(bdd,
+        #                                         threshold=cfg.threshold,
+        #                                         round_upto=cfg.round_upto,
+        #                                         profile=profile["8"].values)
+        bdd, time_stitching, time_mip, incs = run_mip(bdd,
+                                                      threshold=cfg.deploy.threshold,
+                                                      round_upto=cfg.deploy.round_upto)
 
     else:
         invalid_heuristic = True
@@ -346,4 +372,4 @@ def stitch(cfg, bdd, lidx, total_time_stitching):
         raise ValueError("Invalid heuristic!")
 
     total_time_stitching += time_stitching
-    return bdd, total_time_stitching
+    return bdd, total_time_stitching, time_mip

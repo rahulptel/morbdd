@@ -12,10 +12,125 @@ from laser.utils import extract_node_features
 from laser.utils import get_featurizer
 from laser.utils import get_instance_data
 from laser.utils import get_order
-from laser.utils import get_xgb_model_name
+# from laser.utils import get_xgb_model_name
 from laser.utils import read_from_zip
 import time
 import pandas as pd
+
+
+def get_xgb_model_name(max_depth=None,
+                       eta=None,
+                       min_child_weight=None,
+                       subsample=None,
+                       colsample_bytree=None,
+                       objective=None,
+                       num_round=None,
+                       early_stopping_rounds=None,
+                       evals=None,
+                       eval_metric=None,
+                       seed=None,
+                       prob_name=None,
+                       mixture=None,
+                       order=None,
+                       layer_norm_const=None,
+                       state_norm_const=None,
+                       train_from_pid=None,
+                       train_to_pid=None,
+                       train_neg_pos_ratio=None,
+                       train_min_samples=None,
+                       train_flag_layer_penalty=None,
+                       train_layer_penalty=None,
+                       train_flag_imbalance_penalty=None,
+                       train_flag_importance_penalty=None,
+                       train_penalty_aggregation=None,
+                       val_from_pid=None,
+                       val_to_pid=None,
+                       val_neg_pos_ratio=None,
+                       val_min_samples=None,
+                       val_flag_layer_penalty=None,
+                       val_layer_penalty=None,
+                       val_flag_imbalance_penalty=None,
+                       val_flag_importance_penalty=None,
+                       val_penalty_aggregation=None,
+                       device=None):
+    name = ""
+    if max_depth is not None:
+        name += f"{max_depth}-"
+    if eta is not None:
+        name += f"{eta}-"
+    if min_child_weight is not None:
+        name += f"{min_child_weight}-"
+    if subsample is not None:
+        name += f"{subsample}-"
+    if colsample_bytree is not None:
+        name += f"{colsample_bytree}-"
+    if objective is not None:
+        name += f"{objective}-"
+    if num_round is not None:
+        name += f"{num_round}-"
+    if early_stopping_rounds is not None:
+        name += f"{early_stopping_rounds}-"
+    if type(evals) is list and len(evals):
+        for eval in evals:
+            name += f"{eval}"
+    if type(eval_metric) is list and len(eval_metric):
+        for em in eval_metric:
+            name += f"{em}-"
+    if seed is not None:
+        name += f"{seed}"
+
+    if prob_name is not None:
+        name += f"{prob_name}-"
+    if mixture is not None:
+        name += f"{mixture}-"
+    if order is not None:
+        name += f"{order}-"
+    if layer_norm_const is not None:
+        name += f"{layer_norm_const}-"
+    if state_norm_const is not None:
+        name += f"{state_norm_const}-"
+
+    if train_from_pid is not None:
+        name += f"{train_from_pid}-"
+    if train_to_pid is not None:
+        name += f"{train_to_pid}-"
+    if train_neg_pos_ratio is not None:
+        name += f"{train_neg_pos_ratio}-"
+    if train_min_samples is not None:
+        name += f"{train_min_samples}-"
+    if train_flag_layer_penalty is not None:
+        name += f"{train_flag_layer_penalty}-"
+    if train_layer_penalty is not None:
+        name += f"{train_layer_penalty}-"
+    if train_flag_imbalance_penalty is not None:
+        name += f"{train_flag_imbalance_penalty}-"
+    if train_flag_importance_penalty is not None:
+        name += f"{train_flag_importance_penalty}-"
+    if train_penalty_aggregation is not None:
+        name += f"{train_penalty_aggregation}-"
+
+    if val_from_pid is not None:
+        name += f"{val_from_pid}-"
+    if val_to_pid is not None:
+        name += f"{val_to_pid}-"
+    if val_neg_pos_ratio is not None:
+        name += f"{val_neg_pos_ratio}-"
+    if val_min_samples is not None:
+        name += f"{val_min_samples}-"
+    if val_flag_layer_penalty is not None:
+        name += f"{val_flag_layer_penalty}-"
+    if val_layer_penalty is not None:
+        name += f"{val_layer_penalty}-"
+    if val_flag_imbalance_penalty is not None:
+        name += f"{val_flag_imbalance_penalty}-"
+    if val_flag_importance_penalty is not None:
+        name += f"{val_flag_importance_penalty}-"
+    if val_penalty_aggregation is not None:
+        name += f"{val_penalty_aggregation}-"
+    if device is not None:
+        name += f"{device}"
+
+    return name
 
 
 def call_get_model_name(cfg):
@@ -33,8 +148,7 @@ def call_get_model_name(cfg):
                                   eval_metric=mdl_cfg.eval_metric,
                                   seed=cfg.seed,
                                   prob_name=cfg.prob.name,
-                                  num_objs=cfg.prob.num_objs,
-                                  num_vars=cfg.prob.num_vars,
+                                  mixture=cfg.mixed.sizes,
                                   order=cfg.prob.order,
                                   layer_norm_const=cfg.prob.layer_norm_const,
                                   state_norm_const=cfg.prob.state_norm_const,
@@ -115,7 +229,7 @@ def convert_bdd_to_xgb_data_deploy(problem,
 
 
 def load_model(cfg, mdl_hex):
-    mdl_path = resource_path / f"pretrained/xgb/{cfg.prob.name}/{cfg.prob.size}/model_{mdl_hex}.json"
+    mdl_path = resource_path / f"pretrained/xgb/{cfg.prob.name}/mixed/model_{mdl_hex}.json"
     model = None
     if mdl_path.exists():
         param = {"max_depth": cfg.xgb.max_depth,
@@ -147,7 +261,7 @@ def set_prediction_score_on_node(bdd, preds):
 
 
 def save_bdd(problem, size, split, pid, bdd, mdl_hex):
-    pred_bdd_path = resource_path / f"predictions/xgb/{problem}/{size}/{split}/{mdl_hex}/pred_bdd"
+    pred_bdd_path = resource_path / f"predictions/xgb/{problem}/mixed/{size}/{split}/{mdl_hex}/pred_bdd"
     pred_bdd_path.mkdir(parents=True, exist_ok=True)
     pred_bdd_path = pred_bdd_path / f"{pid}.json"
     with open(pred_bdd_path, "w") as fp:
@@ -157,7 +271,8 @@ def save_bdd(problem, size, split, pid, bdd, mdl_hex):
 def save_time_result(r, problem, size, split, mdl_hex):
     df = pd.DataFrame(r, columns=["size", "split", "pid", "order_type", "time_featurize", "time_predict",
                                   "time_set_score"])
-    df.to_csv(resource_path / f"predictions/xgb/{problem}/{size}/{split}/{mdl_hex}/time_pred_result.csv", index=False)
+    df.to_csv(resource_path / f"predictions/xgb/{problem}/mixed/{size}/{split}/{mdl_hex}/time_pred_result.csv",
+              index=False)
 
 
 def worker(rank, cfg, mdl_hex):
@@ -211,22 +326,22 @@ def main(cfg):
     h = hashlib.blake2s(digest_size=32)
     h.update(mdl_name.encode("utf-8"))
     mdl_hex = h.hexdigest()
-    print(f"Using model: {mdl_hex}")
+    print(mdl_hex)
 
     # Deploy model
-    # pool = mp.Pool(processes=cfg.deploy.num_processes)
-    # results = []
-    # for rank in range(cfg.deploy.num_processes):
-    #     results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
-    #
-    # # Fetch results
-    # results = [r.get() for r in results]
-    # r = []
-    # for result in results:
-    #     r.extend(result)
+    pool = mp.Pool(processes=cfg.deploy.num_processes)
+    results = []
+    for rank in range(cfg.deploy.num_processes):
+        results.append(pool.apply_async(worker, args=(rank, cfg, mdl_hex)))
 
-    r = worker(0, cfg, mdl_hex)
+    # Fetch results
+    results = [r.get() for r in results]
+    r = []
+    for result in results:
+        r.extend(result)
+
     save_time_result(r, cfg.prob.name, cfg.prob.size, cfg.deploy.split, mdl_hex)
+    # worker(0, cfg, mdl_hex)
 
 
 if __name__ == '__main__':
