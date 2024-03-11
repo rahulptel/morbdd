@@ -17,14 +17,12 @@ using namespace boost;
 bool IndepSetBDDConstructor::generate_next_layer()
 {
 	// If the last layer is approximated update the states[iter]
-	if (states[iter].size() != bdd->layers[l - 1].size())
+	if (states[iter].size() > bdd->layers[l - 1].size())
 	{
 		states[iter].clear();
-		for (vector<Node *>::iterator nodep = bdd->layers[l - 1].begin();
-			 nodep != bdd->layers[l - 1].end();
-			 nodep++)
+		for (int k = 0; k < bdd->layers[l - 1].size(); ++k)
 		{
-			states[iter][&((*nodep)->setpack_state)] = *nodep;
+			states[iter][&bdd->layers[l - 1][k]->setpack_state] = bdd->layers[l - 1][k];
 		}
 	}
 

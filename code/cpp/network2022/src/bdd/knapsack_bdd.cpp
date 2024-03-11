@@ -9,6 +9,18 @@
 //
 bool KnapsackBDDConstructor::generate_next_layer()
 {
+	// If the last layer is approximated update the states[iter]
+	// We insert nodes in layer l+1. Hence, l is the last layer.
+	if (states[iter].size() > bdd->layers[l].size())
+	{
+		states[iter].clear();
+		for (int k = 0; k < bdd->layers[l].size(); ++k)
+		{
+
+			states[iter][bdd->layers[l][k]->weight] = bdd->layers[l][k];
+		}
+	}
+
 	if (l < inst->n_vars)
 	{
 		// cout << "\tLayer " << l << " - number of nodes: " << states[next].size() << endl;
@@ -34,6 +46,7 @@ bool KnapsackBDDConstructor::generate_next_layer()
 				if (it == states[next].end())
 				{
 					Node *new_node = bdd->add_node(l + 1);
+					new_node->weight = state;
 					states[next][state] = new_node;
 					node->add_out_arc_fast(new_node, 0);
 					node->set_arc_weights(0, zero_weights);
@@ -59,6 +72,7 @@ bool KnapsackBDDConstructor::generate_next_layer()
 					if (it == states[next].end())
 					{
 						Node *new_node = bdd->add_node(l + 1);
+						new_node->weight = state;
 						states[next][state] = new_node;
 						node->add_out_arc_fast(new_node, 1);
 						node->set_arc_weights(1, one_weights);
@@ -150,7 +164,7 @@ void KnapsackBDDConstructor::generate_exact()
 	// 			if (it == states[next].end())
 	// 			{
 	// 				Node *new_node = bdd->add_node(l + 1);
-	// 				new_node->weight = state;
+	//              new_node->weight = state;
 	// 				states[next][state] = new_node;
 	// 				node->add_out_arc_fast(new_node, 0);
 	// 				node->set_arc_weights(0, zero_weights);
