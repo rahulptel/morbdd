@@ -2,12 +2,12 @@ import multiprocessing as mp
 
 import hydra
 
-from laser import resource_path
-from laser.utils import convert_bdd_to_tensor_data
-from laser.utils import convert_bdd_to_xgb_data
-from laser.utils import convert_bdd_to_xgb_mixed_data
-from laser.utils import label_bdd
-from laser.utils import read_from_zip
+from morbdd import resource_path
+from morbdd.utils import convert_bdd_to_tensor_data
+from morbdd.utils import convert_bdd_to_xgb_data
+from morbdd.utils import convert_bdd_to_xgb_mixed_data
+from morbdd.utils import label_bdd
+from morbdd.utils import read_from_zip
 
 
 def worker_nn(rank, cfg):
