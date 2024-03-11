@@ -141,6 +141,8 @@ public:
 
     vector<int> get_var_layer();
 
+    vector<int> get_frontier();
+
 private:
     void initialize();
 
@@ -150,6 +152,7 @@ private:
 
     void relax_layer(int layer, int method, vector<int> states_to_merge);
 
+    ParetoFrontier *pareto_frontier;
     // ----------------------------------------------------------------
     // Instances
     KnapsackInstance *inst_kp;

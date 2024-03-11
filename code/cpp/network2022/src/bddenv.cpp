@@ -30,6 +30,10 @@ void BDDEnv::clean_memory()
     {
         delete mdd;
     }
+    if (pareto_frontier != NULL)
+    {
+        delete pareto_frontier;
+    }
 }
 
 void BDDEnv::initialize()
@@ -42,6 +46,7 @@ void BDDEnv::initialize()
         inst_indepset = NULL;
         bdd = NULL;
         mdd = NULL;
+        pareto_frontier = NULL;
     }
     else
     {
@@ -573,6 +578,15 @@ vector<int> BDDEnv::get_var_layer()
     }
 }
 
+vector<int> BDDEnv::get_frontier()
+{
+    if (pareto_frontier != NULL)
+    {
+        return pareto_frontier->sols;
+    }
+    return {};
+}
+
 int BDDEnv::compute_pareto_frontier()
 {
     MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
@@ -586,7 +600,7 @@ int BDDEnv::compute_pareto_frontier()
 
         // Compute pareto frontier based on methodology
         // cout << "\n\nComputing pareto frontier..." << endl;
-        ParetoFrontier *pareto_frontier = NULL;
+        pareto_frontier = NULL;
         timers.start_timer(pareto_time);
         // cout << method << endl;
         if (method == 1)
@@ -623,7 +637,7 @@ int BDDEnv::compute_pareto_frontier()
         }
 
         timers.start_timer(pareto_time);
-        ParetoFrontier *pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
         timers.end_timer(pareto_time);
 
         return 0;
