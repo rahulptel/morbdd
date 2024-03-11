@@ -1,0 +1,109 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+    
+device: cpu
+nthread: 16
+# Tensor: PyTorch Dataset
+# DMatrix: XGBoost Dataset
+dtype: DMatrix
+# classification: Classification
+# regression: Regression
+task: regression
+## Classification labels
+# binary: Negative samples: 0, positive samples 1
+## Regression labels
+# mo (margin_one): Negative samples: -1, positive samples 1
+# mos(margin_one_score): Negative samples: -1, positive samples: 1+score
+# nms(neg_margin_score): Negative samples: -1, positive samples: score
+label: mos
+
+max_depth: 10
+eta: 0.3
+objective: reg:squarederror
+num_round: 250
+early_stopping_rounds: 20
+evals:
+  - train
+  - val
+eval_metric:
+  - mape
+  - mae
+  - rmse
+seed: 789541
+
+# Problem parameters
+prob:
+  name: knapsack
+  num_objs: 7
+  num_vars: 40
+  size: ${prob.num_objs}_${prob.num_vars}
+  state_norm_const: 1000
+  layer_norm_const: 100
+  order: MinWt
+
+train:
+  from_pid: 0
+  to_pid: 1000
+  neg_pos_ratio: 1
+  min_samples: 0
+  flag_layer_penalty: true
+  # layer in [0, 1], 0 for root and 1 for terminal
+  # const:        1
+  # linear:       1 - layer
+  # linearE:      e^(-0.5 - 1) * layer + 1
+  # exponential:  e^(-0.5 - layer)
+  # quadratic:    e^(-0.5 - 1) * layer^2 + 1
+  # sigmoidal:    (1 + e^(-0.5)) / (1 + e^(layer - 0.5))
+  layer_penalty: exponential
+  flag_imbalance_penalty: false
+  flag_importance_penalty: false
+  # sum: Add all the penalties
+  # product: Multiply all the penalties
+  penalty_aggregation: sum
+
+val:
+  from_pid: 1000
+  to_pid: 1100
+  neg_pos_ratio: ${train.neg_pos_ratio}
+  min_samples: ${train.min_samples}
+  flag_layer_penalty: ${train.flag_layer_penalty}
+  layer_penalty: ${train.layer_penalty}
+  flag_imbalance_penalty: ${train.flag_imbalance_penalty}
+  flag_importance_penalty: ${train.flag_importance_penalty}
+  penalty_aggregation: ${train.penalty_aggregation}
+
+deploy:
+  split: val
+  from_pid: 1000
+  to_pid: 1100
+  neg_pos_ratio: -1
+  min_samples: 0
+  batch_size: 1024
+  threshold: 0
+  best: true
+  epoch: false
+  mdl: xgb
+  label: mos
+  order_type: MinWt
+  num_processes: 16
+
+# C++ lib parameters
+bin:
+  # 1: Knapsack
+  problem_type: 1
+  # Don't change this
+  preprocess: 0
+  # 0: Exact
+  # 1: Restricted
+  bdd_type: 0
+  # To be used when constructing restricted BDD.
+  # Set it to zero for exact.
+  maxwidth: 0
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
