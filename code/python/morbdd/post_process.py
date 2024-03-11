@@ -7,8 +7,8 @@ import zipfile
 import hydra
 import numpy as np
 
-from laser import resource_path
-from laser.utils import get_xgb_model_name
+from morbdd import resource_path
+from morbdd.utils import get_xgb_model_name
 
 
 def call_get_model_name(cfg):

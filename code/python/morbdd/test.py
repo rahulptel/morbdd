@@ -9,15 +9,15 @@ from torch.utils.data import ConcatDataset
 from torch.utils.data import DataLoader
 from torchmetrics.classification import StatScores
 
-from laser import resource_path
-from laser.model import model_factory
-from laser.utils import calculate_accuracy
-from laser.utils import checkpoint_test
-from laser.utils import get_context_features
-from laser.utils import get_log_dir_name
-from laser.utils import get_split_datasets
-from laser.utils import set_device
-from laser.utils import update_scores
+from morbdd import resource_path
+from morbdd.model import model_factory
+from morbdd.utils import calculate_accuracy
+from morbdd.utils import checkpoint_test
+from morbdd.utils import get_context_features
+from morbdd.utils import get_log_dir_name
+from morbdd.utils import get_split_datasets
+from morbdd.utils import set_device
+from morbdd.utils import update_scores
 
 statscores = StatScores(task='binary', multidim_average='samplewise')
 

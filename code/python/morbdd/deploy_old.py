@@ -6,12 +6,12 @@ import hydra
 import torch
 from torch.utils.data import DataLoader
 
-from laser import resource_path
-from laser.model import model_factory
-from laser.utils import get_context_features
-from laser.utils import get_dataset
-from laser.utils import get_log_dir_name
-from laser.utils import set_device
+from morbdd import resource_path
+from morbdd.model import model_factory
+from morbdd.utils import get_context_features
+from morbdd.utils import get_dataset
+from morbdd.utils import get_log_dir_name
+from morbdd.utils import set_device
 import os
 
 dataset_dict = {}

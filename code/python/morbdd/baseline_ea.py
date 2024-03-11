@@ -10,8 +10,8 @@ from pymoo.operators.sampling.rnd import BinaryRandomSampling
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 
-from laser import resource_path
-from laser.utils import get_instance_data
+from morbdd import resource_path
+from morbdd.utils import get_instance_data
 
 
 class MultiObjectiveKnapsack(Problem):

@@ -4,9 +4,9 @@ from pymoo.indicators.hv import HV
 import pygmo as pg
 import numpy as np
 
-from laser import resource_path
+from morbdd import resource_path
 import json
-from laser.utils import read_from_zip
+from morbdd.utils import read_from_zip
 
 from pymoo.indicators.igd import IGD
 

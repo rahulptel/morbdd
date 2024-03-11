@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
-from laser import resource_path
+from morbdd import resource_path
 import hashlib
 
 ZERO_ARC = -1
@@ -225,7 +225,7 @@ def get_order(problem, order_type, data):
 def get_featurizer(problem, cfg):
     featurizer = None
     if problem == "knapsack" or problem == "knapsackc":
-        from laser.featurizer import KnapsackFeaturizer
+        from morbdd.featurizer import KnapsackFeaturizer
 
         featurizer = KnapsackFeaturizer(cfg)
 

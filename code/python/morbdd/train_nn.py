@@ -15,16 +15,16 @@ from torch.utils.data import ConcatDataset
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 # from torchmetrics.classification import StatScores
-from laser.utils import statscore
-from laser.model import model_factory
-from laser.utils import calculate_accuracy
-from laser.utils import checkpoint
-from laser.utils import get_context_features
-from laser.utils import get_split_datasets
-from laser.utils import print_result
-from laser.utils import set_device
-from laser.utils import update_scores
-from laser import resource_path
+from morbdd.utils import statscore
+from morbdd.model import model_factory
+from morbdd.utils import calculate_accuracy
+from morbdd.utils import checkpoint
+from morbdd.utils import get_context_features
+from morbdd.utils import get_split_datasets
+from morbdd.utils import print_result
+from morbdd.utils import set_device
+from morbdd.utils import update_scores
+from morbdd import resource_path
 
 
 # os.environ['MKL_NUM_THREADS'] = '1'

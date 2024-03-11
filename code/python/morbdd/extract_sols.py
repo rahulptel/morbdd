@@ -5,10 +5,10 @@ import hydra
 import libbddenvv1
 import pandas as pd
 
-from laser import resource_path
-from laser.utils import get_instance_data
-from laser.utils import get_order
-from laser.utils import handle_timeout
+from morbdd import resource_path
+from morbdd.utils import get_instance_data
+from morbdd.utils import get_order
+from morbdd.utils import handle_timeout
 
 import multiprocessing as mp
 

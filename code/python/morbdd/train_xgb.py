@@ -10,7 +10,7 @@ import numpy as np
 import xgboost as xgb
 from omegaconf import OmegaConf
 
-from laser import resource_path
+from morbdd import resource_path
 
 
 def get_xgb_model_name(max_depth=None,

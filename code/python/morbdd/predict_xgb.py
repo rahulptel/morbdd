@@ -6,14 +6,14 @@ import hydra
 import numpy as np
 import xgboost as xgb
 
-from laser import resource_path
-from laser.utils import FeaturizerConfig
-from laser.utils import extract_node_features
-from laser.utils import get_featurizer
-from laser.utils import get_instance_data
-from laser.utils import get_order
-from laser.utils import get_xgb_model_name
-from laser.utils import read_from_zip
+from morbdd import resource_path
+from morbdd.utils import FeaturizerConfig
+from morbdd.utils import extract_node_features
+from morbdd.utils import get_featurizer
+from morbdd.utils import get_instance_data
+from morbdd.utils import get_order
+from morbdd.utils import get_xgb_model_name
+from morbdd.utils import read_from_zip
 import time
 import pandas as pd
 

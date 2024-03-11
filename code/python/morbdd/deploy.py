@@ -11,14 +11,14 @@ import pandas as pd
 # import torch
 # from torchmetrics.classification import BinaryStatScores
 
-from laser import resource_path
-from laser.utils import get_instance_data
-from laser.utils import get_order
-from laser.utils import get_xgb_model_name
-from laser.utils import label_bdd
-from laser.utils import statscore
+from morbdd import resource_path
+from morbdd.utils import get_instance_data
+from morbdd.utils import get_order
+from morbdd.utils import get_xgb_model_name
+from morbdd.utils import label_bdd
+from morbdd.utils import statscore
 import gurobipy as gp
-from laser.heuristics import stitch
+from morbdd.heuristics import stitch
 
 
 def call_get_model_name(cfg):

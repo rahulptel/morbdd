@@ -5,10 +5,10 @@ import hydra
 import libbddenvv1
 import numpy as np
 
-from laser import resource_path
-from laser.utils import get_instance_data
-from laser.utils import get_order
-from laser.utils import read_from_zip
+from morbdd import resource_path
+from morbdd.utils import get_instance_data
+from morbdd.utils import get_order
+from morbdd.utils import read_from_zip
 
 
 def get_pareto_states_per_layer(weight, x):

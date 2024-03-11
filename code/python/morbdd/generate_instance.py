@@ -2,7 +2,7 @@ import hydra
 import numpy as np
 from omegaconf import DictConfig
 
-from laser import resource_path
+from morbdd import resource_path
 
 
 def generate_instance(rng, n_vars, n_objs, max_obj=1000):
