@@ -3,6 +3,7 @@
 #include <fstream>
 #include <limits>
 #include <vector>
+#include <list>
 
 #include "../util/util.hpp"
 
@@ -13,12 +14,12 @@ using namespace std;
 //
 struct Solution
 {
-    vector<int> x;       // solution
-    vector<ObjType> obj; // objectives
+    vector<int> x; // solution
+    ObjType *obj;  // objectives
 
     // Constructors
     Solution() {}
-    Solution(vector<int> &_x, vector<int> &_obj)
+    Solution(vector<int> &_x, ObjType *_obj)
         : x(_x), obj(_obj) {}
 
     // Print solution
@@ -38,23 +39,16 @@ struct Solution
     // Print only objective
     void print_objective(ostream &out)
     {
-        for (size_t i = 0; i < obj.size(); ++i)
+        for (size_t i = 0; i < NOBJS; ++i)
         {
             if (i > 0)
                 out << " ";
             out << obj[i];
         }
     }
-
-    // Return if solution dominates other
-    bool dominates(Solution &sol)
-    {
-        assert(obj.size() == sol.obj.size());
-        bool sol_dominates = true;
-        for (size_t i = 0; i < obj.size() && sol_dominates; ++i)
-        {
-            sol_dominates = (obj[i] >= sol.obj[i]);
-        }
-        return sol_dominates;
-    }
 };
+
+//
+// Solution list
+//
+typedef list<Solution> SolutionList;

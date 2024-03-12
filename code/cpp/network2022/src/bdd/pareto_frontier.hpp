@@ -14,8 +14,10 @@
 #include <limits>
 #include <vector>
 #include <list>
+#include <iterator>
 
 #include "../util/util.hpp"
+#include "../util/solution.hpp"
 
 using namespace std;
 
@@ -26,21 +28,26 @@ class ParetoFrontier
 {
 public:
     // (Flat) array of solutions
-    vector<ObjType> sols;
+    // vector<ObjType> sols;
+    SolutionList sols;
 
     // Add element to set
-    void add(ObjType *elem);
+    // void add(ObjType *elem);
+    void add(Solution &sol);
 
     // Merge pareto frontier solutions into existing set
     // void merge(const ParetoFrontier &frontier);
 
     // Merge pareto frontier solutions with shift
-    void merge(const ParetoFrontier &frontier, const ObjType *shift);
+    void merge(ParetoFrontier &frontier, ObjType *shift);
+
+    // Merge pareto frontier solutions with shift
+    // void merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer);
 
     // void merge(const ParetoFrontier &frontier, const ObjType *shift, int arc_type);
 
     // Convolute two nodes from this set to this one
-    void convolute(const ParetoFrontier &fA, const ParetoFrontier &fB);
+    // void convolute(ParetoFrontier &fA, ParetoFrontier &fB);
 
     // Remove pre-set dominated solutions
     void remove_dominated()
@@ -49,22 +56,19 @@ public:
     }
 
     // Get number of solutions
-    int get_num_sols() const
+    int get_num_sols()
     {
-        return sols.size() / NOBJS;
+        return sols.size();
     }
 
     // Clear pareto frontier
     void clear()
     {
-        sols.resize(0);
+        sols.clear();
     }
 
     // Print elements in set
-    void print() const;
-
-    // Sort array in decreasing order
-    void sort_decreasing();
+    void print();
 
     // Check consistency
     bool check_consistency();
@@ -72,14 +76,14 @@ public:
     // Obtain sum of points
     ObjType get_sum();
 
-    // Check if solution is dominated by any element of this set
-    bool is_sol_dominated(const ObjType *sol, const ObjType *shift);
+    map<string, vector<vector<int>>> get_frontier();
 
 private:
     // Auxiliaries
-    ObjType aux[NOBJS];
+    // ObjType aux[NOBJS];
     ObjType auxB[NOBJS];
     vector<ObjType *> elems;
+    vector<int> aux;
 
     // Remove empty elements
     void remove_empty();
@@ -130,23 +134,23 @@ public:
     vector<ParetoFrontier *> frontiers;
 };
 
+// Modify
 //
 // Add element to set
 //
-inline void ParetoFrontier::add(ObjType *elem)
+inline void ParetoFrontier::add(Solution &sol)
 {
-    bool must_add = true;
     bool dominates;
     bool dominated;
-    for (int i = 0; i < sols.size(); i += NOBJS)
+    for (SolutionList::iterator it = sols.begin(); it != sols.end();)
     {
         // check status of foreign solution w.r.t. current frontier solution
         dominates = true;
         dominated = true;
         for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
         {
-            dominates &= (elem[o] >= sols[i + o]);
-            dominated &= (elem[o] <= sols[i + o]);
+            dominates &= (sol.obj[o] >= it->obj[o]);
+            dominated &= (sol.obj[o] <= it->obj[o]);
         }
         if (dominated)
         {
@@ -155,171 +159,72 @@ inline void ParetoFrontier::add(ObjType *elem)
         }
         else if (dominates)
         {
-            // if foreign solution dominates, check if replacement is necessary
-            if (must_add)
-            {
-                // solution has not been added - just replace current iterate
-                std::copy(elem, elem + NOBJS, sols.begin() + i);
-                must_add = false;
-            }
-            else
-            {
-                // if already added, mark array as "to erase"
-                sols[i] = DOMINATED;
-            }
+            // solution dominates iterate
+            it = sols.erase(it);
+        }
+        else
+        {
+            ++it;
         }
     }
-    // add if still necessary
-    if (must_add)
-    {
-        sols.insert(sols.end(), elem, elem + NOBJS);
-    }
-    remove_empty();
+    cout << sol.x.size() << endl;
+    cout << sol.obj[0] << " " << sol.obj[1] << " " << sol.obj[2] << endl;
+    sols.insert(sols.end(), sol);
 }
-
-//
-// Check if solution v1 is dominated by v2
-//
-template <int N>
-inline bool AdominatedB(const ObjType *v1, const ObjType *v2)
-{
-    return (v1[N - 1] <= v2[N - 1]) && AdominatedB<N - 1>(v1, v2);
-}
-template <>
-inline bool AdominatedB<0>(const ObjType *v1, const ObjType *v2)
-{
-    return true;
-}
-
-//
-// Check if solution v1 dominates v2
-//
-template <int N>
-inline bool AdominatesB(const ObjType *v1, const ObjType *v2)
-{
-    return (v1[N - 1] >= v2[N - 1]) && AdominatesB<N - 1>(v1, v2);
-}
-template <>
-inline bool AdominatesB<0>(const ObjType *v1, const ObjType *v2)
-{
-    return true;
-}
-
-// //
-// // Merge pareto frontier into existing set
-// //
-// inline void ParetoFrontier::merge(const ParetoFrontier &frontier)
-// {
-//     // last position to check
-//     int end = sols.size();
-//     // if current solution set was modified
-//     bool modified = false;
-//     // add each solution from frontier set
-//     bool must_add;
-//     bool dominates;
-//     bool dominated;
-//     for (int j = 0; j < frontier.sols.size(); j += NOBJS)
-//     {
-//         must_add = true; // if solution must be added to set
-//         for (int i = 0; i < end; i += NOBJS)
-//         {
-//             // check if solution has been removed
-//             if (sols[i] == DOMINATED)
-//             {
-//                 continue;
-//             }
-//             // check status of foreign solution w.r.t. current frontier solution
-//             dominates = true;
-//             dominated = true;
-//             for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
-//             {
-//                 dominates &= (frontier.sols[j + o] >= sols[i + o]);
-//                 dominated &= (frontier.sols[j + o] <= sols[i + o]);
-//             }
-//             if (dominated)
-//             {
-//                 // if foreign solution is dominated, just stop loop
-//                 must_add = false;
-//                 break;
-//             }
-//             else if (dominates)
-//             {
-//                 // // if foreign solution dominates, replace current solution
-//                 // must_add = false;
-//                 // std::copy(frontier.sols.begin()+j, frontier.sols.begin()+j+NOBJS, &sols[i]);
-//                 // // search for domination in the remaining part of the array
-//                 // for (int k = i+NOBJS; k < end; k += NOBJS) {
-//                 //     if (sols[k] != DOMINATED) {
-//                 //         if (AdominatesB<NOBJS>(&frontier.sols[j], &sols[k])) {
-//                 //            sols[k] = DOMINATED;
-//                 //         }
-//                 //     }
-//                 // }
-//                 // break;
-
-//                 // if foreign solution dominates, check if replacement is necessary
-//                 if (must_add)
-//                 {
-//                     // solution has not been added - just replace current iterate
-//                     std::copy(frontier.sols.begin() + j, frontier.sols.begin() + j + NOBJS, &sols[i]);
-//                     must_add = false;
-//                 }
-//                 else
-//                 {
-//                     // if already added, mark array as "to erase"
-//                     sols[i] = DOMINATED;
-//                     modified = true;
-//                 }
-//             }
-//         }
-//         // if solution has not been added already, append element to the end
-//         if (must_add)
-//         {
-//             sols.insert(sols.end(), frontier.sols.begin() + j, frontier.sols.begin() + j + NOBJS);
-//         }
-//     }
-//     if (modified)
-//     {
-//         remove_empty();
-//     }
-// }
 
 //
 // Merge pareto frontier into existing set considering shift
 //
-inline void ParetoFrontier::merge(const ParetoFrontier &frontier, const ObjType *shift)
+inline void ParetoFrontier::merge(ParetoFrontier &frontier, ObjType *shift)
 {
-    // last position to check
-    int end = sols.size();
-    // if current solution set was modified
-    // bool modified = false;
-    // add each solution from frontier set
     bool must_add;
     bool dominates;
     bool dominated;
-    for (int j = 0; j < frontier.sols.size(); j += NOBJS)
+
+    // Get arc type
+    bool is_zero_arc = true;
+    for (int o = 0; o < NOBJS; ++o)
     {
-        // update auxiliary
-        for (int o = 0; o < NOBJS; ++o)
+        is_zero_arc &= shift[o] == 0;
+    }
+
+    cout << "Frontier " << frontier.sols.size() << endl;
+    cout << "Shift " << shift[0] << " " << shift[1] << " " << shift[2] << endl;
+
+    // add artificial solution to avoid rechecking dominance between elements in the
+    // set to be merged
+    Solution dummy;
+    SolutionList::iterator end = sols.insert(sols.end(), dummy);
+    for (SolutionList::iterator itParent = frontier.sols.begin();
+         itParent != frontier.sols.end();
+         ++itParent)
+    {
+        Solution parent = *itParent;
+
+        must_add = true;
+        // Compare the incoming aux solution with the sols on the current node
+
+        for (SolutionList::iterator itCurr = sols.begin();
+             itCurr != end;)
         {
-            aux[o] = frontier.sols[j + o] + shift[o];
-        }
-        must_add = true; // if solution must be added to set
-        for (int i = 0; i < end; i += NOBJS)
-        {
-            // check if solution has been removed
-            if (sols[i] == DOMINATED)
-            {
-                continue;
-            }
             // check status of foreign solution w.r.t. current frontier solution
             dominates = true;
             dominated = true;
+            // cout << "Cmp "
+            //      << "(" << aux[0] << ", " << aux[1] << ", " << aux[2] << "), (" << itCurr->obj[0] << ", " << itCurr->obj[1] << ", " << itCurr->obj[2] << ")" << endl;
+            Solution curr = *itCurr;
+
             for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
             {
-                dominates &= (aux[o] >= sols[i + o]);
-                dominated &= (aux[o] <= sols[i + o]);
+                dominates &= (parent.obj[o] + shift[o] >= curr.obj[o]);
+                dominated &= (parent.obj[o] + shift[o] <= curr.obj[o]);
+                // dominates &= (aux[o] >= itCurr->obj[o]);
+                // dominated &= (aux[o] <= itCurr->obj[o]);
+                // dominates &= (itParent->obj[o] + shift[o] >= itCurr->obj[o]);
+                // dominated &= (itParent->obj[o] + shift[o] <= itCurr->obj[o]);
             }
+            cout << "Dominates " << dominates << endl;
+            cout << "Dominated " << dominated << endl;
             if (dominated)
             {
                 // if foreign solution is dominated, just stop loop
@@ -328,82 +233,74 @@ inline void ParetoFrontier::merge(const ParetoFrontier &frontier, const ObjType 
             }
             else if (dominates)
             {
-                // // if foreign solution dominates, replace current solution
-                // must_add = false;
-                // std::copy(aux, aux+NOBJS, &sols[i]);
-                // // search for domination in the remaining part of the array
-                // for (int k = i+NOBJS; k < end; k += NOBJS) {
-                //     if (sols[k] != DOMINATED) {
-                //         if (AdominatesB<NOBJS>(aux, &sols[k])) {
-                //            sols[k] = DOMINATED;
-                //         }
-                //     }
-                // }
-                // break;
-
-                // if foreign solution dominates, check if replacement is necessary
-                if (must_add)
-                {
-                    // solution has not been added - just replace current iterate
-                    std::copy(aux, aux + NOBJS, &sols[i]);
-                    must_add = false;
-                }
-                else
-                {
-                    // if already added, mark array as "to erase"
-                    sols[i] = DOMINATED;
-                    // modified = true;
-                }
+                itCurr = sols.erase(itCurr);
+            }
+            else
+            {
+                ++itCurr;
             }
         }
         // if solution has not been added already, append element to the end
         if (must_add)
         {
-            sols.insert(sols.end(), aux, aux + NOBJS);
+            cout << "Adding element " << sols.size() << endl;
+
+            Solution new_solution(parent.x, parent.obj);
+            if (is_zero_arc)
+            {
+                new_solution.x.push_back(0);
+            }
+            else
+            {
+                new_solution.x.push_back(1);
+                for (int i = 0; i < NOBJS; ++i)
+                {
+                    new_solution.obj[i] += shift[i];
+                }
+            }
+            sols.insert(sols.end(), new_solution);
+            sols.size();
         }
     }
-    // if (modified) {
-    remove_empty();
-    //}
+    sols.erase(end);
+    cout << sols.size() << endl;
 }
 
-//
-// Merge pareto frontier into existing set considering shift
-//
-// inline void ParetoFrontier::merge(const ParetoFrontier &frontier, const ObjType *shift, int arc_type)
+// //
+// // Merge pareto frontier into existing set considering shift
+// //
+// inline void ParetoFrontier::merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer)
 // {
-//     // last position to check
-//     int end = sols.size();
-//     // if current solution set was modified
-//     // bool modified = false;
-//     // add each solution from frontier set
 //     bool must_add;
 //     bool dominates;
 //     bool dominated;
 
-//     int from_idx, to_idx;
-//     for (int j = 0; j < frontier.sols.size(); j += NOBJS)
+//     // add artificial solution to avoid rechecking dominance between elements in the
+//     // set to be merged
+//     Solution dummy;
+//     SolutionList::iterator end = sols.insert(sols.end(), dummy);
+
+//     for (SolutionList::iterator itParent = frontier.sols.begin();
+//          itParent != frontier.sols.end();
+//          ++itParent)
 //     {
 //         // update auxiliary
 //         for (int o = 0; o < NOBJS; ++o)
 //         {
-//             aux[o] = frontier.sols[j + o] + shift[o];
+//             aux[o] = itParent->obj[o] + sol.obj[o];
 //         }
-//         must_add = true; // if solution must be added to set
-//         for (int i = 0; i < end; i += NOBJS)
+//         must_add = true;
+//         // Compare the incoming aux solution with the sols on the current node
+//         for (SolutionList::iterator itCurr = sols.begin();
+//              itCurr != end;)
 //         {
-//             // check if solution has been removed
-//             if (sols[i] == DOMINATED)
-//             {
-//                 continue;
-//             }
 //             // check status of foreign solution w.r.t. current frontier solution
 //             dominates = true;
 //             dominated = true;
 //             for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
 //             {
-//                 dominates &= (aux[o] >= sols[i + o]);
-//                 dominated &= (aux[o] <= sols[i + o]);
+//                 dominates &= (aux[o] >= itCurr->obj[o]);
+//                 dominated &= (aux[o] <= itCurr->obj[o]);
 //             }
 //             if (dominated)
 //             {
@@ -413,193 +310,72 @@ inline void ParetoFrontier::merge(const ParetoFrontier &frontier, const ObjType 
 //             }
 //             else if (dominates)
 //             {
-//                 // // if foreign solution dominates, replace current solution
-//                 // must_add = false;
-//                 // std::copy(aux, aux+NOBJS, &sols[i]);
-//                 // // search for domination in the remaining part of the array
-//                 // for (int k = i+NOBJS; k < end; k += NOBJS) {
-//                 //     if (sols[k] != DOMINATED) {
-//                 //         if (AdominatesB<NOBJS>(aux, &sols[k])) {
-//                 //            sols[k] = DOMINATED;
-//                 //         }
-//                 //     }
-//                 // }
-//                 // break;
-
-//                 // if foreign solution dominates, check if replacement is necessary
-//                 if (must_add)
-//                 {
-//                     // solution has not been added - just replace current iterate
-//                     std::copy(aux, aux + NOBJS, &sols[i]);
-//                     must_add = false;
-//                 }
-//                 else
-//                 {
-//                     // if already added, mark array as "to erase"
-//                     sols[i] = DOMINATED;
-//                     // modified = true;
-//                 }
+//                 itCurr = sols.erase(itCurr);
+//             }
+//             else
+//             {
+//                 ++itCurr;
 //             }
 //         }
 //         // if solution has not been added already, append element to the end
 //         if (must_add)
 //         {
-//             sols.insert(sols.end(), aux, aux + NOBJS);
+//             if (reverse_outer)
+//             {
+//                 reverse(itParent->x.begin(), itParent->x.end());
+//                 sol.x.insert(sol.x.end(), itParent->x.begin(), itParent->x.end());
+//                 sols.insert(sols.end(), Solution(sol.x, aux));
+//             }
+//             else
+//             {
+//                 reverse(sol.x.begin(), sol.x.end());
+//                 itParent->x.insert(itParent->x.end(), sol.x.begin(), sol.x.end());
+//                 sols.insert(sols.end(), Solution(itParent->x, aux));
+//             }
 //         }
 //     }
-//     // if (modified) {
-//     remove_empty();
-//     //}
+//     sols.erase(end);
 // }
 
 //
 // Print elements in set
 //
-inline void ParetoFrontier::print() const
+inline void ParetoFrontier::print()
 {
-    for (int i = 0; i < sols.size(); i += NOBJS)
+    for (SolutionList::iterator it = sols.begin(); it != sols.end(); ++it)
     {
         cout << "(";
         for (int o = 0; o < NOBJS - 1; ++o)
         {
-            cout << sols[i + o] << ",";
+            cout << it->obj[o] << ",";
         }
-        cout << sols[i + NOBJS - 1] << ")";
+        cout << it->obj[NOBJS - 1] << ")";
         cout << endl;
     }
 }
 
-//
-// Remove empty elements
-//
-inline void ParetoFrontier::remove_empty()
-{
-    if (sols.empty())
-    {
-        return;
-    }
-    // find first non-dominated element
-    int last = sols.size() - NOBJS;
-    while (last >= 0 && sols[last] == DOMINATED)
-    {
-        last -= NOBJS;
-    }
-    // if there is no such element, all array can be removed
-    if (last < 0)
-    {
-        sols.resize(0);
-        return;
-    }
-    // otherwise, erase last components
-    for (int i = 0; i < last; i += NOBJS)
-    {
-        if (sols[i] == DOMINATED)
-        {
-            std::copy(sols.begin() + last, sols.begin() + last + NOBJS, sols.begin() + i);
-            last -= NOBJS;
-            while (sols[last] == DOMINATED)
-            {
-                last -= NOBJS;
-            }
-        }
-    }
-    assert(last >= 0);
-    sols.resize(last + NOBJS);
-}
-
-//
-// Convolute two nodes from this set to this one
-//
-inline void ParetoFrontier::convolute(const ParetoFrontier &fA, const ParetoFrontier &fB)
-{
-    if (fA.sols.size() < fB.sols.size())
-    {
-        for (int j = 0; j < fA.sols.size(); j += NOBJS)
-        {
-            std::copy(fA.sols.begin() + j, fA.sols.begin() + j + NOBJS, auxB);
-            merge(fB, auxB);
-        }
-    }
-    else
-    {
-        for (int j = 0; j < fB.sols.size(); j += NOBJS)
-        {
-            std::copy(fB.sols.begin() + j, fB.sols.begin() + j + NOBJS, auxB);
-            merge(fA, auxB);
-        }
-    }
-}
-
-//
-// Auxiliary comparator
-//
-struct SolComp
-{
-    bool operator()(const ObjType *solA, const ObjType *solB)
-    {
-        for (int i = 0; i < NOBJS; ++i)
-        {
-            if (solA[i] != solB[i])
-            {
-                return (solA[i] > solB[i]);
-            }
-        }
-        return (solA[0] > solB[0]);
-    }
-};
-
-//
-// Sort array in decreasing order
-//
-inline void ParetoFrontier::sort_decreasing()
-{
-    const int num_sols = get_num_sols();
-    while (elems.size() < num_sols)
-    {
-        elems.push_back(new ObjType[NOBJS]);
-    }
-    int ct = 0;
-    for (int i = 0; i < sols.size(); i += NOBJS)
-    {
-        std::copy(sols.begin() + i, sols.begin() + i + NOBJS, elems[ct++]);
-    }
-    sort(elems.begin(), elems.begin() + num_sols, SolComp());
-    ct = 0;
-    for (int i = 0; i < num_sols; ++i)
-    {
-        std::copy(elems[i], elems[i] + NOBJS, sols.begin() + ct);
-        ct += NOBJS;
-    }
-}
-
-//
-// Check consistency
-//
-inline bool ParetoFrontier::check_consistency()
-{
-    for (int i = 0; i < sols.size(); i += NOBJS)
-    {
-        assert(sols[i] != DOMINATED);
-        for (int j = i + NOBJS; j < sols.size(); j += NOBJS)
-        {
-            // check status of foreign solution w.r.t. current frontier solution
-            bool dominates = true;
-            bool dominated = true;
-            for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
-            {
-                dominates &= (sols[i + o] >= sols[j + o]);
-                dominated &= (sols[i + o] <= sols[j + o]);
-            }
-            assert(!dominates);
-            assert(!dominated);
-            if (dominates || dominated)
-            {
-                return false;
-            }
-        }
-    }
-    return true;
-}
+// //
+// // Convolute two nodes from this set to this one
+// //
+// inline void ParetoFrontier::convolute(ParetoFrontier &fA, ParetoFrontier &fB)
+// {
+//     if (fA.sols.size() < fB.sols.size())
+//     {
+//         for (it = fA.sols.begin(); it != fA.sols.end(); ++it)
+//         {
+//             // std::copy(fA.sols.begin() + j, fA.sols.begin() + j + NOBJS, auxB);
+//             merge_after_convolute(fB, *it, true);
+//         }
+//     }
+//     else
+//     {
+//         for (it = fB.sols.begin(); it != fB.sols.end(); ++it)
+//         {
+//             // std::copy(fB.sols.begin() + j, fB.sols.begin() + j + NOBJS, auxB);
+//             merge_after_convolute(fA, *it, false);
+//         }
+//     }
+// }
 
 //
 // Obtain sum of points
@@ -607,24 +383,40 @@ inline bool ParetoFrontier::check_consistency()
 inline ObjType ParetoFrontier::get_sum()
 {
     ObjType sum = 0;
-    for (int i = 0; i < sols.size(); ++i)
+    for (SolutionList::iterator it = sols.begin(); it != sols.end(); ++it)
     {
-        sum += sols[i];
+        for (int o = 0; o < NOBJS; ++o)
+        {
+            sum += it->obj[o];
+        }
     }
     return sum;
 }
 
-//
-// Check if solution is dominated by any element of this set
-//
-inline bool ParetoFrontier::is_sol_dominated(const ObjType *sol, const ObjType *shift)
+inline map<string, vector<vector<int>>> ParetoFrontier::get_frontier()
 {
-    bool dominated = false;
-    for (int i = 0; i < sols.size() && !dominated; i += NOBJS)
+    vector<vector<int>> x_sols;
+    vector<vector<int>> z_sols;
+    x_sols.reserve(sols.size());
+    z_sols.reserve(sols.size());
+    for (SolutionList::iterator it = sols.begin(); it != sols.end(); ++it)
     {
-        dominated = AdominatedB<NOBJS>(sol, &sols[i]);
+        x_sols.push_back(it->x);
+
+        vector<int> z_vec;
+        z_vec.reserve(NOBJS);
+        for (int i = 0; i < NOBJS; ++i)
+        {
+            z_vec[i] = it->obj[i];
+        }
+        z_sols.push_back(z_vec);
     }
-    return dominated;
+
+    map<string, vector<vector<int>>> frontier;
+    frontier.insert({"x", x_sols});
+    frontier.insert({"z", z_sols});
+
+    return frontier;
 }
 
 #endif
