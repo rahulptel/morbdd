@@ -5,6 +5,8 @@
 #include "bdd_multiobj.hpp"
 #include "bdd_alg.hpp"
 
+#include "solution.hpp"
+
 typedef std::pair<int, int> intpair;
 
 inline bool IntPairLargestToSmallestComp(intpair l, intpair r)
@@ -33,10 +35,14 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 	ParetoFrontierManager *mgmr = new ParetoFrontierManager(bdd->get_width());
 
 	// root node
-	ObjType zero_array[NOBJS];
-	memset(zero_array, 0, sizeof(ObjType) * NOBJS);
+	vector<int> shift_zero(NOBJS, 0);
+	vector<int> x;
+	Solution root_sol(x, shift_zero);
+	// ObjType zero_array[NOBJS];
+	// memset(zero_array, 0, sizeof(ObjType) * NOBJS);
 	bdd->get_root()->pareto_frontier = mgmr->request();
-	bdd->get_root()->pareto_frontier->add(zero_array);
+	// bdd->get_root()->pareto_frontier->add(zero_array);
+	bdd->get_root()->pareto_frontier->add(root_sol);
 
 	vector<float> avg_sols_per_node;
 	int total_sol_per_layer;
@@ -71,16 +77,18 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 				{
 					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
 				}
-				total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
+				// TODO
+				// total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
 			}
 			// cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
 
-			if (dominance_strategy > 0)
-			{
-				init = clock();
-				BDDMultiObj::filter_dominance(bdd, l, problem_type, dominance_strategy, stats);
-				stats->pareto_dominance_time += clock() - init;
-			}
+			// TODO
+			// if (dominance_strategy > 0)
+			// {
+			// 	init = clock();
+			// 	BDDMultiObj::filter_dominance(bdd, l, problem_type, dominance_strategy, stats);
+			// 	stats->pareto_dominance_time += clock() - init;
+			// }
 
 			// Deallocate frontier from previous layer
 			for (vector<Node *>::iterator it = bdd->layers[l - 1].begin(); it != bdd->layers[l - 1].end(); ++it)
@@ -120,16 +128,17 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
 				}
 
-				total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
+				// TODO
+				// total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
 			}
 			// cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
 
-			if (dominance_strategy > 0)
-			{
-				init = clock();
-				BDDMultiObj::filter_dominance(bdd, l, problem_type, dominance_strategy, stats);
-				stats->pareto_dominance_time += clock() - init;
-			}
+			// if (dominance_strategy > 0)
+			// {
+			// 	init = clock();
+			// 	BDDMultiObj::filter_dominance(bdd, l, problem_type, dominance_strategy, stats);
+			// 	stats->pareto_dominance_time += clock() - init;
+			// }
 
 			// Deallocate frontier from previous layer
 			for (vector<Node *>::iterator it = bdd->layers[l - 1].begin(); it != bdd->layers[l - 1].end(); ++it)
@@ -292,7 +301,8 @@ inline void expand_layer_topdown(BDD *bdd, const int l, const bool maximization,
 	}
 
 	// BDDMultiObj::filter_dominance_knapsack(bdd, l);
-	BDDMultiObj::filter_completion(bdd, l);
+	// TODO
+	// BDDMultiObj::filter_completion(bdd, l);
 
 	// deallocate previous layer
 	for (int i = 0; i < bdd->layers[l - 1].size(); ++i)
@@ -498,14 +508,21 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_dynamic_layer_cutset(BDD *bdd, bool
 	ParetoFrontierManager *mgmr = new ParetoFrontierManager(bdd->get_width());
 
 	// Create root and terminal frontiers
-	ObjType sol[NOBJS];
-	memset(sol, 0, sizeof(ObjType) * NOBJS);
+	// ObjType sol[NOBJS];
+	// memset(sol, 0, sizeof(ObjType) * NOBJS);
+	vector<int> root_sol, term_sol;
+	vector<int> shift_zero_root(NOBJS, 0);
+	vector<int> shift_zero_term(NOBJS, 0);
+	Solution root_sol(root_sol, shift_zero_root);
+	Solution term_sol(term_sol, shift_zero_term);
 
 	bdd->get_root()->pareto_frontier = mgmr->request();
-	bdd->get_root()->pareto_frontier->add(sol);
+	// bdd->get_root()->pareto_frontier->add(sol);
+	bdd->get_root()->pareto_frontier->add(root_sol);
 
 	bdd->get_terminal()->pareto_frontier_bu = mgmr->request();
-	bdd->get_terminal()->pareto_frontier_bu->add(sol);
+	// bdd->get_terminal()->pareto_frontier_bu->add(sol);
+	bdd->get_terminal()->pareto_frontier_bu->add(term_sol);
 
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
