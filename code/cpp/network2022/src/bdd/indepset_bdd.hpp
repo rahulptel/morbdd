@@ -115,6 +115,8 @@ public:
 
 	BDD *bdd;
 
+	bool order_provided;
+
 private:
 	// Objectives
 	vector<vector<int>> objs;
@@ -160,6 +162,7 @@ inline IndepSetBDDConstructor::IndepSetBDDConstructor(IndepSetInst *_inst,
 	// IndepSet BDD
 	bdd = new BDD(inst->graph->n_vertices + 1);
 
+	order_provided = false;
 	l = 1;
 	// State maps
 	iter = 0;

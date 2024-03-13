@@ -26,10 +26,10 @@ void BDDEnv::clean_memory()
     {
         delete bdd;
     }
-    if (mdd != NULL)
-    {
-        delete mdd;
-    }
+    // if (mdd != NULL)
+    // {
+    //     delete mdd;
+    // }
     if (pareto_frontier != NULL)
     {
         delete pareto_frontier;
@@ -45,7 +45,7 @@ void BDDEnv::initialize()
         inst_kp = NULL;
         inst_indepset = NULL;
         bdd = NULL;
-        mdd = NULL;
+        // mdd = NULL;
         pareto_frontier = NULL;
     }
     else
@@ -254,6 +254,12 @@ int BDDEnv::initialize_dd_constructor()
 
         // generate independent set BDD
         indset_bdd_constructor = IndepSetBDDConstructor(inst_indepset, inst_setpack.objs);
+
+        if (order.size())
+        {
+            indset_bdd_constructor.order_provided = true;
+        }
+        indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
     // // Set covering problem
@@ -578,11 +584,12 @@ vector<int> BDDEnv::get_var_layer()
     }
 }
 
-vector<int> BDDEnv::get_frontier()
+map<string, vector<vector<int>>> BDDEnv::get_frontier()
 {
     if (pareto_frontier != NULL)
     {
-        return pareto_frontier->sols;
+        cout << pareto_frontier->sols.size() << endl;
+        return pareto_frontier->get_frontier();
     }
     return {};
 }
@@ -613,11 +620,11 @@ int BDDEnv::compute_pareto_frontier()
         //     // -- Optimal BFS algorithm: bottom-up --
         //     pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj);
         // }
-        else if (method == 3)
-        {
-            // -- Dynamic layer cutset --
-            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
-        }
+        // else if (method == 3)
+        // {
+        //     // -- Dynamic layer cutset --
+        //     pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+        // }
 
         if (pareto_frontier == NULL)
         {
@@ -628,20 +635,20 @@ int BDDEnv::compute_pareto_frontier()
 
         return 0;
     }
-    else if (problem_type == 5)
-    {
-        if (mdd == NULL)
-        {
-            cout << "MDD not constructed! Cannot compute pareto frontier. " << endl;
-            return 1;
-        }
+    // else if (problem_type == 5)
+    // {
+    //     if (mdd == NULL)
+    //     {
+    //         cout << "MDD not constructed! Cannot compute pareto frontier. " << endl;
+    //         return 1;
+    //     }
 
-        timers.start_timer(pareto_time);
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
-        timers.end_timer(pareto_time);
+    //     timers.start_timer(pareto_time);
+    //     pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+    //     timers.end_timer(pareto_time);
 
-        return 0;
-    }
+    //     return 0;
+    // }
     else
     {
         cout << "Invalid problem name! Cannot compute pareto frontier." << endl;

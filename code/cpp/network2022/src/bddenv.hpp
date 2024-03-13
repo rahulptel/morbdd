@@ -141,7 +141,7 @@ public:
 
     vector<int> get_var_layer();
 
-    vector<int> get_frontier();
+    map<string, vector<vector<int>>> get_frontier();
 
 private:
     void initialize();
@@ -173,5 +173,5 @@ private:
     // ----------------------------------------------------------------
     // DD
     BDD *bdd;
-    MDD *mdd;
+    // MDD *mdd;
 };

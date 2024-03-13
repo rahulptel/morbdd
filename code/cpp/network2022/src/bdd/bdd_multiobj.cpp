@@ -32,19 +32,14 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 	// Initialize manager
 	ParetoFrontierManager *mgmr = new ParetoFrontierManager(bdd->get_width());
 
-	// root node
-	int shift_zero[NOBJS];
-	for (int i = 0; i < NOBJS; ++i)
-	{
-		shift_zero[i] = 0;
-	}
-	vector<int> x;
-	Solution root_sol(x, shift_zero);
-	// ObjType zero_array[NOBJS];
-	// memset(zero_array, 0, sizeof(ObjType) * NOBJS);
-	bdd->get_root()->pareto_frontier = new ParetoFrontier;
-	// mgmr->request();
-	// bdd->get_root()->pareto_frontier->add(zero_array);
+	// Create root solution
+	list<int> x;
+	ObjType zero_array[NOBJS];
+	memset(zero_array, 0, sizeof(ObjType) * NOBJS);
+	Solution root_sol(x, zero_array);
+
+	// Set root PF
+	bdd->get_root()->pareto_frontier = mgmr->request();
 	bdd->get_root()->pareto_frontier->add(root_sol);
 
 	vector<float> avg_sols_per_node;
@@ -54,35 +49,32 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 	{
 		for (int l = 1; l < bdd->num_layers; ++l)
 		{
-			cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
+			// cout << "\tLayer " << l << " - size = " << bdd->layers[l].size() << '\n';
 
 			// iterate on layers
 			total_sol_per_layer = 0;
 			for (vector<Node *>::iterator it = bdd->layers[l].begin(); it != bdd->layers[l].end(); ++it)
 			{
-
 				Node *node = (*it);
 				int id = node->index;
 
 				// Request frontier
-				node->pareto_frontier = new ParetoFrontier;
-				// mgmr->request();
+				node->pareto_frontier = mgmr->request();
 
 				// add incoming one arcs
 				for (vector<Node *>::iterator prev = (*it)->prev[1].begin();
 					 prev != (*it)->prev[1].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
+					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 1, (*prev)->weights[1]);
 				}
 
 				// add incoming zero arcs
 				for (vector<Node *>::iterator prev = (*it)->prev[0].begin();
 					 prev != (*it)->prev[0].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
+					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 0, (*prev)->weights[0]);
 				}
-				// TODO
-				// total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
+				total_sol_per_layer += (node->pareto_frontier->sols.size());
 			}
 			// cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
 
@@ -122,18 +114,18 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 				for (vector<Node *>::iterator prev = (*it)->prev[0].begin();
 					 prev != (*it)->prev[0].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[0]);
+					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 0, (*prev)->weights[0]);
 				}
 
 				// add incoming one arcs
 				for (vector<Node *>::iterator prev = (*it)->prev[1].begin();
 					 prev != (*it)->prev[1].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), (*prev)->weights[1]);
+					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 1, (*prev)->weights[1]);
 				}
 
 				// TODO
-				// total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
+				total_sol_per_layer += (node->pareto_frontier->sols.size());
 			}
 			// cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
 
@@ -152,11 +144,10 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 		}
 	}
 
-	// // cout << "Filtering time: " << (double)time_filter/CLOCKS_PER_SEC << endl;
+	// cout << "Filtering time: " << (double)time_filter/CLOCKS_PER_SEC << endl;
 
-	// // Erase memory
+	// Erase memory
 	delete mgmr;
-	cout << bdd->get_terminal()->pareto_frontier->sols.size() << endl;
 	return bdd->get_terminal()->pareto_frontier;
 }
 

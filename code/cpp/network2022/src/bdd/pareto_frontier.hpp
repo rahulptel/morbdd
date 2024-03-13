@@ -39,7 +39,7 @@ public:
     // void merge(const ParetoFrontier &frontier);
 
     // Merge pareto frontier solutions with shift
-    void merge(ParetoFrontier &frontier, ObjType *shift);
+    void merge(ParetoFrontier &frontier, int arc_type, ObjType *shift);
 
     // Merge pareto frontier solutions with shift
     // void merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer);
@@ -167,29 +167,17 @@ inline void ParetoFrontier::add(Solution &sol)
             ++it;
         }
     }
-    cout << sol.x.size() << endl;
-    cout << sol.obj[0] << " " << sol.obj[1] << " " << sol.obj[2] << endl;
     sols.insert(sols.end(), sol);
 }
 
 //
 // Merge pareto frontier into existing set considering shift
 //
-inline void ParetoFrontier::merge(ParetoFrontier &frontier, ObjType *shift)
+inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjType *shift)
 {
     bool must_add;
     bool dominates;
     bool dominated;
-
-    // Get arc type
-    bool is_zero_arc = true;
-    for (int o = 0; o < NOBJS; ++o)
-    {
-        is_zero_arc &= shift[o] == 0;
-    }
-
-    cout << "Frontier " << frontier.sols.size() << endl;
-    cout << "Shift " << shift[0] << " " << shift[1] << " " << shift[2] << endl;
 
     // add artificial solution to avoid rechecking dominance between elements in the
     // set to be merged
@@ -199,32 +187,19 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, ObjType *shift)
          itParent != frontier.sols.end();
          ++itParent)
     {
-        Solution parent = *itParent;
-
         must_add = true;
         // Compare the incoming aux solution with the sols on the current node
-
         for (SolutionList::iterator itCurr = sols.begin();
              itCurr != end;)
         {
             // check status of foreign solution w.r.t. current frontier solution
             dominates = true;
             dominated = true;
-            // cout << "Cmp "
-            //      << "(" << aux[0] << ", " << aux[1] << ", " << aux[2] << "), (" << itCurr->obj[0] << ", " << itCurr->obj[1] << ", " << itCurr->obj[2] << ")" << endl;
-            Solution curr = *itCurr;
-
             for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
             {
-                dominates &= (parent.obj[o] + shift[o] >= curr.obj[o]);
-                dominated &= (parent.obj[o] + shift[o] <= curr.obj[o]);
-                // dominates &= (aux[o] >= itCurr->obj[o]);
-                // dominated &= (aux[o] <= itCurr->obj[o]);
-                // dominates &= (itParent->obj[o] + shift[o] >= itCurr->obj[o]);
-                // dominated &= (itParent->obj[o] + shift[o] <= itCurr->obj[o]);
+                dominates &= ((*itParent).obj[o] + shift[o] >= (*itCurr).obj[o]);
+                dominated &= ((*itParent).obj[o] + shift[o] <= (*itCurr).obj[o]);
             }
-            cout << "Dominates " << dominates << endl;
-            cout << "Dominated " << dominated << endl;
             if (dominated)
             {
                 // if foreign solution is dominated, just stop loop
@@ -243,27 +218,19 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, ObjType *shift)
         // if solution has not been added already, append element to the end
         if (must_add)
         {
-            cout << "Adding element " << sols.size() << endl;
-
-            Solution new_solution(parent.x, parent.obj);
-            if (is_zero_arc)
+            Solution new_solution((*itParent).x, (*itParent).obj);
+            new_solution.x.push_back(arc_type);
+            if (arc_type != 0)
             {
-                new_solution.x.push_back(0);
-            }
-            else
-            {
-                new_solution.x.push_back(1);
                 for (int i = 0; i < NOBJS; ++i)
                 {
                     new_solution.obj[i] += shift[i];
                 }
             }
-            sols.insert(sols.end(), new_solution);
-            sols.size();
+            sols.push_back(new_solution);
         }
     }
     sols.erase(end);
-    cout << sols.size() << endl;
 }
 
 // //
@@ -395,21 +362,17 @@ inline ObjType ParetoFrontier::get_sum()
 
 inline map<string, vector<vector<int>>> ParetoFrontier::get_frontier()
 {
+    cout << sols.size() << endl;
+    map<string, vector<int>> sol_dict;
     vector<vector<int>> x_sols;
     vector<vector<int>> z_sols;
     x_sols.reserve(sols.size());
     z_sols.reserve(sols.size());
     for (SolutionList::iterator it = sols.begin(); it != sols.end(); ++it)
     {
-        x_sols.push_back(it->x);
-
-        vector<int> z_vec;
-        z_vec.reserve(NOBJS);
-        for (int i = 0; i < NOBJS; ++i)
-        {
-            z_vec[i] = it->obj[i];
-        }
-        z_sols.push_back(z_vec);
+        sol_dict = (*it).get();
+        x_sols.push_back(sol_dict["x"]);
+        z_sols.push_back(sol_dict["z"]);
     }
 
     map<string, vector<vector<int>>> frontier;
