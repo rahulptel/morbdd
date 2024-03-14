@@ -14,19 +14,18 @@
 
 using namespace std;
 
-
 //
 // Graph structure
 //
-struct Graph {
+struct Graph
+{
 
-	int                         n_vertices;         /**< |V| */
-	int                         n_edges;            /**< |E| */
-	double*		      weights;		  /**< weight of each vertex */
+	int n_vertices;	 /**< |V| */
+	int n_edges;	 /**< |E| */
+	double *weights; /**< weight of each vertex */
 
-	bool**                      adj_m;              /**< adjacent matrix */
-	vector< vector<int> >       adj_list;           /**< adjacent list */
-
+	bool **adj_m;				  /**< adjacent matrix */
+	vector<vector<int>> adj_list; /**< adjacent list */
 
 	/** Set two vertices as adjacents */
 	void set_adj(int i, int j);
@@ -38,16 +37,16 @@ struct Graph {
 	Graph();
 
 	/** Create an isomorphic graph according to a vertex mapping */
-	Graph(Graph* graph, vector<int>& mapping);
+	Graph(Graph *graph, vector<int> &mapping);
 
 	/** Read graph from a DIMACS format */
-	void read_dimacs(const char* filename);
+	void read_dimacs(const char *filename);
 
 	/** Export graph from a DIMACS format */
 	void export_to_dimacs();
 
 	/** Export to GML format */
-	void export_to_gml(const char* output);
+	void export_to_gml(const char *output);
 
 	/** Constructor with number of vertices */
 	Graph(int num_vertices);
@@ -59,7 +58,7 @@ struct Graph {
 	void remove_edge(int i, int j);
 
 	/** Return degree of a vertex */
-	int degree( int v ) { return adj_list[v].size(); }
+	int degree(int v) { return adj_list[v].size(); }
 
 	/** Print graph */
 	void print();
@@ -68,62 +67,58 @@ struct Graph {
 	void export_negated_dimacs(string filename);
 
 	/** Decompose graphs into cliques */
-	void decompose_into_cliques(vector<Graph*>& cliques, vector< vector<int> >& vertex_ind);
+	void decompose_into_cliques(vector<Graph *> &cliques, vector<vector<int>> &vertex_ind);
 
 	/** Decompose graphs into cliques greater than 'k' */
-	Graph* decompose_into_lifted_cliques_k(vector<Graph*>& cliques,
-			vector< vector<int> >& vertex_ind,
-			int k);
+	Graph *decompose_into_lifted_cliques_k(vector<Graph *> &cliques,
+										   vector<vector<int>> &vertex_ind,
+										   int k);
 
 	/** Decompose graphs into lifted cliques */
-	Graph* decompose_into_lifted_cliques(vector<Graph*>& cliques,
-			vector< vector<int> >& vertex_ind);
+	Graph *decompose_into_lifted_cliques(vector<Graph *> &cliques,
+										 vector<vector<int>> &vertex_ind);
 
 	/** Decompose graphs into cluster cliques */
-	Graph* decompose_into_cluster_cliques(vector<Graph*>& cliques,
-			vector< vector<int> >& vertex_ind);
-
+	Graph *decompose_into_cluster_cliques(vector<Graph *> &cliques,
+										  vector<vector<int>> &vertex_ind);
 
 	/** Decompose graphs into trees */
-	void decompose_into_trees(vector<Graph*>& trees, vector< vector<int> >& vertex_ind);
-
+	void decompose_into_trees(vector<Graph *> &trees, vector<vector<int>> &vertex_ind);
 
 private:
 	// Extract a clique from a graph
-	Graph* extract_clique(Graph* graph, vector<int>& indices);
+	Graph *extract_clique(Graph *graph, vector<int> &indices);
 
 	// Extract a lifted clique from a graph
-	Graph* extract_lifted_clique(Graph* graph, vector<int>& indices);
+	Graph *extract_lifted_clique(Graph *graph, vector<int> &indices);
 
 	// Extract a tree from a graph
-	Graph* extract_tree(Graph* graph, vector<int>& indices);
+	Graph *extract_tree(Graph *graph, vector<int> &indices);
 };
-
-
 
 //
 // Independent set instance structure
 //
-struct IndepSetInst {
+struct IndepSetInst
+{
 
-	Graph*              				graph;             	// independent set graph
-	vector< boost::dynamic_bitset<> >	adj_mask_compl;	 	// complement mask of adjacencies
-
-
+	Graph *graph;									// independent set graph
+	vector<boost::dynamic_bitset<>> adj_mask_compl; // complement mask of adjacencies
+	vector<vector<int>> obj_coeffs;
 	/** Read DIMACS independent set instance */
-	void read_DIMACS(const char* filename);
+	void read_DIMACS(const char *filename);
 
 	/** Create empty instance */
-	IndepSetInst() { }
+	IndepSetInst() {}
 
 	/** Create from file */
-	IndepSetInst(const char* filename) { read_DIMACS(filename); }
+	IndepSetInst(const char *filename) { read_DIMACS(filename); }
 
 	/** Create from graph */
-	IndepSetInst(Graph* _graph);
+	IndepSetInst(Graph *_graph);
+
+	IndepSetInst(int n_vertices, vector<vector<int>> edges, vector<vector<int>> obj_ceoffs);
 };
-
-
 
 /*
  * -----------------------------------------------------
@@ -131,33 +126,33 @@ struct IndepSetInst {
  * -----------------------------------------------------
  */
 
-
 /**
  * Empty constructor
  */
-inline Graph::Graph() : n_vertices(0), n_edges(0), weights(NULL), adj_m(NULL) {
+inline Graph::Graph() : n_vertices(0), n_edges(0), weights(NULL), adj_m(NULL)
+{
 }
-
 
 /**
  * Constructor with number of vertices
  **/
 inline Graph::Graph(int num_vertices)
-: n_vertices(num_vertices), n_edges(0), weights(NULL)
+	: n_vertices(num_vertices), n_edges(0), weights(NULL)
 {
-	adj_m = new bool*[ num_vertices ];
-	for (int i = 0; i < num_vertices; ++i) {
-		adj_m[i] = new bool[ num_vertices ];
-		memset( adj_m[i], false, sizeof(bool) * num_vertices );
+	adj_m = new bool *[num_vertices];
+	for (int i = 0; i < num_vertices; ++i)
+	{
+		adj_m[i] = new bool[num_vertices];
+		memset(adj_m[i], false, sizeof(bool) * num_vertices);
 	}
 	adj_list.resize(num_vertices);
 }
 
-
 /**
  * Check if two vertices are adjacent
  */
-inline bool Graph::is_adj(int i, int j) {
+inline bool Graph::is_adj(int i, int j)
+{
 	assert(i >= 0);
 	assert(j >= 0);
 	assert(i < n_vertices);
@@ -165,11 +160,11 @@ inline bool Graph::is_adj(int i, int j) {
 	return adj_m[i][j];
 }
 
-
 /**
  * Set two vertices as adjacent
  */
-inline void Graph::set_adj(int i, int j) {
+inline void Graph::set_adj(int i, int j)
+{
 	assert(i >= 0);
 	assert(j >= 0);
 	assert(i < n_vertices);
@@ -184,12 +179,11 @@ inline void Graph::set_adj(int i, int j) {
 	adj_list[i].push_back(j);
 }
 
-
-
 /**
  * Add edge
  **/
-inline void Graph::add_edge(int i, int j) {
+inline void Graph::add_edge(int i, int j)
+{
 	assert(i >= 0);
 	assert(j >= 0);
 	assert(i < n_vertices);
@@ -211,7 +205,8 @@ inline void Graph::add_edge(int i, int j) {
 /**
  * Remove edge
  **/
-inline void Graph::remove_edge(int i, int j) {
+inline void Graph::remove_edge(int i, int j)
+{
 	assert(i >= 0);
 	assert(j >= 0);
 	assert(i < n_vertices);
@@ -225,16 +220,20 @@ inline void Graph::remove_edge(int i, int j) {
 	adj_m[i][j] = false;
 	adj_m[j][i] = false;
 
-	for (int v = 0; v < (int)adj_list[i].size(); ++v) {
-		if ( adj_list[i][v] == j ) {
+	for (int v = 0; v < (int)adj_list[i].size(); ++v)
+	{
+		if (adj_list[i][v] == j)
+		{
 			adj_list[i][v] = adj_list[i].back();
 			adj_list[i].pop_back();
 			break;
 		}
 	}
 
-	for (int v = 0; v < (int)adj_list[j].size(); ++v) {
-		if ( adj_list[j][v] == i ) {
+	for (int v = 0; v < (int)adj_list[j].size(); ++v)
+	{
+		if (adj_list[j][v] == i)
+		{
 			adj_list[j][v] = adj_list[j].back();
 			adj_list[j].pop_back();
 			break;
@@ -243,18 +242,17 @@ inline void Graph::remove_edge(int i, int j) {
 	n_edges--;
 }
 
-
 /*
  * -----------------------------------------------------
  * Inline implementations: Independent Set
  * -----------------------------------------------------
  */
 
-
 //
 // Read DIMACS independent set instance with no costs
 //
-inline void IndepSetInst::read_DIMACS(const char *filename) {
+inline void IndepSetInst::read_DIMACS(const char *filename)
+{
 
 	cout << "\nReading instance " << filename << endl;
 
@@ -267,40 +265,42 @@ inline void IndepSetInst::read_DIMACS(const char *filename) {
 
 	// create complement mask of adjacencies
 	adj_mask_compl.resize(graph->n_vertices);
-	for( int v = 0; v < graph->n_vertices; v++ ) {
+	for (int v = 0; v < graph->n_vertices; v++)
+	{
 
 		adj_mask_compl[v].resize(graph->n_vertices, true);
-		for( int w = 0; w < graph->n_vertices; w++ ) {
-			if( graph->is_adj(v,w) ) {
+		for (int w = 0; w < graph->n_vertices; w++)
+		{
+			if (graph->is_adj(v, w))
+			{
 				adj_mask_compl[v].set(w, false);
 			}
 		}
 
 		// we assume here a vertex is adjacent to itself
 		adj_mask_compl[v].set(v, false);
-
 	}
-	cout << "\tdone.\n" << endl;
+	cout << "\tdone.\n"
+		 << endl;
 }
-
-
-
 
 //
 // Decompose graphs into cliques
 //
-inline void Graph::decompose_into_cliques(vector<Graph*>& cliques,
-		vector< vector<int> >& vertex_ind)
+inline void Graph::decompose_into_cliques(vector<Graph *> &cliques,
+										  vector<vector<int>> &vertex_ind)
 {
 	// create copy of current graph
-	Graph* graph = new Graph( this->n_vertices );
-	for (int v = 0; v < graph->n_vertices; ++v ) {
-		if (this->adj_list[v].size() != 0) {
-			for( vector<int>::iterator it = this->adj_list[v].begin();
-					it != this->adj_list[v].end();
-					++it )
+	Graph *graph = new Graph(this->n_vertices);
+	for (int v = 0; v < graph->n_vertices; ++v)
+	{
+		if (this->adj_list[v].size() != 0)
+		{
+			for (vector<int>::iterator it = this->adj_list[v].begin();
+				 it != this->adj_list[v].end();
+				 ++it)
 			{
-				graph->add_edge( v, *it );
+				graph->add_edge(v, *it);
 			}
 		}
 	}
@@ -310,9 +310,10 @@ inline void Graph::decompose_into_cliques(vector<Graph*>& cliques,
 
 	// Extract cliques
 	vector<int> clique;
-	Graph* clique_graph = extract_clique(graph, clique);
+	Graph *clique_graph = extract_clique(graph, clique);
 
-	while (clique_graph != NULL) {
+	while (clique_graph != NULL)
+	{
 		// cout << "Clique - size=" << clique.size() << ": ";
 		// for( int i = 0; i < (int)clique.size(); ++i ) {
 		//   cout << clique[i] << " ";
@@ -324,25 +325,26 @@ inline void Graph::decompose_into_cliques(vector<Graph*>& cliques,
 
 		clique_graph = extract_clique(graph, clique);
 	}
-
 }
 
 //
 // Decompose graphs into cliques greater than k
 //
-inline Graph* Graph::decompose_into_lifted_cliques_k(vector<Graph*>& cliques,
-		vector< vector<int> >& vertex_ind,
-		int k)
+inline Graph *Graph::decompose_into_lifted_cliques_k(vector<Graph *> &cliques,
+													 vector<vector<int>> &vertex_ind,
+													 int k)
 {
 	// create copy of current graph
-	Graph* graph = new Graph( this->n_vertices );
-	for (int v = 0; v < graph->n_vertices; ++v ) {
-		if (this->adj_list[v].size() != 0) {
-			for( vector<int>::iterator it = this->adj_list[v].begin();
-					it != this->adj_list[v].end();
-					++it )
+	Graph *graph = new Graph(this->n_vertices);
+	for (int v = 0; v < graph->n_vertices; ++v)
+	{
+		if (this->adj_list[v].size() != 0)
+		{
+			for (vector<int>::iterator it = this->adj_list[v].begin();
+				 it != this->adj_list[v].end();
+				 ++it)
 			{
-				graph->add_edge( v, *it );
+				graph->add_edge(v, *it);
 			}
 		}
 	}
@@ -352,11 +354,13 @@ inline Graph* Graph::decompose_into_lifted_cliques_k(vector<Graph*>& cliques,
 
 	// Extract cliques
 	vector<int> clique;
-	Graph* clique_graph = extract_lifted_clique(graph, clique);
+	Graph *clique_graph = extract_lifted_clique(graph, clique);
 
-	while (clique_graph != NULL) {
+	while (clique_graph != NULL)
+	{
 		cout << "Clique - size=" << clique.size() << ": ";
-		for( int i = 0; i < (int)clique.size(); ++i ) {
+		for (int i = 0; i < (int)clique.size(); ++i)
+		{
 			cout << clique[i] << " ";
 		}
 		cout << endl;
@@ -364,7 +368,8 @@ inline Graph* Graph::decompose_into_lifted_cliques_k(vector<Graph*>& cliques,
 		cliques.push_back(clique_graph);
 		vertex_ind.push_back(clique);
 
-		if (clique.size() <= k) {
+		if (clique.size() <= k)
+		{
 			return graph;
 		}
 
@@ -374,17 +379,19 @@ inline Graph* Graph::decompose_into_lifted_cliques_k(vector<Graph*>& cliques,
 	return NULL;
 }
 
-
-
 /** Create IndepsetInst from graph */
-inline IndepSetInst::IndepSetInst(Graph* _graph) : graph(_graph) {
+inline IndepSetInst::IndepSetInst(Graph *_graph) : graph(_graph)
+{
 	// create complement mask of adjacencies
 	adj_mask_compl.resize(graph->n_vertices);
-	for( int v = 0; v < graph->n_vertices; v++ ) {
+	for (int v = 0; v < graph->n_vertices; v++)
+	{
 
 		adj_mask_compl[v].resize(graph->n_vertices, true);
-		for( int w = 0; w < graph->n_vertices; w++ ) {
-			if( graph->is_adj(v,w) ) {
+		for (int w = 0; w < graph->n_vertices; w++)
+		{
+			if (graph->is_adj(v, w))
+			{
 				adj_mask_compl[v].set(w, false);
 			}
 		}
@@ -394,22 +401,55 @@ inline IndepSetInst::IndepSetInst(Graph* _graph) : graph(_graph) {
 	}
 }
 
+inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges, vector<vector<int>> _obj_coeffs)
+{
+	graph = new Graph(n_vars);
+
+	for (int i = 0; i < edges.size(); ++i)
+	{
+		graph->add_edge(edges[i][0], edges[i][1]);
+	}
+	// graph->print();
+
+	// cout << "\tAuxiliary graph for set packing:" << endl;
+	// cout << "\t\tnumber of vertices: " << graph->n_vertices << endl;
+	// cout << "\t\tnumber of edges: " << graph->n_edges << endl;
+	// create complement mask of adjacencies
+	adj_mask_compl.resize(graph->n_vertices);
+	for (int v = 0; v < graph->n_vertices; ++v)
+	{
+		adj_mask_compl[v].resize(graph->n_vertices, true);
+		for (int w = 0; w < graph->n_vertices; w++)
+		{
+			if (graph->is_adj(v, w))
+			{
+				adj_mask_compl[v].set(w, false);
+			}
+		}
+
+		// we assume here a vertex is adjacent to itself
+		adj_mask_compl[v].set(v, false);
+	}
+	obj_coeffs = _obj_coeffs;
+}
 
 //
 // Decompose graphs into cliques
 //
-inline Graph* Graph::decompose_into_lifted_cliques(vector<Graph*>& cliques,
-		vector< vector<int> >& vertex_ind)
+inline Graph *Graph::decompose_into_lifted_cliques(vector<Graph *> &cliques,
+												   vector<vector<int>> &vertex_ind)
 {
 	// create copy of current graph
-	Graph* graph = new Graph( this->n_vertices );
-	for (int v = 0; v < graph->n_vertices; ++v ) {
-		if (this->adj_list[v].size() != 0) {
-			for( vector<int>::iterator it = this->adj_list[v].begin();
-					it != this->adj_list[v].end();
-					++it )
+	Graph *graph = new Graph(this->n_vertices);
+	for (int v = 0; v < graph->n_vertices; ++v)
+	{
+		if (this->adj_list[v].size() != 0)
+		{
+			for (vector<int>::iterator it = this->adj_list[v].begin();
+				 it != this->adj_list[v].end();
+				 ++it)
 			{
-				graph->add_edge( v, *it );
+				graph->add_edge(v, *it);
 			}
 		}
 	}
@@ -419,11 +459,13 @@ inline Graph* Graph::decompose_into_lifted_cliques(vector<Graph*>& cliques,
 
 	// Extract cliques
 	vector<int> clique;
-	Graph* clique_graph = extract_lifted_clique(graph, clique);
+	Graph *clique_graph = extract_lifted_clique(graph, clique);
 
-	while (clique_graph != NULL) {
+	while (clique_graph != NULL)
+	{
 		cout << "Clique - size=" << clique.size() << ": ";
-		for( int i = 0; i < (int)clique.size(); ++i ) {
+		for (int i = 0; i < (int)clique.size(); ++i)
+		{
 			cout << clique[i] << " ";
 		}
 		cout << endl;
@@ -437,10 +479,4 @@ inline Graph* Graph::decompose_into_lifted_cliques(vector<Graph*>& cliques,
 	return NULL;
 }
 
-
-
-
 #endif /* THISANCE_HPP_ */
-
-
-

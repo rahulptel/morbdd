@@ -156,7 +156,7 @@ private:
     // ----------------------------------------------------------------
     // Instances
     KnapsackInstance *inst_kp;
-    SetPackingInstance inst_setpack;
+    // SetPackingInstance inst_setpack;
     IndepSetInst *inst_indepset;
     // SetCoveringInstance inst_setcover;
     // AbsValInstance inst_absval;
