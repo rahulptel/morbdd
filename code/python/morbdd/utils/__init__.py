@@ -66,6 +66,8 @@ def read_from_zip(archive, file, format="raw"):
             data = raw_data
         elif format == "json":
             data = json.load(raw_data)
+        elif format == "npz":
+            data = np.load(io.BytesIO(raw_data.read()))
 
     return data
 
@@ -85,11 +87,17 @@ def read_instance_knapsack(archive, inst):
     return data
 
 
+def read_instance_indepset(archive, inst):
+    data = read_from_zip(archive, inst)
+    return data
+
+
 def read_instance(problem, archive, inst):
     data = None
     if problem == "knapsack" or problem == "knapsackc":
         data = read_instance_knapsack(archive, inst)
-
+    elif problem == "indepset":
+        data = read_instance_indepset(archive, inst)
     return data
 
 
@@ -97,6 +105,8 @@ def get_instance_prefix(problem):
     prefix = None
     if problem == 'knapsack' or problem == 'knapsackc':
         prefix = 'kp_7'
+    elif problem == "indepset":
+        prefix = "ind_7"
 
     return prefix
 
