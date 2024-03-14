@@ -1,0 +1,39 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+#####################################
+num_objs: 3
+num_vars: 50
+# To be assigned later
+size:
+
+# Range from which to sample the objective coefficients
+obj_lb: 1
+obj_ub: 100
+
+# Range from which to sample the constraint coefficients
+cons_lb: 1
+cons_ub: 1000
+
+num_train: 1000
+num_test: 100
+num_val: 100
+seed: 7
+
+#####################################
+# Knapsack Problem
+correlated: false
+
+#####################################
+# Independent Set
+graph_type: ba
+# 2, 4, 8, 16
+attach: 4
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
