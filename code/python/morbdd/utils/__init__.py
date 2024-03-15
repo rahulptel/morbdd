@@ -88,7 +88,11 @@ def read_instance_knapsack(archive, inst):
 
 
 def read_instance_indepset(archive, inst):
-    data = read_from_zip(archive, inst)
+    if inst.split(".")[-1] == "npz":
+        data = read_from_zip(archive, inst, format="npz")
+    else:
+        data = read_from_zip(archive, inst)
+
     return data
 
 
@@ -114,7 +118,12 @@ def get_instance_prefix(problem):
 def get_instance_data(problem, size, split, pid):
     prefix = get_instance_prefix(problem)
     archive = resource_path / f"instances/{problem}/{size}.zip"
-    inst = f'{size}/{split}/{prefix}_{size}_{pid}.dat'
+    if problem == "indepset":
+        if len(size.split("-")) > 2:
+            suffix = "npz"
+        else:
+            suffix = "dat"
+    inst = f'{size}/{split}/{prefix}_{size}_{pid}.{suffix}'
     data = read_instance(problem, archive, inst)
 
     return data

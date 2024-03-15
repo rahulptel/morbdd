@@ -4,8 +4,8 @@ defaults:
   - override hydra/job_logging: disabled
 
 #####################################
-num_objs: 3
-num_vars: 50
+n_objs: 3
+n_vars: 100
 # To be assigned later
 size:
 
@@ -17,9 +17,9 @@ obj_ub: 100
 cons_lb: 1
 cons_ub: 1000
 
-num_train: 1000
-num_test: 100
-num_val: 100
+n_train: 1000
+n_test: 100
+n_val: 100
 seed: 7
 
 #####################################
@@ -28,10 +28,11 @@ correlated: false
 
 #####################################
 # Independent Set
-graph_type: ba
+graph_type: stidsen
 # 2, 4, 8, 16
 attach: 4
-
+# Average number of variables per constraint
+vars_per_con: 10
 
 hydra:
   output_subdir: null
