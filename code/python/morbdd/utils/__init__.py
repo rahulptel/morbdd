@@ -231,11 +231,12 @@ def get_knapsack_order(order_type, data):
         return np.arange(data['n_vars'])
 
 
-def get_order(problem, order_type, data):
+def get_static_order(problem, order_type, data):
     order = None
     if problem == 'knapsack' or problem == 'knapsackc':
         order = get_knapsack_order(order_type, data)
-
+    elif problem == 'indepset':
+        order = []
     assert order is not None
 
     return order
