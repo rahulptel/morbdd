@@ -1,12 +1,18 @@
+import json
+import multiprocessing as mp
+import signal
+import time
 from collections import defaultdict
 
 import hydra
 import numpy as np
+import pandas as pd
 
+from morbdd import Const as CONST
+from morbdd import ResourcePaths as path
 from morbdd.utils import get_instance_data
-import time
-import multiprocessing as mp
 from morbdd.utils import get_static_order
+from morbdd.utils import handle_timeout
 
 
 def get_size(cfg):
@@ -169,7 +175,7 @@ def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
     return pareto_states, counter
 
 
-def get_pareto_states_per_layer(problem_type, data, x_sol, graph_type):
+def get_pareto_states_per_layer(problem_type, data, x_sol, graph_type=None):
     pareto_sols_per_layer = None
     if problem_type == 1:
         pareto_sols_per_layer = get_pareto_states_per_layer_knapsack(data["cons_coeffs"][0], x_sol)
@@ -182,7 +188,7 @@ def get_pareto_states_per_layer(problem_type, data, x_sol, graph_type):
     return pareto_sols_per_layer
 
 
-def tag_bdd_states(bdd, pareto_state_scores):
+def tag_dd_nodes(bdd, pareto_state_scores):
     assert len(pareto_state_scores) == len(bdd)
 
     for l in range(len(bdd)):
@@ -205,6 +211,7 @@ def worker(rank, cfg):
     libv2 = get_lib(cfg.bin, n_objs=cfg.prob.n_objs)
     env = libv2.BDDEnv()
     stats = []
+    signal.signal(signal.SIGALRM, handle_timeout)
 
     for pid in range(rank, cfg.to_pid, cfg.n_processes):
         _stats = []
@@ -239,34 +246,75 @@ def worker(rank, cfg):
 
         print("5/10: Generating decision diagram...")
         initialize_dd_constructor(cfg.bin, env)
-        start = time.time()
         env.generate_dd()
-        end = time.time() - start
-        _stats.append(end)
+        time_compile = env.get_time(CONST.TIME_COMPILE)
 
         print("6/10: Fetching decision diagram...")
         start = time.time()
         dd = env.get_dd()
-        end = time.time() - start
-        _stats.append(end)
+        time_fetch = time.time() - start
 
         exact_size = []
         for layer in enumerate(dd):
             exact_size.append(len(layer))
         print(np.mean(exact_size), np.max(exact_size))
-        order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
+        dynamic_order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
 
         print("7/10: Computing Pareto Frontier...")
-        env.compute_pareto_frontier()
-        _stats.append(env.get_construction_time())
-        _stats.append(env.get_pareto_time())
+        is_pf_computed = False
+        try:
+            signal.alarm(cfg.time_limit)
+            env.compute_pareto_frontier()
+        except TimeoutError as exc:
+            is_pf_computed = False
+            print(f"PF not computed within {cfg.time_limit} for pid {pid}")
+        else:
+            is_pf_computed = True
+            print(f"PF computed successfully for pid {pid}")
+        signal.alarm(0)
+
+        if not is_pf_computed:
+            continue
+
+        time_pareto = env.get_time(CONST.TIME_PARETO)
 
         print("8/10: Fetching Pareto Frontier...")
         frontier = env.get_frontier()
 
         print("9/10: Marking Pareto nodes...")
+        pareto_state_scores = get_pareto_states_per_layer(cfg.problem_type, data, frontier["x"],
+                                                          graph_type=cfg.graph_type)
+        dd = tag_dd_nodes(dd, pareto_state_scores)
 
         print("10/10: Saving data...")
+        # Save BDD
+        file_path = path.resource / f"bdds/{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.json"
+        with open(file_path, "w") as fp:
+            json.dump(dd, fp)
+
+        # Save Solution
+        file_path = path.resource / f"sols/{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.json"
+        with open(file_path, "w") as fp:
+            json.dump(frontier, fp)
+
+        # Save stats
+        df = pd.DataFrame([
+            [cfg.size,
+             cfg.split,
+             pid,
+             len(frontier["z"]),
+             env.initial_node_count,
+             env.initial_arcs_count,
+             env.num_comparisons,
+             time_fetch,
+             time_compile,
+             time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
+                                     "compilation", "pareto"])
+        df.to_csv(file_path.parent / f"{pid}.csv", index=False)
 
 
 @hydra.main(config_path="./configs", config_name="raw_data.yaml", version_base="1.2")

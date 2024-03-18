@@ -47,6 +47,9 @@ maxwidth: 0
 order_type: min_state
 # Graph type for Set Packing/Independent Set problem
 graph_type: stidsen
+# Time limit to compute the Pareto frontier
+time_limit: 1800
+
 
 hydra:
   output_subdir: null

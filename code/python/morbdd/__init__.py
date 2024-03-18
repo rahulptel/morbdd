@@ -15,3 +15,8 @@ resource_path = root_path_dict[machine]
 class ResourcePaths:
     resource = root_path_dict[machine]
     inst = resource / "instances"
+
+
+class Const:
+    TIME_COMPILE = 1
+    TIME_PARETO = 2
