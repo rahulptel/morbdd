@@ -10,7 +10,7 @@ from pymoo.operators.sampling.rnd import BinaryRandomSampling
 from pymoo.optimize import minimize
 from pymoo.termination import get_termination
 
-from morbdd import resource_path
+from morbdd import ResourcePaths as path
 from morbdd.utils import get_instance_data
 
 
@@ -29,9 +29,9 @@ class MultiObjectiveKnapsack(Problem):
 
 
 def save_result(cfg, res):
-    result_path = resource_path / f"ea/{cfg.deploy.algorithm}/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}"
+    result_path = path.resource / f"ea/{cfg.deploy.algorithm}/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}"
     result_path.mkdir(exist_ok=True, parents=True)
-    np.savez(result_path / f"{cfg.deploy.pid}.npz", X=res.X, F=res.F)
+    np.savez(result_path / f"{cfg.deploy.pid}_{cfg.deploy.seed}.npz", X=res.X, F=res.F)
 
 
 @hydra.main(version_base='1.2', config_path='./configs', config_name='baseline_ea.yaml')
@@ -58,7 +58,7 @@ def main(cfg):
     res = minimize(problem,
                    algorithm,
                    termination,
-                   seed=1,
+                   seed=cfg.seed,
                    verbose=True)
 
     save_result(cfg, res)
