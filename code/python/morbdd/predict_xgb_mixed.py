@@ -11,7 +11,7 @@ from morbdd.utils import FeaturizerConfig
 from morbdd.utils import extract_node_features
 from morbdd.utils import get_featurizer
 from morbdd.utils import get_instance_data
-from morbdd.utils import get_order
+from morbdd.utils import get_static_order
 # from laser.utils import get_xgb_model_name
 from morbdd.utils import read_from_zip
 import time
@@ -281,7 +281,7 @@ def worker(rank, cfg, mdl_hex):
     for pid in range(cfg.deploy.from_pid + rank, cfg.deploy.to_pid, cfg.deploy.num_processes):
         # Read instance
         inst_data = get_instance_data(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid)
-        order = get_order(cfg.prob.name, cfg.deploy.order_type, inst_data)
+        order = get_static_order(cfg.prob.name, cfg.deploy.order_type, inst_data)
 
         # Load BDD
         archive = resource_path / f"bdds/{cfg.prob.name}/{cfg.prob.size}.zip"

@@ -7,7 +7,7 @@ import numpy as np
 
 from morbdd import resource_path
 from morbdd.utils import get_instance_data
-from morbdd.utils import get_order
+from morbdd.utils import get_static_order
 from morbdd.utils import read_from_zip
 
 
@@ -50,7 +50,7 @@ def worker(rank, cfg):
         # print(f"Processing pid {pid}...")
         # Read instance
         data = get_instance_data(cfg.prob, cfg.size, cfg.split, pid)
-        order = get_order(cfg.prob, cfg.order_type, data)
+        order = get_static_order(cfg.prob, cfg.order_type, data)
 
         # print("\tReading sol...")
         archive = resource_path / f"sols/{cfg.prob}/{cfg.size}.zip"
