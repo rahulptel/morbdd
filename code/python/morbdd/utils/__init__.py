@@ -91,8 +91,30 @@ def read_instance_indepset(archive, inst):
     if inst.split(".")[-1] == "npz":
         data = read_from_zip(archive, inst, format="npz")
     else:
-        data = read_from_zip(archive, inst)
+        raw_data = read_from_zip(archive, inst)
 
+        data = {"obj_coeffs": [], "cons_coeffs": []}
+
+        data["n_vars"], data["n_cons"] = list(map(int, raw_data.readline().strip().split()))
+        data["n_objs"] = int(raw_data.readline())
+        data["adj_list"] = np.zeros((data["n_vars"], data["n_vars"]))
+        for i in range(data["n_vars"]):
+            data["adj_list"][i, i] = 1
+
+        for _ in range(data["n_objs"]):
+            data["obj_coeffs"].append(list(map(int, raw_data.readline().split())))
+        for _ in range(data["n_cons"]):
+            non_zero_vars = list(map(int, raw_data.readline().strip().split()))
+            non_zero_vars = [i - 1 for i in non_zero_vars]
+            data["cons_coeffs"].append(non_zero_vars)
+
+            for i in range(len(non_zero_vars)):
+                for j in range(i + 1, len(non_zero_vars)):
+                    data["adj_list"][i, j] = 1
+                    data["adj_list"][j, i] = 1
+
+        data["adj_list_comp"] = np.zeros((data["n_vars"], data["n_vars"]))
+        data["adj_list_comp"][data["adj_list"] == 0] = 1
     return data
 
 
@@ -118,11 +140,11 @@ def get_instance_prefix(problem):
 def get_instance_data(problem, size, split, pid):
     prefix = get_instance_prefix(problem)
     archive = resource_path / f"instances/{problem}/{size}.zip"
+    suffix = "dat"
     if problem == "indepset":
         if len(size.split("-")) > 2:
             suffix = "npz"
-        else:
-            suffix = "dat"
+
     inst = f'{size}/{split}/{prefix}_{size}_{pid}.{suffix}'
     data = read_instance(problem, archive, inst)
 
@@ -368,7 +390,7 @@ def convert_bdd_to_tensor_data(problem,
 
         # Get instance features
         inst_data = get_instance_data(problem, size, split, pid)
-        order = get_order(problem, order_type, inst_data)
+        order = get_static_order(problem, order_type, inst_data)
         inst_feat = get_instance_features(problem,
                                           inst_data,
                                           state_norm_const=state_norm_const)
@@ -591,7 +613,7 @@ def convert_bdd_to_xgb_data(problem,
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
-            order = get_order(problem, order_type, inst_data)
+            order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
             featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
                                                                   raw=False,
@@ -741,7 +763,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
-            order = get_order(problem, order_type, inst_data)
+            order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
             featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
                                                                   raw=False,

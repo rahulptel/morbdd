@@ -136,7 +136,7 @@ def get_pareto_states_per_layer_knapsack(weight, x):
 
 def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
     x_sol = np.array(x_sol)
-    pareto_states = []
+    pareto_state_scores = []
     counter = 0
 
     for i in range(1, x_sol.shape[1]):
@@ -149,9 +149,10 @@ def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
                 uniques[ps] = 1
             else:
                 uniques[ps] += 1
-        total = np.sum([v for v in uniques.values()])
+        total = x_sol.shape[0]
 
         _pareto_states = []
+        counts = []
         # Compute pareto state for each unique sol
         for unique_sol, count in uniques.items():
             pareto_state = np.ones(x_sol.shape[1])
@@ -162,28 +163,31 @@ def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
                     pareto_state = np.logical_and(pareto_state, adj_list_comp[var]).astype(int)
 
             is_found = False
-            for ps in _pareto_states:
+            for i, ps in enumerate(_pareto_states):
                 if np.array_equal(pareto_state, ps):
+                    counts[i] += count
                     is_found = True
                     break
             if not is_found:
                 _pareto_states.append(pareto_state)
+                counts.append(count)
                 counter += 1
 
-    pareto_states.append(_pareto_states)
+        pareto_state_scores.append([(i, j / total)
+                                    for i, j in zip(_pareto_states, counts)])
 
-    return pareto_states, counter
+    return pareto_state_scores
 
 
-def get_pareto_states_per_layer(problem_type, data, x_sol, graph_type=None):
+def get_pareto_states_per_layer(problem_type, data, x_sol, order=None, graph_type=None):
     pareto_sols_per_layer = None
     if problem_type == 1:
         pareto_sols_per_layer = get_pareto_states_per_layer_knapsack(data["cons_coeffs"][0], x_sol)
     elif problem_type == 2:
         if graph_type == "stidsen":
-            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(data, x_sol)
+            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
         elif graph_type == "ba":
-            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(data, x_sol)
+            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
 
     return pareto_sols_per_layer
 
@@ -193,14 +197,14 @@ def tag_dd_nodes(bdd, pareto_state_scores):
 
     for l in range(len(bdd)):
         pareto_states, pareto_scores = pareto_state_scores[l]
+        for pareto_state, score in zip(pareto_states, pareto_scores):
+            for n in bdd[l]:
+                if np.array_equal(n["s"], pareto_state):
+                    n["pareto"] = 1
+                    n["score"] = score
 
         for n in bdd[l]:
-            node_state = n["s"][0]
-            index = np.where(pareto_states == node_state)[0]
-            if len(index):
-                n["pareto"] = 1
-                n["score"] = pareto_scores[index[0]]
-            else:
+            if "pareto" not in n:
                 n["pareto"] = 0
                 n["score"] = 0
 
@@ -210,12 +214,9 @@ def tag_dd_nodes(bdd, pareto_state_scores):
 def worker(rank, cfg):
     libv2 = get_lib(cfg.bin, n_objs=cfg.prob.n_objs)
     env = libv2.BDDEnv()
-    stats = []
     signal.signal(signal.SIGALRM, handle_timeout)
 
     for pid in range(rank, cfg.to_pid, cfg.n_processes):
-        _stats = []
-
         print("1/10: Fetching instance data and order...")
         data = get_instance_data(cfg.prob.name, cfg.size, cfg.split, pid)
         order = get_static_order(cfg.prob.name, cfg.order_type, data)
@@ -261,7 +262,6 @@ def worker(rank, cfg):
         dynamic_order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
 
         print("7/10: Computing Pareto Frontier...")
-        is_pf_computed = False
         try:
             signal.alarm(cfg.time_limit)
             env.compute_pareto_frontier()
@@ -275,7 +275,6 @@ def worker(rank, cfg):
 
         if not is_pf_computed:
             continue
-
         time_pareto = env.get_time(CONST.TIME_PARETO)
 
         print("8/10: Fetching Pareto Frontier...")
