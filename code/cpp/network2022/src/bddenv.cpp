@@ -595,6 +595,31 @@ map<string, vector<vector<int>>> BDDEnv::get_frontier()
     return {};
 }
 
+double BDDEnv::get_time(int time_type)
+{
+    if (time_type == 1)
+    {
+        return timers.get_time(compilation_time);
+    }
+    else if (time_type == 2)
+    {
+        return timers.get_time(pareto_time);
+    }
+    else
+    {
+        return -1;
+    }
+}
+
+int BDDEnv::get_num_nodes_per_layer(int layer)
+{
+    if (bdd != NULL)
+    {
+        return bdd->layers[layer].size();
+    }
+    return -1;
+}
+
 int BDDEnv::compute_pareto_frontier()
 {
     MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;

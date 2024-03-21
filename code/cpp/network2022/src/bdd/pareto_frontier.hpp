@@ -42,12 +42,12 @@ public:
     void merge(ParetoFrontier &frontier, int arc_type, ObjType *shift);
 
     // Merge pareto frontier solutions with shift
-    // void merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer);
+    void merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer);
 
     // void merge(const ParetoFrontier &frontier, const ObjType *shift, int arc_type);
 
     // Convolute two nodes from this set to this one
-    // void convolute(ParetoFrontier &fA, ParetoFrontier &fB);
+    void convolute(ParetoFrontier &fA, ParetoFrontier &fB);
 
     // Remove pre-set dominated solutions
     void remove_dominated()
@@ -80,10 +80,11 @@ public:
 
 private:
     // Auxiliaries
-    // ObjType aux[NOBJS];
+    ObjType aux[NOBJS];
     ObjType auxB[NOBJS];
     vector<ObjType *> elems;
-    vector<int> aux;
+    // vector<int> aux;
+    // ObjType *aux;
 
     // Remove empty elements
     void remove_empty();
@@ -233,76 +234,79 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjTyp
     sols.erase(end);
 }
 
-// //
-// // Merge pareto frontier into existing set considering shift
-// //
-// inline void ParetoFrontier::merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer)
-// {
-//     bool must_add;
-//     bool dominates;
-//     bool dominated;
+//
+// Merge pareto frontier into existing set considering shift
+//
+inline void ParetoFrontier::merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer)
+{
+    bool must_add;
+    bool dominates;
+    bool dominated;
 
-//     // add artificial solution to avoid rechecking dominance between elements in the
-//     // set to be merged
-//     Solution dummy;
-//     SolutionList::iterator end = sols.insert(sols.end(), dummy);
+    // add artificial solution to avoid rechecking dominance between elements in the
+    // set to be merged
+    Solution dummy;
+    SolutionList::iterator end = sols.insert(sols.end(), dummy);
 
-//     for (SolutionList::iterator itParent = frontier.sols.begin();
-//          itParent != frontier.sols.end();
-//          ++itParent)
-//     {
-//         // update auxiliary
-//         for (int o = 0; o < NOBJS; ++o)
-//         {
-//             aux[o] = itParent->obj[o] + sol.obj[o];
-//         }
-//         must_add = true;
-//         // Compare the incoming aux solution with the sols on the current node
-//         for (SolutionList::iterator itCurr = sols.begin();
-//              itCurr != end;)
-//         {
-//             // check status of foreign solution w.r.t. current frontier solution
-//             dominates = true;
-//             dominated = true;
-//             for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
-//             {
-//                 dominates &= (aux[o] >= itCurr->obj[o]);
-//                 dominated &= (aux[o] <= itCurr->obj[o]);
-//             }
-//             if (dominated)
-//             {
-//                 // if foreign solution is dominated, just stop loop
-//                 must_add = false;
-//                 break;
-//             }
-//             else if (dominates)
-//             {
-//                 itCurr = sols.erase(itCurr);
-//             }
-//             else
-//             {
-//                 ++itCurr;
-//             }
-//         }
-//         // if solution has not been added already, append element to the end
-//         if (must_add)
-//         {
-//             if (reverse_outer)
-//             {
-//                 reverse(itParent->x.begin(), itParent->x.end());
-//                 sol.x.insert(sol.x.end(), itParent->x.begin(), itParent->x.end());
-//                 sols.insert(sols.end(), Solution(sol.x, aux));
-//             }
-//             else
-//             {
-//                 reverse(sol.x.begin(), sol.x.end());
-//                 itParent->x.insert(itParent->x.end(), sol.x.begin(), sol.x.end());
-//                 sols.insert(sols.end(), Solution(itParent->x, aux));
-//             }
-//         }
-//     }
-//     sols.erase(end);
-// }
+    for (SolutionList::iterator itParent = frontier.sols.begin();
+         itParent != frontier.sols.end();
+         ++itParent)
+    {
+        // update auxiliary
+        for (int o = 0; o < NOBJS; ++o)
+        {
+            aux[o] = itParent->obj[o] + sol.obj[o];
+        }
+        must_add = true;
+        // Compare the incoming aux solution with the sols on the current node
+        for (SolutionList::iterator itCurr = sols.begin();
+             itCurr != end;)
+        {
+            // check status of foreign solution w.r.t. current frontier solution
+            dominates = true;
+            dominated = true;
+            for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
+            {
+                dominates &= (aux[o] >= itCurr->obj[o]);
+                dominated &= (aux[o] <= itCurr->obj[o]);
+            }
+            if (dominated)
+            {
+                // if foreign solution is dominated, just stop loop
+                must_add = false;
+                break;
+            }
+            else if (dominates)
+            {
+                itCurr = sols.erase(itCurr);
+            }
+            else
+            {
+                ++itCurr;
+            }
+        }
+        // if solution has not been added already, append element to the end
+        if (must_add)
+        {
+
+            if (reverse_outer)
+            {
+                Solution new_solution(sol.x, aux);
+                reverse(itParent->x.begin(), itParent->x.end());
+                new_solution.x.insert(new_solution.x.end(), itParent->x.begin(), itParent->x.end());
+                sols.push_back(new_solution);
+            }
+            else
+            {
+                Solution new_solution(itParent->x, aux);
+                reverse(sol.x.begin(), sol.x.end());
+                new_solution.x.insert(new_solution.x.end(), sol.x.begin(), sol.x.end());
+                sols.push_back(new_solution);
+            }
+        }
+    }
+    sols.erase(end);
+}
 
 //
 // Print elements in set
@@ -321,28 +325,28 @@ inline void ParetoFrontier::print()
     }
 }
 
-// //
-// // Convolute two nodes from this set to this one
-// //
-// inline void ParetoFrontier::convolute(ParetoFrontier &fA, ParetoFrontier &fB)
-// {
-//     if (fA.sols.size() < fB.sols.size())
-//     {
-//         for (it = fA.sols.begin(); it != fA.sols.end(); ++it)
-//         {
-//             // std::copy(fA.sols.begin() + j, fA.sols.begin() + j + NOBJS, auxB);
-//             merge_after_convolute(fB, *it, true);
-//         }
-//     }
-//     else
-//     {
-//         for (it = fB.sols.begin(); it != fB.sols.end(); ++it)
-//         {
-//             // std::copy(fB.sols.begin() + j, fB.sols.begin() + j + NOBJS, auxB);
-//             merge_after_convolute(fA, *it, false);
-//         }
-//     }
-// }
+//
+// Convolute two nodes from this set to this one
+//
+inline void ParetoFrontier::convolute(ParetoFrontier &fA, ParetoFrontier &fB)
+{
+    if (fA.sols.size() < fB.sols.size())
+    {
+        for (SolutionList::iterator it = fA.sols.begin(); it != fA.sols.end(); ++it)
+        {
+            // std::copy(fA.sols.begin() + j, fA.sols.begin() + j + NOBJS, auxB);
+            merge_after_convolute(fB, *it, true);
+        }
+    }
+    else
+    {
+        for (SolutionList::iterator it = fB.sols.begin(); it != fB.sols.end(); ++it)
+        {
+            // std::copy(fB.sols.begin() + j, fB.sols.begin() + j + NOBJS, auxB);
+            merge_after_convolute(fA, *it, false);
+        }
+    }
+}
 
 //
 // Obtain sum of points

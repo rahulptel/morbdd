@@ -143,6 +143,10 @@ public:
 
     map<string, vector<vector<int>>> get_frontier();
 
+    double get_time(int);
+
+    int get_num_nodes_per_layer(int);
+
 private:
     void initialize();
 
