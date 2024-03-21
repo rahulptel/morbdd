@@ -10,6 +10,8 @@ from morbdd.utils import read_from_zip
 
 from pymoo.indicators.igd import IGD
 
+seeds = ["1234", "279183", "3432", "876"]
+
 
 def compute_cardinality(true_pf=None, pred_pf=None):
     z, z_pred = np.array(true_pf), np.array(pred_pf)
@@ -60,19 +62,22 @@ def main(cfg):
                 df.to_csv(path / f"{pid}_hv.csv", index=False)
 
             if cfg.deploy.algorithm == "nsga2":
-                approx_pf_path = resource_path / f"ea/nsga2/{cfg.prob.name}/{cfg.prob.size}/{cfg.prob.split}/{pid}.npz"
-                if not approx_pf_path.exists():
-                    continue
-                approx_pf = np.load(approx_pf_path)
-                solC = approx_pf["F"]
-                solC = solC / norm
+                for seed in seeds:
+                    fname = f"{pid}_{seed}"
+                    approx_pf_path = resource_path / f"ea/nsga2/{cfg.prob.name}/{cfg.prob.size}/{cfg.prob.split}/{fname}.npz"
+                    if not approx_pf_path.exists():
+                        continue
 
-                hv = pg.hypervolume(solC)
-                hv_approx = hv.compute(ref_point, hv_algo=hv_algo)
+                    approx_pf = np.load(approx_pf_path)
+                    solC = approx_pf["F"]
+                    solC = solC / norm
 
-                df = pd.DataFrame([[cfg.prob.size, pid, cfg.prob.split, "nsga2", "hv", hv_approx]],
-                                  columns=["size", "pid", "split", "algorithm", "metric", "value"])
-                df.to_csv(approx_pf_path.parent / f"{pid}_hv.csv", index=False)
+                    hv = pg.hypervolume(solC)
+                    hv_approx = hv.compute(ref_point, hv_algo=hv_algo)
+
+                    df = pd.DataFrame([[cfg.prob.size, pid, cfg.prob.split, "nsga2", "hv", hv_approx]],
+                                      columns=["size", "pid", "split", "algorithm", "metric", "value"])
+                    df.to_csv(approx_pf_path.parent / f"{fname}_hv.csv", index=False)
 
             elif cfg.deploy.algorithm == "restricted":
                 for mw in [20, 40, 60]:
@@ -248,16 +253,19 @@ def main(cfg):
             sol_np = np.array(sol["z"])
 
             if cfg.deploy.algorithm == "nsga2":
-                approx_pf_path = resource_path / f"ea/nsga2/{cfg.prob.name}/{cfg.prob.size}/{cfg.prob.split}/{pid}.npz"
-                if not approx_pf_path.exists():
-                    continue
-                approx_pf = np.load(approx_pf_path)
-                solC = -approx_pf["F"]
-                cardinality = compute_cardinality(true_pf=sol_np, pred_pf=solC)
+                for seed in seeds:
+                    fname = f"{pid}_{seed}"
+                    approx_pf_path = resource_path / f"ea/nsga2/{cfg.prob.name}/{cfg.prob.size}/{cfg.prob.split}/{fname}.npz"
+                    if not approx_pf_path.exists():
+                        continue
 
-                df = pd.DataFrame([[cfg.prob.size, pid, cfg.prob.split, "nsga2", "card", cardinality]],
-                                  columns=["size", "pid", "split", "algorithm", "metric", "value"])
-                df.to_csv(approx_pf_path.parent / f"{pid}_card.csv", index=False)
+                    approx_pf = np.load(approx_pf_path)
+                    solC = -approx_pf["F"]
+                    cardinality = compute_cardinality(true_pf=sol_np, pred_pf=solC)
+
+                    df = pd.DataFrame([[cfg.prob.size, pid, cfg.prob.split, "nsga2", "card", cardinality]],
+                                      columns=["size", "pid", "split", "algorithm", "metric", "value"])
+                    df.to_csv(approx_pf_path.parent / f"{fname}_card.csv", index=False)
 
             elif cfg.deploy.algorithm == "restricted":
                 for mw in [20, 40, 60]:
