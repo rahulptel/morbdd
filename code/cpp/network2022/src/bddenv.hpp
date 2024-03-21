@@ -143,6 +143,8 @@ public:
 
     vector<int> get_frontier();
 
+    double get_time(int);
+
 private:
     void initialize();
 
