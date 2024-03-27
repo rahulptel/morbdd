@@ -27,9 +27,10 @@ def generate_instance_ba(rng, cfg):
     return data
 
 
-def generate_instance_stidsen(rng, cfg):
+def generate_instance_stidsen(rng, cfg, should_print=False):
     data = {'n_vars': cfg.n_vars, 'n_objs': cfg.n_objs, 'n_cons': int(cfg.n_vars / 5), 'obj_coeffs': [],
             'cons_coeffs': []}
+    items = list(range(1, cfg.n_vars + 1))
 
     # Value
     for _ in range(cfg.n_objs):
@@ -38,7 +39,7 @@ def generate_instance_stidsen(rng, cfg):
     # Constraints
     for _ in range(data['n_cons']):
         vars_in_con = rng.randint(2, (2 * cfg.vars_per_con) + 1)
-        data['cons_coeffs'].append(list(rng.randint(1, cfg.n_vars + 1, vars_in_con)))
+        data['cons_coeffs'].append(list(rng.choice(items, vars_in_con, replace=False)))
 
     # Ensure no variable is missed
     var_count = []
