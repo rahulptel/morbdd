@@ -147,6 +147,7 @@ int BDDEnv::set_inst(int n_vars,
         // create associated independent set instance
         inst_indepset = inst_setpack.create_indepset_instance();
         // inst_indepset = new IndepSetInst(n_vars, cons_coeffs, obj_coeffs);
+        inst_indepset->obj_coeffs = obj_coeffs;
 
         return 0;
     }
