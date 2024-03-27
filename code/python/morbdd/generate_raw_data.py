@@ -137,59 +137,58 @@ def get_pareto_states_per_layer_knapsack(weight, x):
 def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
     x_sol = np.array(x_sol)
     pareto_state_scores = []
-    counter = 0
 
+    total = x_sol.shape[0]
+    # print(set(list(x_sol[:, 0])))
     for i in range(1, x_sol.shape[1]):
         # Get partial sols upto level i in BDD
         partial_sols = x_sol[:, :i]
-        # Find unique partial sols
-        uniques = defaultdict(int)
-        for ps in partial_sols:
-            if ps not in uniques:
-                uniques[ps] = 1
-            else:
-                uniques[ps] += 1
-        total = x_sol.shape[0]
+        uniques, counts = np.unique(partial_sols, axis=0, return_counts=True)
 
-        _pareto_states = []
-        counts = []
+        pareto_states = []
+        pareto_counts = []
+
         # Compute pareto state for each unique sol
-        for unique_sol, count in uniques.items():
-            pareto_state = np.ones(x_sol.shape[1])
+        for unique_sol, count in zip(uniques, counts):
+            _pareto_state = np.ones(x_sol.shape[1])
             for var_idx, is_active in enumerate(list(unique_sol)):
                 var = order[var_idx]
-                pareto_state[var] = 0
+                _pareto_state[var] = 0
+                # print(var_idx, var, is_active)
                 if is_active:
-                    pareto_state = np.logical_and(pareto_state, adj_list_comp[var]).astype(int)
+                    # print(adj_list_comp[var])
+                    _pareto_state = np.logical_and(_pareto_state, adj_list_comp[var]).astype(int)
+                    # print(_pareto_state)
 
             is_found = False
-            for i, ps in enumerate(_pareto_states):
-                if np.array_equal(pareto_state, ps):
-                    counts[i] += count
+            for j, ps in enumerate(pareto_states):
+                # print(_pareto_state, ps, np.array_equal(_pareto_state))
+                if np.array_equal(_pareto_state, ps):
+                    pareto_counts[j] += count
                     is_found = True
                     break
             if not is_found:
-                _pareto_states.append(pareto_state)
-                counts.append(count)
-                counter += 1
+                # print(_pareto_state, "not found")
+                pareto_states.append(_pareto_state)
+                pareto_counts.append(count)
 
-        pareto_state_scores.append([(i, j / total)
-                                    for i, j in zip(_pareto_states, counts)])
+        pareto_state_scores.append([(a, b / total)
+                                    for a, b in zip(pareto_states, pareto_counts)])
 
     return pareto_state_scores
 
 
-def get_pareto_states_per_layer(problem_type, data, x_sol, order=None, graph_type=None):
-    pareto_sols_per_layer = None
+def get_pareto_state_scores_per_layer(problem_type, data, x_sol, order=None, graph_type=None):
+    pareto_state_scores = None
     if problem_type == 1:
-        pareto_sols_per_layer = get_pareto_states_per_layer_knapsack(data["cons_coeffs"][0], x_sol)
+        pareto_state_scores = get_pareto_states_per_layer_knapsack(data["cons_coeffs"][0], x_sol)
     elif problem_type == 2:
         if graph_type == "stidsen":
-            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
+            pareto_state_scores = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
         elif graph_type == "ba":
-            pareto_sols_per_layer = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
+            pareto_state_scores = get_pareto_states_per_layer_indepset(order, x_sol, data["adj_list_comp"])
 
-    return pareto_sols_per_layer
+    return pareto_state_scores
 
 
 def tag_dd_nodes(bdd, pareto_state_scores):
@@ -256,10 +255,12 @@ def worker(rank, cfg):
         time_fetch = time.time() - start
 
         exact_size = []
-        for layer in enumerate(dd):
+        for i, layer in enumerate(dd):
             exact_size.append(len(layer))
+            print(i, exact_size[-1])
         print(np.mean(exact_size), np.max(exact_size))
         dynamic_order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
+        print(dynamic_order)
 
         print("7/10: Computing Pareto Frontier...")
         try:
@@ -281,53 +282,59 @@ def worker(rank, cfg):
         frontier = env.get_frontier()
 
         print("9/10: Marking Pareto nodes...")
-        pareto_state_scores = get_pareto_states_per_layer(cfg.problem_type, data, frontier["x"],
-                                                          graph_type=cfg.graph_type)
-        dd = tag_dd_nodes(dd, pareto_state_scores)
+        pareto_state_scores = get_pareto_state_scores_per_layer(cfg.problem_type, data, frontier["x"],
+                                                                order=dynamic_order,
+                                                                graph_type=cfg.graph_type)
 
-        print("10/10: Saving data...")
-        # Save BDD
-        file_path = path.resource / f"bdds/{cfg.prob}/{cfg.size}/{cfg.split}"
-        file_path.mkdir(parents=True, exist_ok=True)
-        file_path /= f"{pid}.json"
-        with open(file_path, "w") as fp:
-            json.dump(dd, fp)
+        for l, pareto_state_scores in enumerate(pareto_state_scores):
+            print(l, exact_size[l], len(pareto_state_scores), exact_size[l] >= len(pareto_state_scores))
 
-        # Save Solution
-        file_path = path.resource / f"sols/{cfg.prob}/{cfg.size}/{cfg.split}"
-        file_path.mkdir(parents=True, exist_ok=True)
-        file_path /= f"{pid}.json"
-        with open(file_path, "w") as fp:
-            json.dump(frontier, fp)
+        # dd = tag_dd_nodes(dd, pareto_state_scores)
 
-        # Save stats
-        df = pd.DataFrame([
-            [cfg.size,
-             cfg.split,
-             pid,
-             len(frontier["z"]),
-             env.initial_node_count,
-             env.initial_arcs_count,
-             env.num_comparisons,
-             time_fetch,
-             time_compile,
-             time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
-                                     "compilation", "pareto"])
-        df.to_csv(file_path.parent / f"{pid}.csv", index=False)
+        # print("10/10: Saving data...")
+        # # Save BDD
+        # file_path = path.resource / f"bdds/{cfg.prob}/{cfg.size}/{cfg.split}"
+        # file_path.mkdir(parents=True, exist_ok=True)
+        # file_path /= f"{pid}.json"
+        # with open(file_path, "w") as fp:
+        #     json.dump(dd, fp)
+        #
+        # # Save Solution
+        # file_path = path.resource / f"sols/{cfg.prob}/{cfg.size}/{cfg.split}"
+        # file_path.mkdir(parents=True, exist_ok=True)
+        # file_path /= f"{pid}.json"
+        # with open(file_path, "w") as fp:
+        #     json.dump(frontier, fp)
+        #
+        # # Save stats
+        # df = pd.DataFrame([
+        #     [cfg.size,
+        #      cfg.split,
+        #      pid,
+        #      len(frontier["z"]),
+        #      env.initial_node_count,
+        #      env.initial_arcs_count,
+        #      env.num_comparisons,
+        #      time_fetch,
+        #      time_compile,
+        #      time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
+        #                              "compilation", "pareto"])
+        # df.to_csv(file_path.parent / f"{pid}.csv", index=False)
 
 
 @hydra.main(config_path="./configs", config_name="raw_data.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
 
-    pool = mp.Pool(processes=cfg.n_processes)
-    results = []
-
-    for rank in range(cfg.n_processes):
-        results.append(pool.apply_async(worker, args=(rank, cfg)))
-
-    for r in results:
-        r.get()
+    worker(0, cfg)
+    # pool = mp.Pool(processes=cfg.n_processes)
+    # results = []
+    #
+    # for rank in range(cfg.n_processes):
+    #     results.append(pool.apply_async(worker, args=(rank, cfg)))
+    #
+    # for r in results:
+    #     r.get()
 
 
 if __name__ == "__main__":
