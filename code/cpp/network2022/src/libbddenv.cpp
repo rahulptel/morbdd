@@ -4,7 +4,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(libbddenv, m)
+PYBIND11_MODULE(libbddenvv2o5, m)
 {
     py::class_<BDDEnv>(m, "BDDEnv")
         .def(py::init<>())
@@ -22,7 +22,7 @@ PYBIND11_MODULE(libbddenv, m)
         .def("get_var_layer", &BDDEnv::get_var_layer)
         .def("get_frontier", &BDDEnv::get_frontier)
         .def("get_time", &BDDEnv::get_time)
-        .def("get_num_nodes_per_layer", &BDDEnv::num_nodes_per_layer)
+        .def("get_num_nodes_per_layer", &BDDEnv::get_num_nodes_per_layer)
         .def_readwrite("initial_width", &BDDEnv::initial_width)
         .def_readwrite("initial_node_count", &BDDEnv::initial_node_count)
         .def_readwrite("initial_arcs_count", &BDDEnv::initial_arcs_count)
@@ -36,5 +36,5 @@ PYBIND11_MODULE(libbddenv, m)
         .def_readwrite("num_comparisons_per_layer", &BDDEnv::num_comparisons_per_layer)
         .def_readwrite("in_degree", &BDDEnv::in_degree)
         .def_readwrite("nnds", &BDDEnv::nnds)
-        .def_readwrite("z_sol", &BDDEnv::z_sol)
+        .def_readwrite("z_sol", &BDDEnv::z_sol);
 }
