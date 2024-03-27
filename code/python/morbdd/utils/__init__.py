@@ -93,28 +93,41 @@ def read_instance_indepset(archive, inst):
     else:
         raw_data = read_from_zip(archive, inst)
 
-        data = {"obj_coeffs": [], "cons_coeffs": []}
+        data = {"obj_coeffs": [], "cons_coeffs": [], "rhs": []}
 
         data["n_vars"], data["n_cons"] = list(map(int, raw_data.readline().strip().split()))
         data["n_objs"] = int(raw_data.readline())
         data["adj_list"] = np.zeros((data["n_vars"], data["n_vars"]))
+        data["adj_list_comp"] = np.ones((data["n_vars"], data["n_vars"]))
         for i in range(data["n_vars"]):
             data["adj_list"][i, i] = 1
+            data["adj_list_comp"][i, i] = 0
 
         for _ in range(data["n_objs"]):
             data["obj_coeffs"].append(list(map(int, raw_data.readline().split())))
+        # print(data["obj_coeffs"])
+
         for _ in range(data["n_cons"]):
+            n_vars_per_con = list(map(int, raw_data.readline().strip().split()))[0]
             non_zero_vars = list(map(int, raw_data.readline().strip().split()))
+            # print(n_vars_per_con, non_zero_vars)
             non_zero_vars = [i - 1 for i in non_zero_vars]
             data["cons_coeffs"].append(non_zero_vars)
 
             for i in range(len(non_zero_vars)):
+                i_var = non_zero_vars[i]
                 for j in range(i + 1, len(non_zero_vars)):
-                    data["adj_list"][i, j] = 1
-                    data["adj_list"][j, i] = 1
+                    j_var = non_zero_vars[j]
+                    data["adj_list"][i_var, j_var] = 1
+                    data["adj_list"][j_var, i_var] = 1
+                    data["adj_list_comp"][i_var, j_var] = 0
+                    data["adj_list_comp"][j_var, i_var] = 0
 
-        data["adj_list_comp"] = np.zeros((data["n_vars"], data["n_vars"]))
-        data["adj_list_comp"][data["adj_list"] == 0] = 1
+        # print(data["adj_list"])
+        # data["adj_list_comp"] = np.zeros((data["n_vars"], data["n_vars"]))
+        # data["adj_list_comp"][data["adj_list"] == 0] = 1
+        # print(data["adj_list"][96])
+        # print(data["adj_list_comp"][96])
     return data
 
 
