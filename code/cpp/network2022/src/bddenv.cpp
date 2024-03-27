@@ -142,11 +142,11 @@ int BDDEnv::set_inst(int n_vars,
         cout << "Setting set packing problem..." << endl;
         // _cons_coeff will have variable per constraint array of the shape n_cons x n_vars in constraint
         // variable should be indexed starting from 0
-        // inst_setpack = SetPackingInstance(n_vars, n_cons, n_objs, obj_coeffs, cons_coeffs);
+        inst_setpack = SetPackingInstance(n_vars, n_cons, n_objs, obj_coeffs, cons_coeffs);
 
         // create associated independent set instance
-        // inst_indepset = inst_setpack.create_indepset_instance();
-        inst_indepset = new IndepSetInst(n_vars, cons_coeffs, obj_coeffs);
+        inst_indepset = inst_setpack.create_indepset_instance();
+        // inst_indepset = new IndepSetInst(n_vars, cons_coeffs, obj_coeffs);
 
         return 0;
     }
