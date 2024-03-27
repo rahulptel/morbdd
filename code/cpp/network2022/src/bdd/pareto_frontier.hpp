@@ -366,7 +366,7 @@ inline ObjType ParetoFrontier::get_sum()
 
 inline map<string, vector<vector<int>>> ParetoFrontier::get_frontier()
 {
-    cout << sols.size() << endl;
+    // cout << sols.size() << endl;
     map<string, vector<int>> sol_dict;
     vector<vector<int>> x_sols;
     vector<vector<int>> z_sols;

@@ -261,7 +261,7 @@ int BDDEnv::initialize_dd_constructor()
         {
             indset_bdd_constructor.order_provided = true;
         }
-        indset_bdd_constructor.var_layer.clear();
+        // indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
     // // Set covering problem
@@ -590,7 +590,7 @@ map<string, vector<vector<int>>> BDDEnv::get_frontier()
 {
     if (pareto_frontier != NULL)
     {
-        cout << pareto_frontier->sols.size() << endl;
+        // cout << pareto_frontier->sols.size() << endl;
         return pareto_frontier->get_frontier();
     }
     return {};
