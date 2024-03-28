@@ -15,6 +15,8 @@ resource_path = root_path_dict[machine]
 class ResourcePaths:
     resource = root_path_dict[machine]
     inst = resource / "instances"
+    bdd = resource / "bdds"
+    sol = resource / "sols"
 
 
 class Const:

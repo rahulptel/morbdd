@@ -172,8 +172,10 @@ def get_pareto_states_per_layer_indepset(order, x_sol, adj_list_comp):
                 pareto_states.append(_pareto_state)
                 pareto_counts.append(count)
 
-        pareto_state_scores.append([(a, b / total)
-                                    for a, b in zip(pareto_states, pareto_counts)])
+        for k in range(len(pareto_counts)):
+            pareto_counts[k] /= total
+
+        pareto_state_scores.append((pareto_states, pareto_counts))
 
     return pareto_state_scores
 
@@ -193,14 +195,21 @@ def get_pareto_state_scores_per_layer(problem_type, data, x_sol, order=None, gra
 
 def tag_dd_nodes(bdd, pareto_state_scores):
     assert len(pareto_state_scores) == len(bdd)
+    items = np.array(range(0, 100))
 
     for l in range(len(bdd)):
         pareto_states, pareto_scores = pareto_state_scores[l]
         for pareto_state, score in zip(pareto_states, pareto_scores):
+            _pareto_state = items[pareto_state.astype(bool)]
+            is_found = False
             for n in bdd[l]:
-                if np.array_equal(n["s"], pareto_state):
+                if np.array_equal(n["s"], _pareto_state):
                     n["pareto"] = 1
                     n["score"] = score
+                    is_found = True
+                    break
+
+            assert is_found
 
         for n in bdd[l]:
             if "pareto" not in n:
@@ -257,10 +266,7 @@ def worker(rank, cfg):
         exact_size = []
         for i, layer in enumerate(dd):
             exact_size.append(len(layer))
-            print(i, exact_size[-1])
-        print(np.mean(exact_size), np.max(exact_size))
         dynamic_order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
-        print(dynamic_order)
 
         print("7/10: Computing Pareto Frontier...")
         try:
@@ -285,41 +291,37 @@ def worker(rank, cfg):
         pareto_state_scores = get_pareto_state_scores_per_layer(cfg.problem_type, data, frontier["x"],
                                                                 order=dynamic_order,
                                                                 graph_type=cfg.graph_type)
+        dd = tag_dd_nodes(dd, pareto_state_scores)
 
-        for l, pareto_state_scores in enumerate(pareto_state_scores):
-            print(l, exact_size[l], len(pareto_state_scores), exact_size[l] >= len(pareto_state_scores))
+        print("10/10: Saving data...")
+        # Save BDD
+        file_path = path.bdd / f"{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.json"
+        with open(file_path, "w") as fp:
+            json.dump(dd, fp)
 
-        # dd = tag_dd_nodes(dd, pareto_state_scores)
+        # Save Solution
+        file_path = path.sol / f"{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.json"
+        with open(file_path, "w") as fp:
+            json.dump(frontier, fp)
 
-        # print("10/10: Saving data...")
-        # # Save BDD
-        # file_path = path.resource / f"bdds/{cfg.prob}/{cfg.size}/{cfg.split}"
-        # file_path.mkdir(parents=True, exist_ok=True)
-        # file_path /= f"{pid}.json"
-        # with open(file_path, "w") as fp:
-        #     json.dump(dd, fp)
-        #
-        # # Save Solution
-        # file_path = path.resource / f"sols/{cfg.prob}/{cfg.size}/{cfg.split}"
-        # file_path.mkdir(parents=True, exist_ok=True)
-        # file_path /= f"{pid}.json"
-        # with open(file_path, "w") as fp:
-        #     json.dump(frontier, fp)
-        #
-        # # Save stats
-        # df = pd.DataFrame([
-        #     [cfg.size,
-        #      cfg.split,
-        #      pid,
-        #      len(frontier["z"]),
-        #      env.initial_node_count,
-        #      env.initial_arcs_count,
-        #      env.num_comparisons,
-        #      time_fetch,
-        #      time_compile,
-        #      time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
-        #                              "compilation", "pareto"])
-        # df.to_csv(file_path.parent / f"{pid}.csv", index=False)
+        # Save stats
+        df = pd.DataFrame([
+            [cfg.size,
+             cfg.split,
+             pid,
+             len(frontier["z"]),
+             env.initial_node_count,
+             env.initial_arcs_count,
+             env.num_comparisons,
+             time_fetch,
+             time_compile,
+             time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
+                                     "compilation", "pareto"])
+        df.to_csv(file_path.parent / f"{pid}.csv", index=False)
 
 
 @hydra.main(config_path="./configs", config_name="raw_data.yaml", version_base="1.2")
