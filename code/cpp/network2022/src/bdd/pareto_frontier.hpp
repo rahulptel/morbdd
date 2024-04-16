@@ -39,7 +39,7 @@ public:
     // void merge(const ParetoFrontier &frontier);
 
     // Merge pareto frontier solutions with shift
-    void merge(ParetoFrontier &frontier, int arc_type, ObjType *shift);
+    size_t merge(ParetoFrontier &frontier, int arc_type, ObjType *shift);
 
     // Merge pareto frontier solutions with shift
     void merge_after_convolute(ParetoFrontier &frontier, Solution &sol, bool reverse_outer);
@@ -174,11 +174,12 @@ inline void ParetoFrontier::add(Solution &sol)
 //
 // Merge pareto frontier into existing set considering shift
 //
-inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjType *shift)
+inline size_t ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjType *shift)
 {
     bool must_add;
     bool dominates;
     bool dominated;
+    size_t num_comparisons = 0;
 
     // add artificial solution to avoid rechecking dominance between elements in the
     // set to be merged
@@ -200,6 +201,7 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjTyp
             {
                 dominates &= ((*itParent).obj[o] + shift[o] >= (*itCurr).obj[o]);
                 dominated &= ((*itParent).obj[o] + shift[o] <= (*itCurr).obj[o]);
+                ++num_comparisons;
             }
             if (dominated)
             {
@@ -232,6 +234,8 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjTyp
         }
     }
     sols.erase(end);
+
+    return num_comparisons;
 }
 
 //

@@ -27,6 +27,7 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 	// Initialize stats
 	stats->pareto_dominance_time = 0;
 	stats->pareto_dominance_filtered = 0;
+	stats->num_comparisons = 0;
 	clock_t time_filter = 0, init;
 
 	// Initialize manager
@@ -65,14 +66,18 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 				for (vector<Node *>::iterator prev = (*it)->prev[1].begin();
 					 prev != (*it)->prev[1].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 1, (*prev)->weights[1]);
+					stats->num_comparisons += node->pareto_frontier->merge(*((*prev)->pareto_frontier),
+																		   1,
+																		   (*prev)->weights[1]);
 				}
 
 				// add incoming zero arcs
 				for (vector<Node *>::iterator prev = (*it)->prev[0].begin();
 					 prev != (*it)->prev[0].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 0, (*prev)->weights[0]);
+					stats->num_comparisons += node->pareto_frontier->merge(*((*prev)->pareto_frontier),
+																		   0,
+																		   (*prev)->weights[0]);
 				}
 				total_sol_per_layer += (node->pareto_frontier->sols.size());
 			}
@@ -114,14 +119,18 @@ ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization
 				for (vector<Node *>::iterator prev = (*it)->prev[0].begin();
 					 prev != (*it)->prev[0].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 0, (*prev)->weights[0]);
+					stats->num_comparisons += node->pareto_frontier->merge(*((*prev)->pareto_frontier),
+																		   0,
+																		   (*prev)->weights[0]);
 				}
 
 				// add incoming one arcs
 				for (vector<Node *>::iterator prev = (*it)->prev[1].begin();
 					 prev != (*it)->prev[1].end(); ++prev)
 				{
-					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 1, (*prev)->weights[1]);
+					stats->num_comparisons += node->pareto_frontier->merge(*((*prev)->pareto_frontier),
+																		   1,
+																		   (*prev)->weights[1]);
 				}
 
 				// TODO

@@ -21,10 +21,12 @@ struct MultiObjectiveStats
     int pareto_dominance_filtered;
     // Layer where coupling happened
     int layer_coupling;
+    // Number of comparisons done to enumerate the PF
+    size_t num_comparisons;
 
     // Constructor
     MultiObjectiveStats()
-        : pareto_dominance_time(0), pareto_dominance_filtered(0), layer_coupling(0)
+        : pareto_dominance_time(0), pareto_dominance_filtered(0), layer_coupling(0), num_comparisons(0)
     {
     }
 };
