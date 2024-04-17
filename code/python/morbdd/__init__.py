@@ -17,6 +17,7 @@ class ResourcePaths:
     inst = resource / "instances"
     bdd = resource / "bdds"
     sol = resource / "sols"
+    order = resource / "orders"
 
 
 class Const:

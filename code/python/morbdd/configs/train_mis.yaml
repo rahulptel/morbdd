@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+prob:
+  name: indepset
+  prefix: ind
+  n_objs: 3
+  n_vars: 100
+  attach: 4
+  seed: 7
+
+size:
+train:
+  from_pid: 0
+  to_pid: 1
+  epochs: 1
+
+val:
+  every: 1
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

@@ -295,18 +295,26 @@ def worker(rank, cfg):
 
         print("10/10: Saving data...")
         # Save BDD
-        file_path = path.bdd / f"{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path = path.bdd / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)
         file_path /= f"{pid}.json"
         with open(file_path, "w") as fp:
             json.dump(dd, fp)
 
         # Save Solution
-        file_path = path.sol / f"{cfg.prob}/{cfg.size}/{cfg.split}"
+        file_path = path.sol / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)
         file_path /= f"{pid}.json"
         with open(file_path, "w") as fp:
+            frontier["order"] = dynamic_order
             json.dump(frontier, fp)
+
+        # Save order
+        file_path = path.order / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.dat"
+        with open(file_path, "w") as fp:
+            fp.write(" ".join(map(str, dynamic_order)))
 
         # Save stats
         df = pd.DataFrame([
@@ -316,11 +324,11 @@ def worker(rank, cfg):
              len(frontier["z"]),
              env.initial_node_count,
              env.initial_arcs_count,
-             env.num_comparisons,
+             -1,
              time_fetch,
              time_compile,
              time_pareto]], columns=["size", "split", "pid", "nnds", "inc", "iac", "Comp.",
-                                     "compilation", "pareto"])
+                                     "fetch", "compilation", "pareto"])
         df.to_csv(file_path.parent / f"{pid}.csv", index=False)
 
 
