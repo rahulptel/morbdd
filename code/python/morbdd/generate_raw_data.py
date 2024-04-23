@@ -224,7 +224,7 @@ def worker(rank, cfg):
     env = libv2.BDDEnv()
     signal.signal(signal.SIGALRM, handle_timeout)
 
-    for pid in range(rank, cfg.to_pid, cfg.n_processes):
+    for pid in range(cfg.from_pid + rank, cfg.to_pid, cfg.n_processes):
         print("1/10: Fetching instance data and order...")
         data = get_instance_data(cfg.prob.name, cfg.size, cfg.split, pid)
         order = get_static_order(cfg.prob.name, cfg.order_type, data)
@@ -294,6 +294,13 @@ def worker(rank, cfg):
         dd = tag_dd_nodes(dd, pareto_state_scores)
 
         print("10/10: Saving data...")
+        # Save order
+        file_path = path.order / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.dat"
+        with open(file_path, "w") as fp:
+            fp.write(" ".join(map(str, dynamic_order)))
+
         # Save BDD
         file_path = path.bdd / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)
@@ -308,13 +315,6 @@ def worker(rank, cfg):
         with open(file_path, "w") as fp:
             frontier["order"] = dynamic_order
             json.dump(frontier, fp)
-
-        # Save order
-        file_path = path.order / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
-        file_path.mkdir(parents=True, exist_ok=True)
-        file_path /= f"{pid}.dat"
-        with open(file_path, "w") as fp:
-            fp.write(" ".join(map(str, dynamic_order)))
 
         # Save stats
         df = pd.DataFrame([

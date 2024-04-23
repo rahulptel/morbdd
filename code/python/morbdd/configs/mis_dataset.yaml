@@ -1,0 +1,58 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+prob:
+  name: indepset
+  prefix: ind
+  n_objs: 3
+  n_vars: 100
+  attach: 4
+  seed: 7
+
+size:
+split: train
+from_pid: 0
+to_pid: 1
+pos_to_neg_ratio: 2
+n_processes: 1
+
+# Which binary version to use
+# multiobj: Bergman, D., & Cire, A. A. (2016). Multiobjective optimization by decision diagrams. In Principles and Practice of Constraint Programming: 22nd International Conference, CP 2016, Toulouse, France, September 5-9, 2016, Proceedings 22 (pp. 86-95). Springer International Publishing.
+# network: Bergman, D., Bodur, M., Cardonha, C., & Cire, A. A. (2022). Network models for multiobjective discrete optimization. INFORMS Journal on Computing, 34(2), 990-1005.
+bin: network
+# 1: knapsack
+# 2: Setpack/indepset
+# 3: Setcover (not working)
+# 4: Max Cardinality
+# 5: TSP
+problem_type: 2
+# 0: Do nothing
+# 1: Minimize bandwidth
+preprocess: false
+# 1: top-down
+# 2: bottom-up (not working)
+# 3: coupled
+pf_enum_method: 1
+# Is problem is maximization form
+maximization: true
+# Dominance strategy
+dominance: false
+# BDD Type
+# 0: Exact
+# 1: Restricted
+bdd_type: 0
+# Only used when bdd_type > 0
+maxwidth: 0
+order_type: min_state
+# Graph type for Set Packing/Independent Set problem
+graph_type: stidsen
+# Time limit to compute the Pareto frontier
+time_limit: 1800
+
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
