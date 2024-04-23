@@ -18,6 +18,7 @@ class ResourcePaths:
     bdd = resource / "bdds"
     sol = resource / "sols"
     order = resource / "orders"
+    dataset = resource / "datasets"
 
 
 class Const:
