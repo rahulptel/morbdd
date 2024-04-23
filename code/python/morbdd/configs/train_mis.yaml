@@ -12,13 +12,35 @@ prob:
   seed: 7
 
 size:
+
 train:
   from_pid: 0
-  to_pid: 1
+  to_pid: 100
   epochs: 1
+  bs:
 
 val:
-  every: 1
+  from_pid: 1000
+  to_pid: 1100
+  every: 10
+
+batch_size: 128
+opt:
+  name: Adam
+emb_dim: 128
+
+
+# Dataset
+problem_type: 2
+# Is problem is maximization form
+maximization: true
+# Graph type for Set Packing/Independent Set problem
+graph_type: stidsen
+# Save parents of nodes in the dataset
+with_parent: false
+# Number of negative samples per one positive sample
+neg_to_pos_ratio: 10
+layer_weight: exponential
 
 hydra:
   output_subdir: null

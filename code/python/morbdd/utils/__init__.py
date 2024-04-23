@@ -68,6 +68,8 @@ def read_from_zip(archive, file, format="raw"):
             data = json.load(raw_data)
         elif format == "npz":
             data = np.load(io.BytesIO(raw_data.read()))
+        elif format == "pt":
+            data = torch.load(io.BytesIO(raw_data.read()))
 
     return data
 

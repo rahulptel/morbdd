@@ -8,6 +8,7 @@ import torch
 from morbdd import ResourcePaths as path
 from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
+from morbdd.utils import get_layer_weights
 
 
 def get_size(cfg):
@@ -87,10 +88,12 @@ def get_node_data(cfg, bdd):
     padded = [np.concatenate((n, np.ones(max_feat - n.shape[0]) * -1)) for n in data_lst]
 
     # Sample weights
+    layer_weights = get_layer_weights(True, cfg.layer_weight, cfg.prob.n_vars)
     weights = []
     for nid, n in enumerate(data_lst):
         label, lid = labels_lst[nid], int(n[0])
         weight = 1 - (counts[lid][label] / n_total)
+        weight *= layer_weights[lid]
         weights.append(weight)
 
     padded, weights, labels = np.stack(padded), np.array(weights), np.array(labels_lst)
@@ -112,14 +115,16 @@ def worker(rank, cfg):
         order = np.array(list(map(int, order.strip().split())))
         # Get node data
         obj_coeffs = torch.from_numpy(np.array(data["obj_coeffs"]))
+        adj = torch.form_numpy(np.array(data["adj_list"]))
         X, Y = get_node_data(cfg, bdd)
         X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
 
         # Save data
         file_path = path.dataset / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
-        file_path /= f"{cfg.neg_to_pos_ratio}_parent" if cfg.with_parent else f"{cfg.neg_to_pos_ratio}_no_parent"
+        prefix = f"{cfg.layer_weight}-{cfg.neg_to_pos_ratio}"
+        file_path /= f"{prefix}-parent" if cfg.with_parent else f"{prefix}-no-parent"
         file_path.mkdir(exist_ok=True, parents=True)
-        obj = {"x": X, "y": Y, "order": order, "obj_coeffs": obj_coeffs}
+        obj = {"x": X, "y": Y, "order": order, "obj_coeffs": obj_coeffs, "adj": adj}
         torch.save(obj, file_path / f"{pid}.pt")
 
 
