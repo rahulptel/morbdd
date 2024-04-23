@@ -225,11 +225,11 @@ def worker(rank, cfg):
     signal.signal(signal.SIGALRM, handle_timeout)
 
     for pid in range(cfg.from_pid + rank, cfg.to_pid, cfg.n_processes):
-        print("1/10: Fetching instance data and order...")
+        print(f"{rank}/1/10: Fetching instance data and order...")
         data = get_instance_data(cfg.prob.name, cfg.size, cfg.split, pid)
         order = get_static_order(cfg.prob.name, cfg.order_type, data)
 
-        print("2/10: Resetting env...")
+        print(f"{rank}/2/10: Resetting env...")
         initialize_run(cfg.bin,
                        env,
                        cfg.problem_type,
@@ -241,24 +241,24 @@ def worker(rank, cfg):
                        cfg.maximization,
                        cfg.dominance)
 
-        print("3/10: Initializing instance...")
+        print(f"{rank}/3/10: Initializing instance...")
         set_instance(cfg.bin,
                      env,
                      cfg.problem_type,
                      data,
                      graph_type=cfg.graph_type)
 
-        print("4/10: Preprocessing instance...")
+        print(f"{rank}/4/10: Preprocessing instance...")
         preprocess_inst(cfg.bin,
                         env,
                         cfg.problem_type)
 
-        print("5/10: Generating decision diagram...")
+        print(f"{rank}/5/10: Generating decision diagram...")
         initialize_dd_constructor(cfg.bin, env)
         env.generate_dd()
         time_compile = env.get_time(CONST.TIME_COMPILE)
 
-        print("6/10: Fetching decision diagram...")
+        print(f"{rank}/6/10: Fetching decision diagram...")
         start = time.time()
         dd = env.get_dd()
         time_fetch = time.time() - start
@@ -268,7 +268,7 @@ def worker(rank, cfg):
             exact_size.append(len(layer))
         dynamic_order = get_dynamic_order(cfg.bin, env, cfg.problem_type, cfg.order_type, order)
 
-        print("7/10: Computing Pareto Frontier...")
+        print(f"{rank}/7/10: Computing Pareto Frontier...")
         try:
             signal.alarm(cfg.time_limit)
             env.compute_pareto_frontier()
@@ -284,16 +284,16 @@ def worker(rank, cfg):
             continue
         time_pareto = env.get_time(CONST.TIME_PARETO)
 
-        print("8/10: Fetching Pareto Frontier...")
+        print(f"{rank}/8/10: Fetching Pareto Frontier...")
         frontier = env.get_frontier()
 
-        print("9/10: Marking Pareto nodes...")
+        print(f"{rank}/9/10: Marking Pareto nodes...")
         pareto_state_scores = get_pareto_state_scores_per_layer(cfg.problem_type, data, frontier["x"],
                                                                 order=dynamic_order,
                                                                 graph_type=cfg.graph_type)
         dd = tag_dd_nodes(dd, pareto_state_scores)
 
-        print("10/10: Saving data...")
+        print(f"{rank}/10/10: Saving data...")
         # Save order
         file_path = path.order / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)
@@ -336,15 +336,17 @@ def worker(rank, cfg):
 def main(cfg):
     cfg.size = get_size(cfg)
 
-    worker(0, cfg)
-    # pool = mp.Pool(processes=cfg.n_processes)
-    # results = []
-    #
-    # for rank in range(cfg.n_processes):
-    #     results.append(pool.apply_async(worker, args=(rank, cfg)))
-    #
-    # for r in results:
-    #     r.get()
+    if cfg.n_processes == 1:
+        worker(0, cfg)
+    else:
+        pool = mp.Pool(processes=cfg.n_processes)
+        results = []
+
+        for rank in range(cfg.n_processes):
+            results.append(pool.apply_async(worker, args=(rank, cfg)))
+
+        for r in results:
+            r.get()
 
 
 if __name__ == "__main__":
