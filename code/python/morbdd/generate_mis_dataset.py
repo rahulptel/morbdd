@@ -1,3 +1,4 @@
+import multiprocessing as mp
 import random
 
 import hydra
@@ -126,15 +127,17 @@ def worker(rank, cfg):
 def main(cfg):
     cfg.size = get_size(cfg)
 
-    worker(0, cfg)
-    # pool = mp.Pool(processes=cfg.n_processes)
-    # results = []
-    #
-    # for rank in range(cfg.n_processes):
-    #     results.append(pool.apply_async(worker, args=(rank, cfg)))
-    #
-    # for r in results:
-    #     r.get()
+    if cfg.n_processes == 1:
+        worker(0, cfg)
+    else:
+        pool = mp.Pool(processes=cfg.n_processes)
+        results = []
+
+        for rank in range(cfg.n_processes):
+            results.append(pool.apply_async(worker, args=(rank, cfg)))
+
+        for r in results:
+            r.get()
 
 
 if __name__ == "__main__":
