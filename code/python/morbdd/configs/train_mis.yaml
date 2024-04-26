@@ -15,19 +15,29 @@ size:
 
 train:
   from_pid: 0
-  to_pid: 100
+  to_pid: 1
   epochs: 1
-  bs:
 
 val:
   from_pid: 1000
-  to_pid: 1100
-  every: 10
+  to_pid: 1001
+  every: 1
 
 batch_size: 128
+n_emb: 128
 opt:
   name: Adam
-emb_dim: 128
+# cat | add
+agg: sum
+
+# Graph_enc
+graph_enc:
+  n_layers: 2
+  n_feat: 4
+  n_emb: ${n_emb}
+  activation: relu
+  dropout: 0.1
+  bias: true
 
 
 # Dataset

@@ -31,43 +31,61 @@ class MISDataset(Dataset):
         dtype += "parent" if cfg.with_parent else "no-parent"
 
         prefix = f"{cfg.size}/{split}/{dtype}"
-        self.X, self.Y, self.orders, self.masks, self.obj_coeffs, self.weights = [], [], [], [], [], []
+        self.X, self.Y, self.weights = [], [], []
+        self.adj, self.obj_coeffs, self.orders, self.masks, self.var_idxs = [], [], [], [], []
         self.id_to_inst = []
 
         for pid in range(from_pid, to_pid):
             file = prefix + f"/{pid}.pt"
             idata = read_from_zip(archive, file, format="pt")
-            x, y, order, obj_coeffs = idata["x"], idata["y"], idata["order"], idata["obj_coeffs"]
+            x, y, adj, order, obj_coeffs = idata["x"], idata["y"], idata["adj"], idata["order"], idata["obj_coeffs"]
+
+            # Node weight
             weight = x[:, 0]
 
+            # Layer in which the node belongs
             lids = x[:, 1].numpy().astype(int)
             mask = np.ones((x.shape[0], cfg.prob.n_vars))
             for l, m in zip(lids, mask):
                 m[order[:l + 1]] = 0
+                self.var_idxs.append(order[l + 1])
             mask = torch.from_numpy(mask)
 
-            self.weights.append(weight)
+            # n_nodes x n_node_features_0
             self.X.append(x[:, 1:])
+            # n_nodes
             self.Y.append(y)
-            self.orders.append(order)
+            # n_nodes
+            self.weights.append(weight)
+            # n_nodes x n_vars_mis
             self.masks.append(mask)
-            self.obj_coeffs.append(obj_coeffs)
+            # n_nodes
             self.id_to_inst.extend([pid] * x.shape[0])
+
+            # n_vars_mip x n_vars_mip
+            self.adj.append(adj)
+            # n_vars_mip
+            self.orders.append(order)
+            # n_objs x n_vars_mip
+            self.obj_coeffs.append(obj_coeffs)
 
         self.X = torch.cat(self.X, dim=0).float()
         self.Y = torch.cat(self.Y, dim=0).float()
+        self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
         self.masks = torch.cat(self.masks, dim=0).float()
+        self.var_idxs = torch.from_numpy(np.array(self.var_idxs)).float()
+
+        self.adj = torch.stack(self.adj, dim=0).float()
         self.orders = torch.stack(self.orders, dim=0).float()
         self.obj_coeffs = torch.stack(self.obj_coeffs, dim=0).float()
         self.obj_coeffs = self.obj_coeffs.permute(0, 2, 1)
-        self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
 
     def __len__(self):
         return self.X.shape[0]
 
     def __getitem__(self, i):
         pid = self.id_to_inst[i]
-        return self.X[i], self.Y[i], self.masks[i], self.obj_coeffs[pid]
+        return self.X[i], self.Y[i], self.masks[i], self.adj[pid], self.obj_coeffs[pid], self.var_idxs[i]
 
     def __str__(self):
         text = f"X:  {self.X.shape}\n"
@@ -79,57 +97,155 @@ class MISDataset(Dataset):
         return text
 
 
-class NodeEncoder(nn.Module):
-    def __init__(self, n_features):
-        super(NodeEncoder, self).__init__()
-        self.linear1 = nn.Linear(n_features, 3 * 128)
-        self.encX = nn.Linear(3 * 128, 128)
-        self.encPN = nn.Linear(3 * 128, 128)
-        self.encNN = nn.Linear(3 * 128, 128)
-        self.relu = nn.ReLU()
-        self.layer_norm = nn.LayerNorm(128 * 3)
+class FeedForwardUnit(nn.Module):
+    def __init__(self, ni, nh, no, dropout=0.0, bias=True, activation="relu"):
+        super(FeedForwardUnit, self).__init__()
+        self.i2h = nn.Linear(ni, nh, bias=bias)
+        self.h2o = nn.Linear(nh, no, bias=bias)
+        if activation == "relu":
+            self.act = nn.ReLU()
+        elif activation == "gelu":
+            self.act = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, pos_adj):
-        neg_adj = 1 - pos_adj
-
-        x = self.relu(self.linear1(x))
-
-        x1 = self.encX(x)
-        x2 = pos_adj @ self.encPN(x)
-        x3 = neg_adj @ self.encNN(x)
-        x = torch.cat((x1, x2, x3), dim=2)
-
-        x = self.layer_norm(x)
+    def forward(self, x):
+        x = self.i2h(x)
+        x = self.act(x)
+        x = self.h2o(x)
+        x = self.dropout(x)
 
         return x
+
+
+class GraphForwardUnit(nn.Module):
+    def __init__(self, ni, nh, no, dropout=0.0, bias=True, activation="relu"):
+        super(GraphForwardUnit, self).__init__()
+        self.dropout = nn.Dropout(dropout)
+        self.ln_1 = nn.LayerNorm(ni)
+        self.ffu = FeedForwardUnit(ni, nh, no, dropout=dropout, bias=bias, activation=activation)
+
+        self.i2o = None
+        if ni != no:
+            self.i2o = nn.Linear(ni, no, bias=False)
+        if activation == "relu":
+            self.act = nn.ReLU()
+        elif activation == "gelu":
+            self.act = nn.GELU()
+
+        self.ln_2 = nn.LayerNorm(no)
+        self.pos = nn.Linear(no, no, bias)
+
+        self.ln_3 = nn.LayerNorm(no)
+        self.neg = nn.Linear(no, no, bias)
+        self.combine = nn.Linear(2 * no, no, bias)
+
+    def forward(self, x, adj):
+        neg_adj = 1 - adj
+
+        ffu_x = self.ffu(self.ln_1(x))
+        x = x if self.i2o is None else self.i2o(x)
+        x = x + ffu_x
+
+        x_pos = self.act(self.pos(self.ln_2(adj @ x)))
+        x_neg = self.act(self.neg(self.ln_3(neg_adj @ x)))
+        x = x + self.act(self.combine(self.dropout(torch.cat((x_pos, x_neg), dim=-1))))
+
+        return x
+
+
+class GraphVariableEncoder(nn.Module):
+    def __init__(self, cfg):
+        super(GraphVariableEncoder, self).__init__()
+        self.cfg = cfg
+        self.n_layers = self.cfg.graph_enc.n_layers
+        n_feat = self.cfg.graph_enc.n_feat
+        n_emb = self.cfg.graph_enc.n_emb
+        act = self.cfg.graph_enc.activation
+        dp = self.cfg.graph_enc.dropout
+        bias = self.cfg.graph_enc.bias
+
+        self.units = nn.ModuleList()
+        for layer in range(self.n_layers):
+            if layer == 0:
+                self.units.append(GraphForwardUnit(n_feat, n_emb, n_emb, dropout=dp, activation=act, bias=bias))
+            else:
+                self.units.append(GraphForwardUnit(n_emb, n_emb, n_emb, dropout=dp, activation=act, bias=bias))
+
+    def forward(self, x, adj):
+        for layer in range(self.n_layers):
+            x = self.units[layer](x, adj)
+
+        return x
+
+
+#
+# class StateEncoder(nn.Module):
+#     def __init__(self, n_features):
+#         super(StateEncoder, self).__init__()
+#         self.linear1 = nn.Linear(n_features, 3 * 128)
+#         self.encX = nn.Linear(3 * 128, 128)
+#         self.encPN = nn.Linear(3 * 128, 128)
+#         self.encNN = nn.Linear(3 * 128, 128)
+#         self.relu = nn.ReLU()
+#         self.layer_norm = nn.LayerNorm(128 * 3)
+#
+#     def forward(self, x, pos_adj):
+#         neg_adj = 1 - pos_adj
+#
+#         x = self.relu(self.linear1(x))
+#
+#         x1 = self.encX(x)
+#         x2 = pos_adj @ self.encPN(x)
+#         x3 = neg_adj @ self.encNN(x)
+#         x = torch.cat((x1, x2, x3), dim=2)
+#
+#         x = self.layer_norm(x)
+#
+#         return x
 
 
 class ParetoNodePredictor(nn.Module):
     def __init__(self, cfg):
         super(ParetoNodePredictor, self).__init__()
-        self.enc1 = nn.Linear(3 * 128, 64)
-        self.enc2 = nn.Linear(128, 64)
-        self.enc3 = nn.Linear(64, 1)
-        self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
+        self.variable_encoder = GraphVariableEncoder(cfg)
+        # self.state_encoder = StateEncoder(cfg)
+        self.layer_encoding = nn.Parameter(torch.randn(cfg.prob.n_vars, cfg.n_emb))
 
-        self.layer_encoding = nn.Parameter(torch.randn(cfg.prob.n_vars, cfg.emb_dim))
+        self.ln = nn.LayerNorm(cfg.n_emb)
+        if cfg.agg == "sum":
+            self.linear1 = nn.Linear(cfg.n_emb, 1)
+        if cfg.agg == "cat":
+            self.linear1 = nn.Linear(4 * cfg.n_emb, cfg.n_emb)
 
-    def forward(self, node, mask, coeff, adj):
-        mask = mask.unsqueeze(2)
-        var_feat = torch.cat((coeff, mask), dim=-1)
+    def forward(self, node_feat, var_feat, adj, var_id):
+        print(node_feat.shape, var_feat.shape, adj.shape, var_id.shape)
 
-        vars_enc = self.variable_encoder(var_feat, adj)
+        var_enc = self.variable_encoder(var_feat, adj)  # B x n_var_mis x n_emb
+        B, nV, nF = var_enc.shape
 
-        layer_enc = self.layer_encoding[node[:, 1].view(-1).int()]
-        state_enc = todo
-        var_enc = todo
+        graph_enc = var_enc.sum(dim=1)  # B x n_emb
+        layer_var_enc = var_enc[torch.arange(B).unsqueeze(1), var_id.unsqueeze(1).int(), :].squeeze(1)  # B x n_emb
+        layer_enc = self.layer_encoding[node_feat[:, 0].view(-1).int()]
 
-        # ve = self.relu(self.enc1(ve))
-        # se = self.relu(self.enc1(se))
-        # x = self.sigmoid(self.enc2(torch.cat((ve, se), dim=-1)))
+        print(type(node_feat[0][1:].int()))
+        print(var_enc.shape, var_enc[0].shape, node_feat.shape)
 
-        return node
+        print(node_feat[0][1:].int())
+        print(var_enc[0, node_feat[0, 1:].int(), :].shape)
+
+        state_enc = torch.stack([ve[node_feat[i, 1:].int()].sum(dim=1)
+                                 for i, ve in enumerate(var_enc)])
+        print(state_enc.shape)
+        #
+        # x = None
+        # if self.cfg.agg == "sum":
+        #     x = graph_enc + layer_var_enc + layer_enc + state_enc
+        # elif self.cfg.agg == "cat":
+        #     x = torch.cat((graph_enc, layer_var_enc, layer_enc, state_enc), dim=-1)
+        #
+        # self.relu(self.linear1(self.dropout(self.ln(x))))
+        # return x
 
 
 def pad_samples(samples, max_parents, n_vars):
@@ -176,9 +292,13 @@ def main(cfg):
     val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
     predictor = ParetoNodePredictor(cfg)
     for i, batch in enumerate(train_loader):
-        x, y, mask, coeffs = batch
-        print(x.shape, y.shape, mask.shape, coeffs.shape)
-        predictor(x, mask, coeffs, x)
+        nf, y, m, adj, ocoeff, vidx = batch
+
+        mask = m.unsqueeze(2)
+        vf = torch.cat((ocoeff, mask), dim=-1)
+
+        predictor(nf, vf, adj, vidx)
+
         break
     # Build model
 
