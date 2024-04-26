@@ -115,7 +115,7 @@ def worker(rank, cfg):
         order = np.array(list(map(int, order.strip().split())))
         # Get node data
         obj_coeffs = torch.from_numpy(np.array(data["obj_coeffs"]))
-        adj = torch.form_numpy(np.array(data["adj_list"]))
+        adj = torch.from_numpy(np.array(data["adj_list"]))
         X, Y = get_node_data(cfg, bdd)
         X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
 
