@@ -3,12 +3,13 @@ import random
 import hydra
 import numpy as np
 import torch
+import torch.nn.functional as F
+import torch.optim as optim
 from torch import nn
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from morbdd import ResourcePaths as path
 from morbdd.utils import read_from_zip
-import torch.optim as optim
 
 random.seed(42)
 
@@ -25,17 +26,21 @@ def get_size(cfg):
 
 class MISDataset(Dataset):
     def __init__(self, cfg, split="train"):
-        from_pid, to_pid = cfg[split].from_pid, cfg[split].to_pid
+        from_pid, to_pid = cfg.dataset.pid[split].start, cfg.dataset.pid[split].end
+        with_parent = cfg.dataset.with_parent
+        layer_weight = cfg.dataset.layer_weight
+        npratio = cfg.dataset.neg_to_pos_ratio
+
         archive = path.dataset / f"{cfg.prob.name}/{cfg.size}.zip"
-        dtype = f"{cfg.layer_weight}-{cfg.neg_to_pos_ratio}-"
-        dtype += "parent" if cfg.with_parent else "no-parent"
+        dtype = f"{layer_weight}-{npratio}-"
+        dtype += "parent" if with_parent else "no-parent"
 
         prefix = f"{cfg.size}/{split}/{dtype}"
         self.X, self.Y, self.weights = [], [], []
         self.adj, self.obj_coeffs, self.orders, self.masks, self.var_idxs = [], [], [], [], []
         self.id_to_inst = []
 
-        for pid in range(from_pid, to_pid):
+        for i, pid in enumerate(range(from_pid, to_pid)):
             file = prefix + f"/{pid}.pt"
             idata = read_from_zip(archive, file, format="pt")
             x, y, adj, order, obj_coeffs = idata["x"], idata["y"], idata["adj"], idata["order"], idata["obj_coeffs"]
@@ -60,7 +65,7 @@ class MISDataset(Dataset):
             # n_nodes x n_vars_mis
             self.masks.append(mask)
             # n_nodes
-            self.id_to_inst.extend([pid] * x.shape[0])
+            self.id_to_inst.extend([i] * x.shape[0])
 
             # n_vars_mip x n_vars_mip
             self.adj.append(adj)
@@ -70,7 +75,7 @@ class MISDataset(Dataset):
             self.obj_coeffs.append(obj_coeffs)
 
         self.X = torch.cat(self.X, dim=0).float()
-        self.Y = torch.cat(self.Y, dim=0).float()
+        self.Y = torch.cat(self.Y, dim=0)
         self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
         self.masks = torch.cat(self.masks, dim=0).float()
         self.var_idxs = torch.from_numpy(np.array(self.var_idxs)).float()
@@ -178,74 +183,50 @@ class GraphVariableEncoder(nn.Module):
         return x
 
 
-#
-# class StateEncoder(nn.Module):
-#     def __init__(self, n_features):
-#         super(StateEncoder, self).__init__()
-#         self.linear1 = nn.Linear(n_features, 3 * 128)
-#         self.encX = nn.Linear(3 * 128, 128)
-#         self.encPN = nn.Linear(3 * 128, 128)
-#         self.encNN = nn.Linear(3 * 128, 128)
-#         self.relu = nn.ReLU()
-#         self.layer_norm = nn.LayerNorm(128 * 3)
-#
-#     def forward(self, x, pos_adj):
-#         neg_adj = 1 - pos_adj
-#
-#         x = self.relu(self.linear1(x))
-#
-#         x1 = self.encX(x)
-#         x2 = pos_adj @ self.encPN(x)
-#         x3 = neg_adj @ self.encNN(x)
-#         x = torch.cat((x1, x2, x3), dim=2)
-#
-#         x = self.layer_norm(x)
-#
-#         return x
-
-
 class ParetoNodePredictor(nn.Module):
     def __init__(self, cfg):
         super(ParetoNodePredictor, self).__init__()
-        self.sigmoid = nn.Sigmoid()
+        self.cfg = cfg
         self.variable_encoder = GraphVariableEncoder(cfg)
         # self.state_encoder = StateEncoder(cfg)
         self.layer_encoding = nn.Parameter(torch.randn(cfg.prob.n_vars, cfg.n_emb))
 
-        self.ln = nn.LayerNorm(cfg.n_emb)
+        self.ff = nn.ModuleList()
+        self.ff.append(nn.LayerNorm(cfg.n_emb))
+        self.ff.append(nn.Dropout(cfg.dropout))
         if cfg.agg == "sum":
-            self.linear1 = nn.Linear(cfg.n_emb, 1)
+            self.ff.append(nn.Linear(cfg.n_emb, 2))
         if cfg.agg == "cat":
-            self.linear1 = nn.Linear(4 * cfg.n_emb, cfg.n_emb)
+            self.ff.append(nn.Linear(4 * cfg.n_emb, 2))
+        self.ff = nn.Sequential(*self.ff)
 
     def forward(self, node_feat, var_feat, adj, var_id):
-        print(node_feat.shape, var_feat.shape, adj.shape, var_id.shape)
+        # B x n_var_mis x n_emb
+        var_enc = self.variable_encoder(var_feat, adj)
 
-        var_enc = self.variable_encoder(var_feat, adj)  # B x n_var_mis x n_emb
+        # B x n_emb
+        graph_enc = var_enc.sum(dim=1)
+
+        # B x n_emb
         B, nV, nF = var_enc.shape
+        layer_var_enc = var_enc[torch.arange(B), var_id.int(), :].squeeze(1)
 
-        graph_enc = var_enc.sum(dim=1)  # B x n_emb
-        layer_var_enc = var_enc[torch.arange(B).unsqueeze(1), var_id.unsqueeze(1).int(), :].squeeze(1)  # B x n_emb
+        # B x n_emb
         layer_enc = self.layer_encoding[node_feat[:, 0].view(-1).int()]
 
-        print(type(node_feat[0][1:].int()))
-        print(var_enc.shape, var_enc[0].shape, node_feat.shape)
-
-        print(node_feat[0][1:].int())
-        print(var_enc[0, node_feat[0, 1:].int(), :].shape)
-
-        state_enc = torch.stack([ve[node_feat[i, 1:].int()].sum(dim=1)
+        # B x n_emb
+        active_vars = node_feat[:, 1:].bool()
+        state_enc = torch.stack([ve[active_vars[i]].sum(dim=0)
                                  for i, ve in enumerate(var_enc)])
-        print(state_enc.shape)
-        #
-        # x = None
-        # if self.cfg.agg == "sum":
-        #     x = graph_enc + layer_var_enc + layer_enc + state_enc
-        # elif self.cfg.agg == "cat":
-        #     x = torch.cat((graph_enc, layer_var_enc, layer_enc, state_enc), dim=-1)
-        #
-        # self.relu(self.linear1(self.dropout(self.ln(x))))
-        # return x
+
+        x = None
+        if self.cfg.agg == "sum":
+            x = graph_enc + layer_var_enc + layer_enc + state_enc
+        elif self.cfg.agg == "cat":
+            x = torch.cat((graph_enc, layer_var_enc, layer_enc, state_enc), dim=-1)
+
+        x = self.ff(x)
+        return x
 
 
 def pad_samples(samples, max_parents, n_vars):
@@ -276,6 +257,45 @@ def reorder_data(data, order):
     return data
 
 
+def train(dataloader, model, optimizer, epoch):
+    model.train()
+    for i, batch in enumerate(dataloader):
+        # Get logits
+        nf, y, m, adj, ocoeff, vidx = batch
+        mask = m.unsqueeze(2)
+        vf = torch.cat((ocoeff, mask), dim=-1)
+        logits = model(nf, vf, adj, vidx)
+
+        # Compute loss
+        loss = F.cross_entropy(logits, y.view(-1))
+
+        # Learn
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
+
+
+def validate(dataloader, model, epoch):
+    accuracy = 0
+
+    model.eval()
+    with torch.no_grad():
+        for batch in dataloader:
+            nf, y, m, adj, ocoeff, vidx = batch
+
+            mask = m.unsqueeze(2)
+            vf = torch.cat((ocoeff, mask), dim=-1)
+            logits = model(nf, vf, adj, vidx)
+            preds = torch.argmax(logits, dim=-1)
+            # print(preds[:5], y[:5], preds[:5] == y[:5])
+            # print(type(preds[:5] == y[:5]))
+            accuracy += (preds == y).int().sum()
+
+    print("Epoch {} Accuracy: {}".format(epoch, accuracy / len(dataloader)))
+
+
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
@@ -283,6 +303,7 @@ def main(cfg):
     # Get dataset and dataloader
     train_dataset = MISDataset(cfg, split="train")
     val_dataset = MISDataset(cfg, split="val")
+    print("Train samples {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
 
     train_loader = DataLoader(train_dataset,
                               batch_size=cfg.batch_size,
@@ -290,78 +311,45 @@ def main(cfg):
                                                             num_samples=len(train_dataset),
                                                             replacement=True))
     val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
-    predictor = ParetoNodePredictor(cfg)
-    for i, batch in enumerate(train_loader):
-        nf, y, m, adj, ocoeff, vidx = batch
 
-        mask = m.unsqueeze(2)
-        vf = torch.cat((ocoeff, mask), dim=-1)
-
-        predictor(nf, vf, adj, vidx)
-
-        break
     # Build model
+    model = ParetoNodePredictor(cfg)
 
     # Initialize optimizer
-    # opt_cls = getattr(optim, cfg.opt.name)
-    # opt_cls(model.params(), lr=cfg.opt.lr)
+    opt_cls = getattr(optim, cfg.opt.name)
+    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
 
-    # encoder = NodeEncoder(4)
-    # node_predictor = ParetoNodePredictor()
-    # for epoch in range(cfg.train.epochs):
-    #     random.shuffle(train_ids)
-    #     for i, train_id in enumerate(train_ids):
-    #         archive = path.inst / cfg.prob.name / f"{cfg.size}.zip"
-    #         file = f"{cfg.size}/train/ind_7_{cfg.size}_{train_id}.dat"
-    #         data = read_instance_indepset(archive, file)
-    #
-    #         order_path = path.order / cfg.prob.name / cfg.size / "train" / f"{train_id}.dat"
-    #         print()
-    #
-    #         order = list(map(int, order_path.read_text(encoding="utf-8").strip().split(" ")))
-    #
-    #         bdd_path = path.bdd / cfg.prob.name / cfg.size / "train" / f"{train_id}.json"
-    #         bdd = json.load(open(bdd_path, "r"))
-    #
-    #         pos, neg = get_dataset(bdd)
-    #
-    #         ranks = []
-    #         for p in pos:
-    #             rank = np.ones_like(order) * -1.0
-    #             for r in range(p[0] + 1):
-    #                 rank[order[r]] = (r + 1) / cfg.prob.n_vars
-    #             ranks.append(rank)
-    #         ranks = np.array(ranks)
-    #         ranks = np.expand_dims(ranks, 2)
-    #
-    #         obj_coeffs = np.array(data["obj_coeffs"])
-    #         obj_coeffs = obj_coeffs.T
-    #         obj_coeffs = obj_coeffs[np.newaxis, :, :]
-    #         obj_coeffs = np.repeat(obj_coeffs, 404, 0)
-    #
-    #         features = np.concatenate((obj_coeffs, ranks), axis=2)
-    #
-    #         features_t = torch.from_numpy(features).float()
-    #         pos_adj = np.expand_dims(data['adj_list'], 0)
-    #         pos_adj = np.repeat(pos_adj, 404, 0)
-    #         pos_adj = torch.from_numpy(pos_adj).float()
-    #
-    #         node_emb = encoder(features_t, pos_adj)
-    #         print(node_emb.shape)
-    #
-    #         variable_emb = []
-    #         state_emb = []
-    #
-    #         for p, ne in zip(pos, node_emb):
-    #             variable_emb.append(ne[order[p[0]]])
-    #             state_emb.append(T.sum(ne[p[1]], dim=0))
-    #
-    #         variable_emb = torch.stack(variable_emb, dim=0)
-    #         state_emb = torch.stack(state_emb, dim=0)
-    #         preds = node_predictor(variable_emb, state_emb)
-    #
-    #         if i % cfg.val.every == 0:
-    #             pass
+    for epoch in range(cfg.epochs):
+        for i, batch in enumerate(train_loader):
+            # Get logits
+            nf, y, m, adj, ocoeff, vidx = batch
+            mask = m.unsqueeze(2)
+            vf = torch.cat((ocoeff, mask), dim=-1)
+            logits = model(nf, vf, adj, vidx)
+            # print(logits.shape)
+            # print(logits[:5])
+
+            # Compute loss
+            loss = F.cross_entropy(logits, y.view(-1))
+
+            # Learn
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
+            # if i == 10:
+            #     break
+
+            if epoch == 0 and i == 0:
+                validate(val_loader, model, epoch)
+
+            # if i % cfg.val_every == 0:
+            #     validate(val_loader, model)
+
+        if epoch % cfg.val_every == 0:
+            validate(val_loader, model, epoch)
+        # break
 
 
 if __name__ == "__main__":

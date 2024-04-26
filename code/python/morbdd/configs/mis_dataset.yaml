@@ -27,7 +27,7 @@ graph_type: stidsen
 # Save parents of nodes in the dataset
 with_parent: false
 # Number of negative samples per one positive sample
-neg_to_pos_ratio: 10
+neg_to_pos_ratio: 2
 layer_weight: exponential
 
 hydra:
