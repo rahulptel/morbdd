@@ -13,22 +13,31 @@ prob:
 
 size:
 
-train:
-  from_pid: 0
-  to_pid: 1
-  epochs: 1
-
-val:
-  from_pid: 1000
-  to_pid: 1001
-  every: 1
-
-batch_size: 128
+# Training config
+epochs: 50
+batch_size: 512
 n_emb: 128
 opt:
   name: Adam
-# cat | add
-agg: sum
+  lr: 1e-3
+agg: sum            # cat | sum
+dropout: 0
+val_every: 5
+
+dataset:
+  pid:
+    train:
+      start: 0
+      end: 100
+    val:
+      start: 1000
+      end: 1100
+
+  # Save parents of nodes in the dataset
+  with_parent: false
+  # Number of negative samples per one positive sample
+  neg_to_pos_ratio: 2
+  layer_weight: exponential
 
 # Graph_enc
 graph_enc:
@@ -39,18 +48,12 @@ graph_enc:
   dropout: 0.1
   bias: true
 
-
-# Dataset
+# Problem
 problem_type: 2
 # Is problem is maximization form
 maximization: true
 # Graph type for Set Packing/Independent Set problem
 graph_type: stidsen
-# Save parents of nodes in the dataset
-with_parent: false
-# Number of negative samples per one positive sample
-neg_to_pos_ratio: 10
-layer_weight: exponential
 
 hydra:
   output_subdir: null

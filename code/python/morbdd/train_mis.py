@@ -277,7 +277,7 @@ def train(dataloader, model, optimizer, epoch):
         print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
 
 
-def validate(dataloader, model, epoch):
+def validate(dataloader, model, epoch, n_samples):
     accuracy = 0
 
     model.eval()
@@ -290,10 +290,10 @@ def validate(dataloader, model, epoch):
             logits = model(nf, vf, adj, vidx)
             preds = torch.argmax(logits, dim=-1)
             # print(preds[:5], y[:5], preds[:5] == y[:5])
-            # print(type(preds[:5] == y[:5]))
-            accuracy += (preds == y).int().sum()
+            # print((preds[:5] == y[:5]), (preds[:5] == y[:5]).numpy().sum())
+            accuracy += (preds == y).numpy().sum()
 
-    print("Epoch {} Accuracy: {}".format(epoch, accuracy / len(dataloader)))
+    print("Epoch {} Accuracy: {}".format(epoch, accuracy / n_samples))
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
@@ -342,13 +342,13 @@ def main(cfg):
             #     break
 
             if epoch == 0 and i == 0:
-                validate(val_loader, model, epoch)
+                validate(val_loader, model, epoch, n_samples=len(val_dataset))
 
             # if i % cfg.val_every == 0:
             #     validate(val_loader, model)
 
         if epoch % cfg.val_every == 0:
-            validate(val_loader, model, epoch)
+            validate(val_loader, model, epoch, n_samples=len(val_dataset))
         # break
 
 
