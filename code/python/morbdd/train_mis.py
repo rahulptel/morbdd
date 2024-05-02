@@ -14,6 +14,7 @@ from morbdd.generate_mis_dataset import get_node_data
 random.seed(42)
 rng = np.random.RandomState(42)
 seeds = rng.randint(1, 10000, 1000)
+from itertools import product
 
 
 def get_size(cfg):
@@ -26,106 +27,108 @@ def get_size(cfg):
             return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}-{cfg.prob.attach}"
 
 
+# class MISDataset(Dataset):
+#     def __init__(self, cfg, split="train"):
+#         from_pid, to_pid = cfg.dataset.pid[split].start, cfg.dataset.pid[split].end
+#         with_parent = cfg.dataset.with_parent
+#         layer_weight = cfg.dataset.layer_weight
+#         npratio = cfg.dataset.neg_to_pos_ratio
+#
+#         archive = path.dataset / f"{cfg.prob.name}/{cfg.size}.zip"
+#         dtype = f"{layer_weight}-{npratio}-"
+#         dtype += "parent" if with_parent else "no-parent"
+#
+#         prefix = f"{cfg.size}/{split}/{dtype}"
+#         self.X, self.Y, self.weights = [], [], []
+#         self.adj, self.obj_coeffs, self.orders, self.masks, self.var_idxs = [], [], [], [], []
+#         self.id_to_inst = []
+#
+#         for i, pid in enumerate(range(from_pid, to_pid)):
+#             file = prefix + f"/{pid}.pt"
+#             idata = read_from_zip(archive, file, format="pt")
+#             x, y, adj, order, obj_coeffs = idata["x"], idata["y"], idata["adj"], idata["order"], idata["obj_coeffs"]
+#
+#             # Node weight
+#             weight = x[:, 0]
+#
+#             # Layer in which the node belongs
+#             lids = x[:, 1].numpy().astype(int)
+#             mask = np.ones((x.shape[0], cfg.prob.n_vars))
+#             for l, m in zip(lids, mask):
+#                 m[order[:l + 1]] = 0
+#                 self.var_idxs.append(order[l + 1])
+#             mask = torch.from_numpy(mask)
+#
+#             # n_nodes x n_node_features_0
+#             self.X.append(x[:, 1:])
+#             # n_nodes
+#             self.Y.append(y)
+#             # n_nodes
+#             self.weights.append(weight)
+#             # n_nodes x n_vars_mis
+#             self.masks.append(mask)
+#             # n_nodes
+#             self.id_to_inst.extend([i] * x.shape[0])
+#
+#             # n_vars_mip x n_vars_mip
+#             self.adj.append(adj)
+#             # n_vars_mip
+#             self.orders.append(order)
+#             # n_objs x n_vars_mip
+#             self.obj_coeffs.append(obj_coeffs)
+#
+#         self.X = torch.cat(self.X, dim=0).float()
+#         self.Y = torch.cat(self.Y, dim=0)
+#         self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
+#         self.masks = torch.cat(self.masks, dim=0).float()
+#         self.var_idxs = torch.from_numpy(np.array(self.var_idxs)).float()
+#
+#         self.adj = torch.stack(self.adj, dim=0).float()
+#         self.orders = torch.stack(self.orders, dim=0).float()
+#         self.obj_coeffs = torch.stack(self.obj_coeffs, dim=0).float()
+#         self.obj_coeffs = self.obj_coeffs.permute(0, 2, 1)
+#
+#     def __len__(self):
+#         return self.X.shape[0]
+#
+#     def __getitem__(self, i):
+#         pid = self.id_to_inst[i]
+#         return self.X[i], self.Y[i], self.masks[i], self.adj[pid], self.obj_coeffs[pid], self.var_idxs[i]
+#
+#     def __str__(self):
+#         text = f"X:  {self.X.shape}\n"
+#         text += f"Y: {self.Y.shape}\n"
+#         text += f"Mask: {self.masks.shape}\n"
+#         text += f"orders: {self.orders.shape}\n"
+#         text += f"obj_coeffs: {self.obj_coeffs.shape}\n"
+#
+#         return text
+
 class MISDataset(Dataset):
-    def __init__(self, cfg, split="train"):
-        from_pid, to_pid = cfg.dataset.pid[split].start, cfg.dataset.pid[split].end
-        with_parent = cfg.dataset.with_parent
-        layer_weight = cfg.dataset.layer_weight
-        npratio = cfg.dataset.neg_to_pos_ratio
-
-        archive = path.dataset / f"{cfg.prob.name}/{cfg.size}.zip"
-        dtype = f"{layer_weight}-{npratio}-"
-        dtype += "parent" if with_parent else "no-parent"
-
-        prefix = f"{cfg.size}/{split}/{dtype}"
-        self.X, self.Y, self.weights = [], [], []
-        self.adj, self.obj_coeffs, self.orders, self.masks, self.var_idxs = [], [], [], [], []
-        self.id_to_inst = []
-
-        for i, pid in enumerate(range(from_pid, to_pid)):
-            file = prefix + f"/{pid}.pt"
-            idata = read_from_zip(archive, file, format="pt")
-            x, y, adj, order, obj_coeffs = idata["x"], idata["y"], idata["adj"], idata["order"], idata["obj_coeffs"]
-
-            # Node weight
-            weight = x[:, 0]
-
-            # Layer in which the node belongs
-            lids = x[:, 1].numpy().astype(int)
-            mask = np.ones((x.shape[0], cfg.prob.n_vars))
-            for l, m in zip(lids, mask):
-                m[order[:l + 1]] = 0
-                self.var_idxs.append(order[l + 1])
-            mask = torch.from_numpy(mask)
-
-            # n_nodes x n_node_features_0
-            self.X.append(x[:, 1:])
-            # n_nodes
-            self.Y.append(y)
-            # n_nodes
-            self.weights.append(weight)
-            # n_nodes x n_vars_mis
-            self.masks.append(mask)
-            # n_nodes
-            self.id_to_inst.extend([i] * x.shape[0])
-
-            # n_vars_mip x n_vars_mip
-            self.adj.append(adj)
-            # n_vars_mip
-            self.orders.append(order)
-            # n_objs x n_vars_mip
-            self.obj_coeffs.append(obj_coeffs)
-
-        self.X = torch.cat(self.X, dim=0).float()
-        self.Y = torch.cat(self.Y, dim=0)
-        self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
-        self.masks = torch.cat(self.masks, dim=0).float()
-        self.var_idxs = torch.from_numpy(np.array(self.var_idxs)).float()
-
-        self.adj = torch.stack(self.adj, dim=0).float()
-        self.orders = torch.stack(self.orders, dim=0).float()
-        self.obj_coeffs = torch.stack(self.obj_coeffs, dim=0).float()
-        self.obj_coeffs = self.obj_coeffs.permute(0, 2, 1)
+    def __init__(self, dataset, n_samples=100, n_layers=100):
+        super(MISDataset, self).__init__()
+        self.items = list(product(range(n_samples), range(n_layers)))
+        self.dataset = dataset
 
     def __len__(self):
-        return self.X.shape[0]
+        return len(self.items)
 
-    def __getitem__(self, i):
-        pid = self.id_to_inst[i]
-        return self.X[i], self.Y[i], self.masks[i], self.adj[pid], self.obj_coeffs[pid], self.var_idxs[i]
+    def __getitem__(self, idx):
+        pid, lid = self.items[idx]
+        obj_coeffs, adj, states, labels = self.dataset[pid]
+        states, labels = states[lid - 1], labels[lid - 1]
 
-    def __str__(self):
-        text = f"X:  {self.X.shape}\n"
-        text += f"Y: {self.Y.shape}\n"
-        text += f"Mask: {self.masks.shape}\n"
-        text += f"orders: {self.orders.shape}\n"
-        text += f"obj_coeffs: {self.obj_coeffs.shape}\n"
+        obj_coeffs = torch.tensor(obj_coeffs).float()
+        adj = torch.from_numpy(adj).float()
+        states = torch.tensor(states)
+        labels = torch.tensor(labels)
 
-        return text
-
-
-obj_coeffs = {
-    "train": {},
-    "val": {}
-}
-
-adj = {
-    "train": {},
-    "val": {}
-}
-
-node_data = {
-    "train": {},
-    "val": {}
-}
+        return obj_coeffs, adj, states, labels
 
 
-def get_node_data(seed, n_vars, bdd, with_parent=False):
+def get_node_data(seed, n_objs, n_vars, bdd, order, with_parent=False):
     random.seed(seed)
-    data_lst = []
-    labels_lst = []
-    counts = []
-    n_total = 0
+    data_lst, labels_lst = [], []
     for lid, layer in enumerate(bdd):
         neg_data_lst = []
         pos_data_lst = []
@@ -133,8 +136,7 @@ def get_node_data(seed, n_vars, bdd, with_parent=False):
             # Binary state of the current node
             state = np.zeros(n_vars)
             state[node['s']] = 1
-            node_data = np.concatenate(([lid], state))
-
+            node_data = np.concatenate(([lid + 1, order[lid + 1]], state))
             if node['score'] > 0:
                 pos_data_lst.append(node_data)
             else:
@@ -156,29 +158,38 @@ def get_node_data(seed, n_vars, bdd, with_parent=False):
         data_lst.append(pos_data_lst)
         labels_lst.append(labels)
 
+    return data_lst, labels_lst
 
-def get_mis_dataset_instance(size, split, pid):
-    global obj_coeffs, adj
+
+def get_mis_dataset_instance(epoch, size, split, n_objs, n_vars, pid):
     archive_bdds = path.bdd / f"indepset/{size}.zip"
 
     # Read instance data
     data = get_instance_data("indepset", size, split, pid)
-    file = f"{size}/{split}/{pid}.json"
-    bdd = read_from_zip(archive_bdds, file, format="json")
     # Read order
     order = path.order.joinpath(f"indepset/{size}/{split}/{pid}.dat").read_text()
     order = np.array(list(map(int, order.strip().split())))
+    # Read bdd
+    file = f"{size}/{split}/{pid}.json"
+    bdd = read_from_zip(archive_bdds, file, format="json")
     # Get node data
-    if pid not in obj_coeffs[split]:
-        obj_coeffs[split][pid] = torch.from_numpy(np.array(data["obj_coeffs"]))
-    if pid not in adj[split]:
-        adj[split][pid] = torch.from_numpy(np.array(data["adj_list"]))
-    X, Y = get_node_data(cfg, bdd)
-    X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
+    states, labels = get_node_data(seeds[epoch], n_objs, n_vars, bdd, order, with_parent=False)
+
+    # obj_coeffs = torch.from_numpy(np.array(data["obj_coeffs"]))
+    # adj = torch.from_numpy(np.array(data["adj_list"]))
+    # X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
+
+    return data["obj_coeffs"], data["adj_list"], states, labels
 
 
-def get_mis_dataset(size, split):
-    pass
+def get_mis_dataset(epoch, size, split, n_objs=3, n_vars=100, from_pid=0, to_pid=1):
+    dataset = []
+    for pid in range(from_pid, to_pid):
+        objs, adj, states, labels = get_mis_dataset_instance(epoch, size, split, n_objs, n_vars, pid)
+        dataset.append((objs, adj, states, labels))
+
+    dataset = MISDataset(dataset, n_samples=to_pid - from_pid, n_layers=100)
+    return dataset
 
 
 def pad_samples(samples, max_parents, n_vars):
@@ -253,9 +264,7 @@ def main(cfg):
     cfg.size = get_size(cfg)
 
     # Get dataset and dataloader
-    val_dataset = MISDataset(cfg, split="val")
-    print("Train samples {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
-
+    val_dataset = get_mis_dataset(0, cfg.size, "val", from_pid=1000, to_pid=1002)
     val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
 
     # Build model
@@ -266,43 +275,42 @@ def main(cfg):
     # optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
 
     for epoch in range(cfg.epochs):
-        train_dataset = MISDataset(cfg, split="train")
+        train_dataset = get_mis_dataset(epoch, cfg.size, "train", from_pid=0, to_pid=2)
         train_loader = DataLoader(train_dataset,
-                                  batch_size=cfg.batch_size,
-                                  sampler=WeightedRandomSampler(train_dataset.weights,
-                                                                num_samples=len(train_dataset),
-                                                                replacement=True))
+                                  batch_size=1)
 
         for i, batch in enumerate(train_loader):
             # Get logits
-            nf, y, m, adj, ocoeff, vidx = batch
-            mask = m.unsqueeze(2)
-            vf = torch.cat((ocoeff, mask), dim=-1)
-            logits = model(nf, vf, adj, vidx)
-            # print(logits.shape)
-            # print(logits[:5])
+            print(batch)
 
-            # Compute loss
-            loss = F.cross_entropy(logits, y.view(-1))
-
-            # Learn
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
-            # if i == 10:
-            #     break
-
-            if epoch == 0 and i == 0:
-                validate(val_loader, model, epoch, n_samples=len(val_dataset))
-
-            # if i % cfg.val_every == 0:
-            #     validate(val_loader, model)
-
-        if epoch % cfg.val_every == 0:
-            validate(val_loader, model, epoch, n_samples=len(val_dataset))
-        # break
+    #         nf, y, m, adj, ocoeff, vidx = batch
+    #         mask = m.unsqueeze(2)
+    #         vf = torch.cat((ocoeff, mask), dim=-1)
+    #         logits = model(nf, vf, adj, vidx)
+    #         # print(logits.shape)
+    #         # print(logits[:5])
+    #
+    #         # Compute loss
+    #         loss = F.cross_entropy(logits, y.view(-1))
+    #
+    #         # Learn
+    #         optimizer.zero_grad()
+    #         loss.backward()
+    #         optimizer.step()
+    #
+    #         print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
+    #         # if i == 10:
+    #         #     break
+    #
+    #         if epoch == 0 and i == 0:
+    #             validate(val_loader, model, epoch, n_samples=len(val_dataset))
+    #
+    #         # if i % cfg.val_every == 0:
+    #         #     validate(val_loader, model)
+    #
+    #     if epoch % cfg.val_every == 0:
+    #         validate(val_loader, model, epoch, n_samples=len(val_dataset))
+    #     # break
 
 
 if __name__ == "__main__":
