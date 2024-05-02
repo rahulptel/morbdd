@@ -4,14 +4,16 @@ import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.optim as optim
-from torch import nn
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 
 from morbdd import ResourcePaths as path
+from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
+from morbdd.generate_mis_dataset import get_node_data
 
 random.seed(42)
+rng = np.random.RandomState(42)
+seeds = rng.randint(1, 10000, 1000)
 
 
 def get_size(cfg):
@@ -102,131 +104,81 @@ class MISDataset(Dataset):
         return text
 
 
-class FeedForwardUnit(nn.Module):
-    def __init__(self, ni, nh, no, dropout=0.0, bias=True, activation="relu"):
-        super(FeedForwardUnit, self).__init__()
-        self.i2h = nn.Linear(ni, nh, bias=bias)
-        self.h2o = nn.Linear(nh, no, bias=bias)
-        if activation == "relu":
-            self.act = nn.ReLU()
-        elif activation == "gelu":
-            self.act = nn.GELU()
-        self.dropout = nn.Dropout(dropout)
+obj_coeffs = {
+    "train": {},
+    "val": {}
+}
 
-    def forward(self, x):
-        x = self.i2h(x)
-        x = self.act(x)
-        x = self.h2o(x)
-        x = self.dropout(x)
+adj = {
+    "train": {},
+    "val": {}
+}
 
-        return x
+node_data = {
+    "train": {},
+    "val": {}
+}
 
 
-class GraphForwardUnit(nn.Module):
-    def __init__(self, ni, nh, no, dropout=0.0, bias=True, activation="relu"):
-        super(GraphForwardUnit, self).__init__()
-        self.dropout = nn.Dropout(dropout)
-        self.ln_1 = nn.LayerNorm(ni)
-        self.ffu = FeedForwardUnit(ni, nh, no, dropout=dropout, bias=bias, activation=activation)
+def get_node_data(seed, n_vars, bdd, with_parent=False):
+    random.seed(seed)
+    data_lst = []
+    labels_lst = []
+    counts = []
+    n_total = 0
+    for lid, layer in enumerate(bdd):
+        neg_data_lst = []
+        pos_data_lst = []
+        for nid, node in enumerate(layer):
+            # Binary state of the current node
+            state = np.zeros(n_vars)
+            state[node['s']] = 1
+            node_data = np.concatenate(([lid], state))
 
-        self.i2o = None
-        if ni != no:
-            self.i2o = nn.Linear(ni, no, bias=False)
-        if activation == "relu":
-            self.act = nn.ReLU()
-        elif activation == "gelu":
-            self.act = nn.GELU()
-
-        self.ln_2 = nn.LayerNorm(no)
-        self.pos = nn.Linear(no, no, bias)
-
-        self.ln_3 = nn.LayerNorm(no)
-        self.neg = nn.Linear(no, no, bias)
-        self.combine = nn.Linear(2 * no, no, bias)
-
-    def forward(self, x, adj):
-        neg_adj = 1 - adj
-
-        ffu_x = self.ffu(self.ln_1(x))
-        x = x if self.i2o is None else self.i2o(x)
-        x = x + ffu_x
-
-        x_pos = self.act(self.pos(self.ln_2(adj @ x)))
-        x_neg = self.act(self.neg(self.ln_3(neg_adj @ x)))
-        x = x + self.act(self.combine(self.dropout(torch.cat((x_pos, x_neg), dim=-1))))
-
-        return x
-
-
-class GraphVariableEncoder(nn.Module):
-    def __init__(self, cfg):
-        super(GraphVariableEncoder, self).__init__()
-        self.cfg = cfg
-        self.n_layers = self.cfg.graph_enc.n_layers
-        n_feat = self.cfg.graph_enc.n_feat
-        n_emb = self.cfg.graph_enc.n_emb
-        act = self.cfg.graph_enc.activation
-        dp = self.cfg.graph_enc.dropout
-        bias = self.cfg.graph_enc.bias
-
-        self.units = nn.ModuleList()
-        for layer in range(self.n_layers):
-            if layer == 0:
-                self.units.append(GraphForwardUnit(n_feat, n_emb, n_emb, dropout=dp, activation=act, bias=bias))
+            if node['score'] > 0:
+                pos_data_lst.append(node_data)
             else:
-                self.units.append(GraphForwardUnit(n_emb, n_emb, n_emb, dropout=dp, activation=act, bias=bias))
+                neg_data_lst.append(node_data)
 
-    def forward(self, x, adj):
-        for layer in range(self.n_layers):
-            x = self.units[layer](x, adj)
+        # Get label
+        n_pos = len(pos_data_lst)
+        labels = [1] * n_pos
+        # data_lst.extend(pos_data_lst)
 
-        return x
+        # Undersample negative class
+        n_neg = min(len(neg_data_lst), n_pos)
+        labels.extend([0] * n_neg)
+        random.shuffle(neg_data_lst)
+        neg_data_lst = neg_data_lst[:n_neg]
+        # data_lst.extend(neg_data_lst)
+        pos_data_lst.extend(neg_data_lst)
+
+        data_lst.append(pos_data_lst)
+        labels_lst.append(labels)
 
 
-class ParetoNodePredictor(nn.Module):
-    def __init__(self, cfg):
-        super(ParetoNodePredictor, self).__init__()
-        self.cfg = cfg
-        self.variable_encoder = GraphVariableEncoder(cfg)
-        # self.state_encoder = StateEncoder(cfg)
-        self.layer_encoding = nn.Parameter(torch.randn(cfg.prob.n_vars, cfg.n_emb))
+def get_mis_dataset_instance(size, split, pid):
+    global obj_coeffs, adj
+    archive_bdds = path.bdd / f"indepset/{size}.zip"
 
-        self.ff = nn.ModuleList()
-        self.ff.append(nn.LayerNorm(cfg.n_emb))
-        self.ff.append(nn.Dropout(cfg.dropout))
-        if cfg.agg == "sum":
-            self.ff.append(nn.Linear(cfg.n_emb, 2))
-        if cfg.agg == "cat":
-            self.ff.append(nn.Linear(4 * cfg.n_emb, 2))
-        self.ff = nn.Sequential(*self.ff)
+    # Read instance data
+    data = get_instance_data("indepset", size, split, pid)
+    file = f"{size}/{split}/{pid}.json"
+    bdd = read_from_zip(archive_bdds, file, format="json")
+    # Read order
+    order = path.order.joinpath(f"indepset/{size}/{split}/{pid}.dat").read_text()
+    order = np.array(list(map(int, order.strip().split())))
+    # Get node data
+    if pid not in obj_coeffs[split]:
+        obj_coeffs[split][pid] = torch.from_numpy(np.array(data["obj_coeffs"]))
+    if pid not in adj[split]:
+        adj[split][pid] = torch.from_numpy(np.array(data["adj_list"]))
+    X, Y = get_node_data(cfg, bdd)
+    X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
 
-    def forward(self, node_feat, var_feat, adj, var_id):
-        # B x n_var_mis x n_emb
-        var_enc = self.variable_encoder(var_feat, adj)
 
-        # B x n_emb
-        graph_enc = var_enc.sum(dim=1)
-
-        # B x n_emb
-        B, nV, nF = var_enc.shape
-        layer_var_enc = var_enc[torch.arange(B), var_id.int(), :].squeeze(1)
-
-        # B x n_emb
-        layer_enc = self.layer_encoding[node_feat[:, 0].view(-1).int()]
-
-        # B x n_emb
-        active_vars = node_feat[:, 1:].bool()
-        state_enc = torch.stack([ve[active_vars[i]].sum(dim=0)
-                                 for i, ve in enumerate(var_enc)])
-
-        x = None
-        if self.cfg.agg == "sum":
-            x = graph_enc + layer_var_enc + layer_enc + state_enc
-        elif self.cfg.agg == "cat":
-            x = torch.cat((graph_enc, layer_var_enc, layer_enc, state_enc), dim=-1)
-
-        x = self.ff(x)
-        return x
+def get_mis_dataset(size, split):
+    pass
 
 
 def pad_samples(samples, max_parents, n_vars):
@@ -301,25 +253,26 @@ def main(cfg):
     cfg.size = get_size(cfg)
 
     # Get dataset and dataloader
-    train_dataset = MISDataset(cfg, split="train")
     val_dataset = MISDataset(cfg, split="val")
     print("Train samples {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
 
-    train_loader = DataLoader(train_dataset,
-                              batch_size=cfg.batch_size,
-                              sampler=WeightedRandomSampler(train_dataset.weights,
-                                                            num_samples=len(train_dataset),
-                                                            replacement=True))
     val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
 
     # Build model
-    model = ParetoNodePredictor(cfg)
+    # model = ParetoNodePredictor(cfg)
 
     # Initialize optimizer
-    opt_cls = getattr(optim, cfg.opt.name)
-    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
+    # opt_cls = getattr(optim, cfg.opt.name)
+    # optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
 
     for epoch in range(cfg.epochs):
+        train_dataset = MISDataset(cfg, split="train")
+        train_loader = DataLoader(train_dataset,
+                                  batch_size=cfg.batch_size,
+                                  sampler=WeightedRandomSampler(train_dataset.weights,
+                                                                num_samples=len(train_dataset),
+                                                                replacement=True))
+
         for i, batch in enumerate(train_loader):
             # Get logits
             nf, y, m, adj, ocoeff, vidx = batch
