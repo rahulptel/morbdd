@@ -8,6 +8,7 @@ import numpy as np
 
 from morbdd import ResourcePaths as path
 from morbdd.utils import read_from_zip
+import random
 
 
 def get_size(cfg):
@@ -72,14 +73,17 @@ def main(cfg):
                 r.get()
 
         tarname = f"bdd-layer-{shard_counter}"
+        files = []
         for i in range(pid, pid + cfg.shard_size):
-            files = list(root.rglob(f"{i}-*.json"))
-            with tarfile.open(root.joinpath(f"{tarname}.tar"), 'a') as tar:
-                for file in files:
-                    tar.add(file, arcname=file.name)
+            files.extend(list(root.rglob(f"{i}-*.json")))
+        # Shuffle files
+        random.shuffle(files)
 
+        with tarfile.open(root.joinpath(f"{tarname}.tar"), 'a') as tar:
             for file in files:
-                os.remove(file)
+                tar.add(file, arcname=file.name)
+        for file in files:
+            os.remove(file)
         shard_counter += 1
 
 

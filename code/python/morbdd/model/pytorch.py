@@ -20,7 +20,8 @@ class MISInputEncoder(nn.Module):
         super(MISInputEncoder, self).__init__()
 
         self.top_k = top_k
-        self.node_encoder = nn.Embedding(101, d_emb)
+        self.linear1 = nn.Linear(2, 128)
+        self.linear2 = nn.Linear(128, d_emb)
         self.edge_encoder = nn.Embedding(2, d_emb)
         self.pos_encoder = nn.Linear(top_k * 2, d_emb)
 
@@ -37,9 +38,17 @@ class MISInputEncoder(nn.Module):
         p = self.pos_encoder(p)  # B x n_vars x d_emb
 
         # Calculate node and edge encodings
-        n = self.node_encoder(n)  # B x n_objs x n_vars x d_emb
+        B, n_objs, n_vars = n.shape
+
+        obj_id = torch.arange(1, n_objs + 1) / 10
+        obj_id = obj_id.repeat((n_vars, 1))
+        obj_id = obj_id.repeat((B, 1, 1)).to(torch.device('cuda'))
+        n = torch.cat((n.transpose(1, 2).unsqueeze(-1), obj_id.unsqueeze(-1)), dim=-1)
+        n = n.transpose(1, 2)
+        n = F.relu(self.linear1(n))  # B x n_objs x n_vars x d_emb
         # Sum aggregate objectives
         n = n.sum(1)  # B x n_vars x d_emb
+        n = F.relu(self.linear2(n))
         # Update node encoding with positional encoding based on SVD
         n = n + p
         e = self.edge_encoder(e)  # B x n_vars x n_vars x d_emb
@@ -195,25 +204,83 @@ class GTEncoder(nn.Module):
                  edge_residual=True):
         super(GTEncoder, self).__init__()
         self.input_encoder = MISInputEncoder(d_emb=d_emb, top_k=top_k)
-        self.encoder = clones(GTEncoderLayer(d_emb=d_emb,
-                                             n_heads=n_heads,
-                                             bias_mha=bias_mha,
-                                             dropout_mha=dropout_mha,
-                                             bias_mlp=bias_mlp,
-                                             dropout_mlp=dropout_mlp,
-                                             h2i_ratio=h2i_ratio,
-                                             node_residual=node_residual,
-                                             edge_residual=edge_residual),
-                              n_blocks)
+        self.encoder_blocks = clones(GTEncoderLayer(d_emb=d_emb,
+                                                    n_heads=n_heads,
+                                                    bias_mha=bias_mha,
+                                                    dropout_mha=dropout_mha,
+                                                    bias_mlp=bias_mlp,
+                                                    dropout_mlp=dropout_mlp,
+                                                    h2i_ratio=h2i_ratio,
+                                                    node_residual=node_residual,
+                                                    edge_residual=edge_residual),
+                                     n_blocks)
 
     def forward(self, n_feat, e_feat):
         n, e = self.input_encoder(n_feat, e_feat)
         for block in self.encoder_blocks:
             n, e = block(n, e)
-            print(n.shape, e.shape)
 
         return n, e
 
+
+class ParetoStatePredictor(nn.Module):
+    def __init__(self,
+                 d_emb=64,
+                 top_k=5,
+                 n_blocks=2,
+                 n_heads=8,
+                 bias_mha=False,
+                 dropout_mha=0,
+                 bias_mlp=True,
+                 dropout_mlp=0.1,
+                 h2i_ratio=2,
+                 node_residual=True,
+                 edge_residual=True):
+        super(ParetoStatePredictor, self).__init__()
+        self.encoder = GTEncoder(d_emb=d_emb,
+                                 top_k=top_k,
+                                 n_blocks=n_blocks,
+                                 n_heads=n_heads,
+                                 bias_mha=bias_mha,
+                                 dropout_mha=dropout_mha,
+                                 bias_mlp=bias_mlp,
+                                 dropout_mlp=dropout_mlp,
+                                 h2i_ratio=h2i_ratio,
+                                 node_residual=node_residual,
+                                 edge_residual=edge_residual)
+        # Graph context
+        self.norm = nn.LayerNorm(d_emb)
+        self.graph_encoder = MLP(d_emb, h2i_ratio * d_emb, d_emb)
+        # Layer index context
+        self.layer_index_encoder = nn.Embedding(100, d_emb)
+        # Layer variable context
+        self.layer_var_encoder = nn.Embedding(100, d_emb)
+        # State
+        self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb)
+
+        self.predictor = nn.Linear(d_emb, 2)
+
+    def forward(self, n_feat, e_feat, lids, vids, indices):
+        n_feat, e_feat = self.encoder(n_feat, e_feat)
+        # pad 0 to n_feat so that
+        B, _, n_emb = n_feat.shape
+        n_feat = torch.cat((n_feat, torch.zeros((B, 1, n_emb)).to(torch.device('cuda'))), dim=1)
+
+        g_emb = self.graph_encoder(n_feat.sum(1))
+        li_emb = self.layer_index_encoder(lids)
+        lv_emb = n_feat[torch.arange(n_feat.shape[0]), vids.int(), :]
+        context = (g_emb + li_emb + lv_emb).unsqueeze(1)
+
+        state_emb = []
+        for ibatch, states in enumerate(indices):
+            state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
+                                          for state in states]))
+        state_emb = torch.stack(state_emb)
+        state_emb = self.aggregator(state_emb)
+        state_emb = state_emb + context
+
+        logits = self.predictor(state_emb)
+        return logits
 
 #
 #
@@ -342,66 +409,66 @@ class GTEncoder(nn.Module):
 #
 #         return x
 
-class SetEncoder(nn.Module):
-    def __init__(self, enc_net_dims=[2, 4], agg_net_dims=[4, 8]):
-        super(SetEncoder, self).__init__()
-        self.enc_net_dims = enc_net_dims
-        self.agg_net_dims = agg_net_dims
-
-        self.encoder_net = nn.ModuleList()
-        for i in range(1, len(self.enc_net_dims)):
-            self.encoder_net.append(nn.Linear(self.enc_net_dims[i - 1],
-                                              self.enc_net_dims[i]))
-            self.encoder_net.append(nn.ReLU())
-        self.encoder_net = nn.Sequential(*self.encoder_net)
-
-        self.aggregator_net = nn.ModuleList()
-        for i in range(1, len(self.agg_net_dims)):
-            self.aggregator_net.append(nn.Linear(self.agg_net_dims[i - 1],
-                                                 self.agg_net_dims[i]))
-            self.aggregator_net.append(nn.ReLU())
-        self.aggregator_net = nn.Sequential(*self.aggregator_net)
-
-    def forward(self, x):
-        # print(x.shape)
-        x_enc = self.encoder_net(x)
-        # print(x1.shape)
-        x_enc_agg = torch.sum(x_enc, axis=1)
-        # print(x1_agg.shape)
-
-        return self.aggregator_net(x_enc_agg)
-
-
-class ParetoStatePredictor(nn.Module):
-    def __init__(self, cfg):
-        super(ParetoStatePredictor, self).__init__()
-        self.cfg = cfg
-        self.instance_encoder = SetEncoder(list(self.cfg.ie.enc), list(self.cfg.ie.agg))
-        self.context_encoder = SetEncoder(list(self.cfg.ce.enc), list(self.cfg.ce.agg))
-        self.parent_encoder = SetEncoder(list(self.cfg.pe.enc), list(self.cfg.pe.agg))
-
-        self.node_encoder = nn.ModuleList()
-        for i in range(1, len(self.cfg.ne)):
-            self.node_encoder.append(nn.Linear(self.cfg.ne[i - 1], self.cfg.ne[i]))
-            self.node_encoder.append(nn.ReLU())
-        self.node_encoder = nn.Sequential(*self.node_encoder)
-
-        pred_in_dim = self.cfg.ie.agg[-1] + self.cfg.ce.agg[-1] + self.cfg.pe.agg[-1] + self.cfg.ne[-1]
-        self.predictor = nn.Sequential(nn.Linear(pred_in_dim, 1),
-                                       nn.Sigmoid())
-
-    def forward(self, instf, vf, nf, pf):
-        # print(instf.shape, vf.shape, nf.shape, pf.shape)
-        # print(self.node_encoder)
-        ie = self.instance_encoder(instf)
-        # print(ie.shape)
-        ve = self.context_encoder(vf)
-        # print(ve.shape)
-        pe = self.parent_encoder(pf)
-        # print(pe.shape)
-        ne = self.node_encoder(nf)
-        # print(ne.shape)
-        emb = torch.concat((ie, ve, ne, pe), dim=1)
-        # print(emb.shape)
-
-        return self.predictor(emb)
+# class SetEncoder(nn.Module):
+#     def __init__(self, enc_net_dims=[2, 4], agg_net_dims=[4, 8]):
+#         super(SetEncoder, self).__init__()
+#         self.enc_net_dims = enc_net_dims
+#         self.agg_net_dims = agg_net_dims
+#
+#         self.encoder_net = nn.ModuleList()
+#         for i in range(1, len(self.enc_net_dims)):
+#             self.encoder_net.append(nn.Linear(self.enc_net_dims[i - 1],
+#                                               self.enc_net_dims[i]))
+#             self.encoder_net.append(nn.ReLU())
+#         self.encoder_net = nn.Sequential(*self.encoder_net)
+#
+#         self.aggregator_net = nn.ModuleList()
+#         for i in range(1, len(self.agg_net_dims)):
+#             self.aggregator_net.append(nn.Linear(self.agg_net_dims[i - 1],
+#                                                  self.agg_net_dims[i]))
+#             self.aggregator_net.append(nn.ReLU())
+#         self.aggregator_net = nn.Sequential(*self.aggregator_net)
+#
+#     def forward(self, x):
+#         # print(x.shape)
+#         x_enc = self.encoder_net(x)
+#         # print(x1.shape)
+#         x_enc_agg = torch.sum(x_enc, axis=1)
+#         # print(x1_agg.shape)
+#
+#         return self.aggregator_net(x_enc_agg)
+#
+#
+# class ParetoStatePredictor(nn.Module):
+#     def __init__(self, cfg):
+#         super(ParetoStatePredictor, self).__init__()
+#         self.cfg = cfg
+#         self.instance_encoder = SetEncoder(list(self.cfg.ie.enc), list(self.cfg.ie.agg))
+#         self.context_encoder = SetEncoder(list(self.cfg.ce.enc), list(self.cfg.ce.agg))
+#         self.parent_encoder = SetEncoder(list(self.cfg.pe.enc), list(self.cfg.pe.agg))
+#
+#         self.node_encoder = nn.ModuleList()
+#         for i in range(1, len(self.cfg.ne)):
+#             self.node_encoder.append(nn.Linear(self.cfg.ne[i - 1], self.cfg.ne[i]))
+#             self.node_encoder.append(nn.ReLU())
+#         self.node_encoder = nn.Sequential(*self.node_encoder)
+#
+#         pred_in_dim = self.cfg.ie.agg[-1] + self.cfg.ce.agg[-1] + self.cfg.pe.agg[-1] + self.cfg.ne[-1]
+#         self.predictor = nn.Sequential(nn.Linear(pred_in_dim, 1),
+#                                        nn.Sigmoid())
+#
+#     def forward(self, instf, vf, nf, pf):
+#         # print(instf.shape, vf.shape, nf.shape, pf.shape)
+#         # print(self.node_encoder)
+#         ie = self.instance_encoder(instf)
+#         # print(ie.shape)
+#         ve = self.context_encoder(vf)
+#         # print(ve.shape)
+#         pe = self.parent_encoder(pf)
+#         # print(pe.shape)
+#         ne = self.node_encoder(nf)
+#         # print(ne.shape)
+#         emb = torch.concat((ie, ve, ne, pe), dim=1)
+#         # print(emb.shape)
+#
+#         return self.predictor(emb)

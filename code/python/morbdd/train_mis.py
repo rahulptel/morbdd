@@ -1,22 +1,82 @@
+import ast
 import random
 
 import hydra
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+import torch.optim as optim
+import webdataset as wds
+from torch.utils.data import DataLoader
 
 from morbdd import ResourcePaths as path
+from morbdd.model import ParetoStatePredictor
 from morbdd.utils import get_instance_data
-from morbdd.utils import read_from_zip
-from morbdd.generate_mis_dataset import get_node_data
-import webdataset as wds
-import ast
 
 random.seed(42)
 rng = np.random.RandomState(42)
 seeds = rng.randint(1, 10000, 1000)
-from itertools import product
+
+obj, adj = {}, {}
+
+
+class CustomCollater:
+    def __init__(self, random_shuffle=True, seed=1231):
+        self.random_shuffle = random_shuffle
+        self.seed = seed
+
+    def __call__(self, batch):
+        max_pos = 0
+        for item in batch:
+            item["json"] = ast.literal_eval(item["json"].decode("utf-8"))
+            if len(item["json"]["pos"]) > max_pos:
+                max_pos = len(item["json"]["pos"])
+
+        pids, lids, vids = [], [], []
+        indices = np.ones((len(batch), 2 * max_pos, 100)) * -1
+        weights = np.zeros((len(batch), 2 * max_pos))
+        labels = np.zeros((len(batch), 2 * max_pos))
+        for ibatch, item in enumerate(batch):
+            pids.append(item["json"]["pid"])
+            lids.append(item["json"]["lid"])
+            vids.append(item["json"]["vid"])
+            i = 0
+            for ipos, pos_ind in enumerate(item["json"]["pos"]):
+                indices[ibatch][i][:len(pos_ind)] = pos_ind
+                weights[ibatch][i] = 1
+                labels[ibatch][i] = 1
+                i += 1
+
+            # For validation set keep the shuffling fixed
+            if not self.random_shuffle:
+                random.seed(self.seed)
+            random.shuffle(item["json"]["neg"])
+
+            neg_max = min(len(item["json"]["pos"]), len(item["json"]["neg"]))
+            for ineg, neg_ind in enumerate(item["json"]["neg"][: neg_max]):
+                indices[ibatch][i][:len(neg_ind)] = neg_ind
+                weights[ibatch][i] = 1
+                i += 1
+
+        pids, lids, vids = torch.tensor(pids).int(), torch.tensor(lids).int(), torch.tensor(vids).int()
+        indices = torch.from_numpy(indices).int()
+        weights = torch.from_numpy(weights).float()
+        labels = torch.from_numpy(labels).long()
+
+        return pids, lids, vids, indices, weights, labels
+
+
+def get_confusion_matrix(labels, classes):
+    # True positive: label=1 and class=1
+    tp = (classes[labels == 1] == 1).sum()
+    # True negative: label=0 and class=0
+    tn = (classes[labels == 0] == 0).sum()
+    # False positive: label=0 and class=1
+    fp = (classes[labels == 0] == 1).sum()
+    # False negative: label=1 and class=0
+    fn = (classes[labels == 1] == 0).sum()
+
+    return tp, tn, fp, fn
 
 
 def get_size(cfg):
@@ -29,335 +89,180 @@ def get_size(cfg):
             return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}-{cfg.prob.attach}"
 
 
-# class MISDataset(Dataset):
-#     def __init__(self, cfg, split="train"):
-#         from_pid, to_pid = cfg.dataset.pid[split].start, cfg.dataset.pid[split].end
-#         with_parent = cfg.dataset.with_parent
-#         layer_weight = cfg.dataset.layer_weight
-#         npratio = cfg.dataset.neg_to_pos_ratio
-#
-#         archive = path.dataset / f"{cfg.prob.name}/{cfg.size}.zip"
-#         dtype = f"{layer_weight}-{npratio}-"
-#         dtype += "parent" if with_parent else "no-parent"
-#
-#         prefix = f"{cfg.size}/{split}/{dtype}"
-#         self.X, self.Y, self.weights = [], [], []
-#         self.adj, self.obj_coeffs, self.orders, self.masks, self.var_idxs = [], [], [], [], []
-#         self.id_to_inst = []
-#
-#         for i, pid in enumerate(range(from_pid, to_pid)):
-#             file = prefix + f"/{pid}.pt"
-#             idata = read_from_zip(archive, file, format="pt")
-#             x, y, adj, order, obj_coeffs = idata["x"], idata["y"], idata["adj"], idata["order"], idata["obj_coeffs"]
-#
-#             # Node weight
-#             weight = x[:, 0]
-#
-#             # Layer in which the node belongs
-#             lids = x[:, 1].numpy().astype(int)
-#             mask = np.ones((x.shape[0], cfg.prob.n_vars))
-#             for l, m in zip(lids, mask):
-#                 m[order[:l + 1]] = 0
-#                 self.var_idxs.append(order[l + 1])
-#             mask = torch.from_numpy(mask)
-#
-#             # n_nodes x n_node_features_0
-#             self.X.append(x[:, 1:])
-#             # n_nodes
-#             self.Y.append(y)
-#             # n_nodes
-#             self.weights.append(weight)
-#             # n_nodes x n_vars_mis
-#             self.masks.append(mask)
-#             # n_nodes
-#             self.id_to_inst.extend([i] * x.shape[0])
-#
-#             # n_vars_mip x n_vars_mip
-#             self.adj.append(adj)
-#             # n_vars_mip
-#             self.orders.append(order)
-#             # n_objs x n_vars_mip
-#             self.obj_coeffs.append(obj_coeffs)
-#
-#         self.X = torch.cat(self.X, dim=0).float()
-#         self.Y = torch.cat(self.Y, dim=0)
-#         self.weights = torch.cat(self.weights, dim=0).float().reshape(-1)
-#         self.masks = torch.cat(self.masks, dim=0).float()
-#         self.var_idxs = torch.from_numpy(np.array(self.var_idxs)).float()
-#
-#         self.adj = torch.stack(self.adj, dim=0).float()
-#         self.orders = torch.stack(self.orders, dim=0).float()
-#         self.obj_coeffs = torch.stack(self.obj_coeffs, dim=0).float()
-#         self.obj_coeffs = self.obj_coeffs.permute(0, 2, 1)
-#
-#     def __len__(self):
-#         return self.X.shape[0]
-#
-#     def __getitem__(self, i):
-#         pid = self.id_to_inst[i]
-#         return self.X[i], self.Y[i], self.masks[i], self.adj[pid], self.obj_coeffs[pid], self.var_idxs[i]
-#
-#     def __str__(self):
-#         text = f"X:  {self.X.shape}\n"
-#         text += f"Y: {self.Y.shape}\n"
-#         text += f"Mask: {self.masks.shape}\n"
-#         text += f"orders: {self.orders.shape}\n"
-#         text += f"obj_coeffs: {self.obj_coeffs.shape}\n"
-#
-#         return text
-
-class MISDataset(Dataset):
-    def __init__(self, dataset, n_samples=100, n_layers=100):
-        super(MISDataset, self).__init__()
-        self.items = list(product(range(n_samples), range(n_layers)))
-        self.dataset = dataset
-
-    def __len__(self):
-        return len(self.items)
-
-    def __getitem__(self, idx):
-        pid, lid = self.items[idx]
-        obj_coeffs, adj, states, labels = self.dataset[pid]
-        states, labels = states[lid - 1], labels[lid - 1]
-
-        obj_coeffs = torch.tensor(obj_coeffs).float()
-        adj = torch.from_numpy(adj).float()
-        states = torch.tensor(states)
-        labels = torch.tensor(labels)
-
-        return obj_coeffs, adj, states, labels
-
-
-def get_node_data(seed, n_objs, n_vars, bdd, order, with_parent=False):
-    random.seed(seed)
-    data_lst, labels_lst = [], []
-    for lid, layer in enumerate(bdd):
-        neg_data_lst = []
-        pos_data_lst = []
-        for nid, node in enumerate(layer):
-            # Binary state of the current node
-            state = np.zeros(n_vars)
-            state[node['s']] = 1
-            node_data = np.concatenate(([lid + 1, order[lid + 1]], state))
-            if node['score'] > 0:
-                pos_data_lst.append(node_data)
-            else:
-                neg_data_lst.append(node_data)
-
-        # Get label
-        n_pos = len(pos_data_lst)
-        labels = [1] * n_pos
-        # data_lst.extend(pos_data_lst)
-
-        # Undersample negative class
-        n_neg = min(len(neg_data_lst), n_pos)
-        labels.extend([0] * n_neg)
-        random.shuffle(neg_data_lst)
-        neg_data_lst = neg_data_lst[:n_neg]
-        # data_lst.extend(neg_data_lst)
-        pos_data_lst.extend(neg_data_lst)
-
-        data_lst.append(pos_data_lst)
-        labels_lst.append(labels)
-
-    return data_lst, labels_lst
-
-
-def get_mis_dataset_instance(epoch, size, split, n_objs, n_vars, pid):
-    archive_bdds = path.bdd / f"indepset/{size}.zip"
-
-    # Read instance data
-    data = get_instance_data("indepset", size, split, pid)
-    # Read order
-    order = path.order.joinpath(f"indepset/{size}/{split}/{pid}.dat").read_text()
-    order = np.array(list(map(int, order.strip().split())))
-    # Read bdd
-    file = f"{size}/{split}/{pid}.json"
-    bdd = read_from_zip(archive_bdds, file, format="json")
-    # Get node data
-    states, labels = get_node_data(seeds[epoch], n_objs, n_vars, bdd, order, with_parent=False)
-
-    # obj_coeffs = torch.from_numpy(np.array(data["obj_coeffs"]))
-    # adj = torch.from_numpy(np.array(data["adj_list"]))
-    # X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
-
-    return data["obj_coeffs"], data["adj_list"], states, labels
-
-
-def get_mis_dataset(epoch, size, split, n_objs=3, n_vars=100, from_pid=0, to_pid=1):
-    dataset = []
+def load_inst_data(prob_name, size, split, from_pid, to_pid):
+    global obj, adj
     for pid in range(from_pid, to_pid):
-        objs, adj, states, labels = get_mis_dataset_instance(epoch, size, split, n_objs, n_vars, pid)
-        dataset.append((objs, adj, states, labels))
-
-    dataset = MISDataset(dataset, n_samples=to_pid - from_pid, n_layers=100)
-    return dataset
+        data = get_instance_data(prob_name, size, split, pid)
+        obj[pid] = torch.tensor(data["obj_coeffs"])
+        adj[pid] = torch.from_numpy(data["adj_list"])
 
 
-def pad_samples(samples, max_parents, n_vars):
-    for sample in samples:
-        if len(sample[2]) < max_parents:
-            sample[2] = np.vstack((sample[2],
-                                   np.zeros((max_parents - len(sample[2]), n_vars))
-                                   ))
+def train_batch(epoch, batch, model, optimizer, device):
+    global obj, adj
+    pids, lids, vids, indices, weights, labels = batch
+    obj_batch, adj_batch = [obj[pid] for pid in pids.tolist()], [adj[pid] for pid in pids.tolist()]
+    obj_batch, adj_batch = torch.stack(obj_batch), torch.stack(adj_batch).int()
+    obj_batch = obj_batch / 100
 
-        if len(sample[3]) < max_parents:
-            sample[3] = np.vstack((sample[3],
-                                   np.zeros((max_parents - len(sample[3]), n_vars))
-                                   ))
+    # Get logits
+    logits = model(obj_batch.to(device), adj_batch.to(device), lids.to(device), vids.to(device), indices.to(device))
+    # Compute loss
+    logits, labels = logits.reshape(-1, 2), labels.to(device).reshape(-1)
+    loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1), reduction='none')
+    weights = weights.to(device)
+    scaled_loss = (weights.reshape(-1) * loss).sum() / weights.sum()
+    # Learn
+    optimizer.zero_grad()
+    scaled_loss.backward()
+    optimizer.step()
 
-    return samples
+    classes = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+    labels, classes = labels[weights.reshape(-1) == 1], classes[weights.reshape(-1) == 1]
+    labels, classes = labels.cpu().numpy(), classes.cpu().numpy()
+    n_pos = labels.sum()
+    n_neg = labels.shape[0] - n_pos
 
+    tp, tn, fp, fn = get_confusion_matrix(labels, classes)
 
-def order2rank(order):
-    rank = np.zeros_like(order)
-    for r, item in enumerate(order):
-        rank[item] = r + 1
-
-    rank = rank / len(order)
-    return rank
-
-
-def reorder_data(data, order):
-    return data
-
-
-def train(dataloader, model, optimizer, epoch):
-    model.train()
-    for i, batch in enumerate(dataloader):
-        # Get logits
-        nf, y, m, adj, ocoeff, vidx = batch
-        mask = m.unsqueeze(2)
-        vf = torch.cat((ocoeff, mask), dim=-1)
-        logits = model(nf, vf, adj, vidx)
-
-        # Compute loss
-        loss = F.cross_entropy(logits, y.view(-1))
-
-        # Learn
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
+    return scaled_loss.item(), tp, tn, fp, fn, n_pos, n_neg
 
 
-def validate(dataloader, model, epoch, n_samples):
-    accuracy = 0
+def validate(epoch, dataloader, model, device):
+    global obj, adj
 
-    model.eval()
     with torch.no_grad():
+        epoch_loss, epoch_items, epoch_tp, epoch_fp, epoch_tn, epoch_fn = 0, 0, 0, 0, 0, 0
+        epoch_n_pos, epoch_n_neg = 0, 0
+
         for batch in dataloader:
-            nf, y, m, adj, ocoeff, vidx = batch
+            pids, lids, vids, indices, weights, labels = batch
+            obj_batch, adj_batch = [obj[pid] for pid in pids.tolist()], [adj[pid] for pid in pids.tolist()]
+            obj_batch, adj_batch = torch.stack(obj_batch), torch.stack(adj_batch).int()
+            obj_batch = obj_batch / 100
 
-            mask = m.unsqueeze(2)
-            vf = torch.cat((ocoeff, mask), dim=-1)
-            logits = model(nf, vf, adj, vidx)
-            preds = torch.argmax(logits, dim=-1)
-            # print(preds[:5], y[:5], preds[:5] == y[:5])
-            # print((preds[:5] == y[:5]), (preds[:5] == y[:5]).numpy().sum())
-            accuracy += (preds == y).numpy().sum()
+            # Get logits
+            logits = model(obj_batch.to(device), adj_batch.to(device), lids.to(device), vids.to(device),
+                           indices.to(device))
+            # Compute loss
+            logits, labels = logits.reshape(-1, 2), labels.to(device).reshape(-1)
+            loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1), reduction='none')
+            weights = weights.to(device)
+            scaled_loss = (weights.reshape(-1) * loss).sum() / weights.sum()
 
-    print("Epoch {} Accuracy: {}".format(epoch, accuracy / n_samples))
+            classes = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+            labels, classes = labels[weights.reshape(-1) == 1], classes[weights.reshape(-1) == 1]
+            labels, classes = labels.cpu().numpy(), classes.cpu().numpy()
+            n_pos = labels.sum()
+            n_neg = labels.shape[0] - n_pos
 
+            tp, tn, fp, fn = get_confusion_matrix(labels, classes)
 
-def collate_fn(batch):
-    max_pos, max_index = 0, 0
-    for item in batch:
-        item["json"] = ast.literal_eval(item["json"].decode("utf-8"))
-        if len(item["json"]["pos"]) > max_pos:
-            max_pos = len(item["json"]["pos"])
+            epoch_loss += (scaled_loss.item() * (n_pos + n_neg))
+            epoch_items += (n_pos + n_neg)
+            epoch_tp += tp
+            epoch_fp += fp
+            epoch_tn += tn
+            epoch_fn += fn
+            epoch_n_pos += n_pos
+            epoch_n_neg += n_neg
 
-    pids, lids, vids = [], [], []
-    indices = np.ones((len(batch), 2 * max_pos, 100)) * -1
-    weights = np.zeros((len(batch), 2 * max_pos))
-    labels = np.zeros((len(batch), 2 * max_pos))
-    for ibatch, item in enumerate(batch):
-        pids.append(item["json"]["pid"])
-        lids.append(item["json"]["lid"])
-        vids.append(item["json"]["vid"])
-        i = 0
-        for ipos, pos_ind in enumerate(item["json"]["pos"]):
-            indices[ibatch][i][:len(pos_ind)] = pos_ind
-            weights[ibatch][i] = 1
-            labels[ibatch][i] = 1
-            i += 1
-        random.shuffle(item["json"]["neg"])
-        for ineg, neg_ind in enumerate(item["json"]["neg"][: len(item["json"]["pos"])]):
-            indices[ibatch][i][:len(neg_ind)] = neg_ind
-            weights[ibatch][i] = 1
-            i += 1
+            print("\t\t Val Batch loss: {:.4f} TP:{:.4f} TN:{:.4f} FP:{:.4f} FN:{:.4f}".format(
+                scaled_loss.item(),
+                tp / n_pos,
+                tn / n_neg,
+                fp / n_neg,
+                fn / n_pos))
 
-    pids, lids, vids = torch.tensor(pids).int(), torch.tensor(lids).int(), torch.tensor(vids).int()
-    indices = torch.from_numpy(indices).int()
-    weights = torch.from_numpy(weights).float()
-    labels = torch.from_numpy(labels).int()
-
-    return pids, lids, vids, indices, weights, labels
+        print("\t{}: Val epoch loss: {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}".format(epoch,
+                                                                                epoch_loss / epoch_items,
+                                                                                epoch_tp / epoch_n_pos,
+                                                                                epoch_tn / epoch_n_neg,
+                                                                                epoch_fp / epoch_n_neg,
+                                                                                epoch_fn / epoch_n_pos))
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Get dataset and dataloader
-    # val_dataset = get_mis_dataset(0, cfg.size, "val", from_pid=1000, to_pid=1002)
-    # val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
+    load_inst_data(cfg.prob.name, cfg.size, "train", cfg.dataset.pid.train.start, cfg.dataset.pid.train.end)
+    load_inst_data(cfg.prob.name, cfg.size, "val", cfg.dataset.pid.val.start, cfg.dataset.pid.val.end)
+
+    dataset_root_path = str(path.dataset) + f"/{cfg.prob.name}/{cfg.size}"
+    # Train dataloader
+    dataset_path = dataset_root_path + "/train/bdd-layer-{0..9}.tar"
+    train_dataset = wds.WebDataset(dataset_path, shardshuffle=True).shuffle(1000)
+    train_loader = DataLoader(train_dataset,
+                              batch_size=cfg.batch_size,
+                              collate_fn=CustomCollater(random_shuffle=True))
+    # Val dataloader
+    dataset_path = dataset_root_path + "/val/bdd-layer-{0..9}.tar"
+    val_dataset = wds.WebDataset(dataset_path)
+    val_loader = DataLoader(val_dataset,
+                            batch_size=cfg.batch_size,
+                            collate_fn=CustomCollater(random_shuffle=False))
 
     # Build model
-    # model = ParetoNodePredictor(cfg)
+    model = ParetoStatePredictor(d_emb=64,
+                                 top_k=5,
+                                 n_blocks=2,
+                                 n_heads=8,
+                                 bias_mha=False,
+                                 dropout_mha=0,
+                                 bias_mlp=True,
+                                 dropout_mlp=0.1,
+                                 h2i_ratio=2,
+                                 node_residual=True,
+                                 edge_residual=True).to(device)
 
     # Initialize optimizer
-    # opt_cls = getattr(optim, cfg.opt.name)
-    # optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
+    opt_cls = getattr(optim, cfg.opt.name)
+    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
+    batch_counter = 0
+    for epoch in range(cfg.epochs):
+        epoch_loss, epoch_items, epoch_tp, epoch_fp, epoch_tn, epoch_fn = 0, 0, 0, 0, 0, 0
+        epoch_n_pos, epoch_n_neg = 0, 0
+        for batch_id, batch in enumerate(train_loader):
+            loss, tp, tn, fp, fn, n_pos, n_neg = train_batch(epoch, batch, model, optimizer, device)
+            epoch_loss += (loss * (n_pos + n_neg))
+            epoch_items += (n_pos + n_neg)
+            epoch_tp += tp
+            epoch_fp += fp
+            epoch_tn += tn
+            epoch_fn += fn
+            epoch_n_pos += n_pos
+            epoch_n_neg += n_neg
+            print("\t\t{}:{}: Batch loss: {:.4f} TP:{:.4f} TN:{:.4f} FP:{:.4f} FN:{:.4f}".format(epoch,
+                                                                                                 batch_id,
+                                                                                                 loss,
+                                                                                                 tp / n_pos,
+                                                                                                 tn / n_neg,
+                                                                                                 fp / n_neg,
+                                                                                                 fn / n_pos))
 
-    dataset_path = str(path.dataset) + f"/{cfg.prob.name}/{cfg.size}/train/" + "bdd-layer-{0..1}.tar"
-    dataset = wds.WebDataset(dataset_path)
-    dataloader = DataLoader(dataset, batch_size=32, collate_fn=collate_fn)
+            batch_counter += 1
+            if batch_counter == 1:
+                model.eval()
+                validate(epoch, val_loader, model, device)
+                model.train()
 
-    for batch in dataloader:
-        pids, lids, vids, indices, weights, labels = batch
+        print("\t{}: Epoch loss: {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}".format(epoch,
+                                                                            epoch_loss / epoch_items,
+                                                                            epoch_tp / epoch_n_pos,
+                                                                            epoch_tn / epoch_n_neg,
+                                                                            epoch_fp / epoch_n_neg,
+                                                                            epoch_fn / epoch_n_pos))
 
-        print(pids.shape, indices.shape, weights.shape, labels.shape)
-        pass
+        if epoch % 2 == 0:
+            model.eval()
+            validate(epoch, val_loader, model, device)
+            model.train()
 
-    # for epoch in range(cfg.epochs):
-    #     train_dataset = get_mis_dataset(epoch, cfg.size, "train", from_pid=0, to_pid=2)
-    #     train_loader = DataLoader(train_dataset,
-    #                               batch_size=1)
-    #
-    #     for i, batch in enumerate(train_loader):
-    #         # Get logits
-    #         print(batch)
-    #
-    # #         nf, y, m, adj, ocoeff, vidx = batch
-    # #         mask = m.unsqueeze(2)
-    # #         vf = torch.cat((ocoeff, mask), dim=-1)
-    # #         logits = model(nf, vf, adj, vidx)
-    # #         # print(logits.shape)
-    # #         # print(logits[:5])
-    # #
-    # #         # Compute loss
-    # #         loss = F.cross_entropy(logits, y.view(-1))
-    # #
-    # #         # Learn
-    # #         optimizer.zero_grad()
-    # #         loss.backward()
-    # #         optimizer.step()
-    # #
-    # #         print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
-    # #         # if i == 10:
-    # #         #     break
-    # #
-    # #         if epoch == 0 and i == 0:
-    # #             validate(val_loader, model, epoch, n_samples=len(val_dataset))
-    # #
-    # #         # if i % cfg.val_every == 0:
-    # #         #     validate(val_loader, model)
-    # #
-    # #     if epoch % cfg.val_every == 0:
-    # #         validate(val_loader, model, epoch, n_samples=len(val_dataset))
-    # #     # break
+    model.eval()
+    validate(1000, val_loader, model, device)
+    model.train()
 
 
 if __name__ == "__main__":
