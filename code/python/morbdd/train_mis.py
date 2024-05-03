@@ -10,6 +10,8 @@ from morbdd import ResourcePaths as path
 from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
 from morbdd.generate_mis_dataset import get_node_data
+import webdataset as wds
+import ast
 
 random.seed(42)
 rng = np.random.RandomState(42)
@@ -259,13 +261,48 @@ def validate(dataloader, model, epoch, n_samples):
     print("Epoch {} Accuracy: {}".format(epoch, accuracy / n_samples))
 
 
+def collate_fn(batch):
+    max_pos, max_index = 0, 0
+    for item in batch:
+        item["json"] = ast.literal_eval(item["json"].decode("utf-8"))
+        if len(item["json"]["pos"]) > max_pos:
+            max_pos = len(item["json"]["pos"])
+
+    pids, lids, vids = [], [], []
+    indices = np.ones((len(batch), 2 * max_pos, 100)) * -1
+    weights = np.zeros((len(batch), 2 * max_pos))
+    labels = np.zeros((len(batch), 2 * max_pos))
+    for ibatch, item in enumerate(batch):
+        pids.append(item["json"]["pid"])
+        lids.append(item["json"]["lid"])
+        vids.append(item["json"]["vid"])
+        i = 0
+        for ipos, pos_ind in enumerate(item["json"]["pos"]):
+            indices[ibatch][i][:len(pos_ind)] = pos_ind
+            weights[ibatch][i] = 1
+            labels[ibatch][i] = 1
+            i += 1
+        random.shuffle(item["json"]["neg"])
+        for ineg, neg_ind in enumerate(item["json"]["neg"][: len(item["json"]["pos"])]):
+            indices[ibatch][i][:len(neg_ind)] = neg_ind
+            weights[ibatch][i] = 1
+            i += 1
+
+    pids, lids, vids = torch.tensor(pids).int(), torch.tensor(lids).int(), torch.tensor(vids).int()
+    indices = torch.from_numpy(indices).int()
+    weights = torch.from_numpy(weights).float()
+    labels = torch.from_numpy(labels).int()
+
+    return pids, lids, vids, indices, weights, labels
+
+
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
 
     # Get dataset and dataloader
-    val_dataset = get_mis_dataset(0, cfg.size, "val", from_pid=1000, to_pid=1002)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
+    # val_dataset = get_mis_dataset(0, cfg.size, "val", from_pid=1000, to_pid=1002)
+    # val_loader = DataLoader(val_dataset, batch_size=cfg.batch_size)
 
     # Build model
     # model = ParetoNodePredictor(cfg)
@@ -274,43 +311,53 @@ def main(cfg):
     # opt_cls = getattr(optim, cfg.opt.name)
     # optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
 
-    for epoch in range(cfg.epochs):
-        train_dataset = get_mis_dataset(epoch, cfg.size, "train", from_pid=0, to_pid=2)
-        train_loader = DataLoader(train_dataset,
-                                  batch_size=1)
+    dataset_path = str(path.dataset) + f"/{cfg.prob.name}/{cfg.size}/train/" + "bdd-layer-{0..1}.tar"
+    dataset = wds.WebDataset(dataset_path)
+    dataloader = DataLoader(dataset, batch_size=32, collate_fn=collate_fn)
 
-        for i, batch in enumerate(train_loader):
-            # Get logits
-            print(batch)
+    for batch in dataloader:
+        pids, lids, vids, indices, weights, labels = batch
 
-    #         nf, y, m, adj, ocoeff, vidx = batch
-    #         mask = m.unsqueeze(2)
-    #         vf = torch.cat((ocoeff, mask), dim=-1)
-    #         logits = model(nf, vf, adj, vidx)
-    #         # print(logits.shape)
-    #         # print(logits[:5])
+        print(pids.shape, indices.shape, weights.shape, labels.shape)
+        pass
+
+    # for epoch in range(cfg.epochs):
+    #     train_dataset = get_mis_dataset(epoch, cfg.size, "train", from_pid=0, to_pid=2)
+    #     train_loader = DataLoader(train_dataset,
+    #                               batch_size=1)
     #
-    #         # Compute loss
-    #         loss = F.cross_entropy(logits, y.view(-1))
+    #     for i, batch in enumerate(train_loader):
+    #         # Get logits
+    #         print(batch)
     #
-    #         # Learn
-    #         optimizer.zero_grad()
-    #         loss.backward()
-    #         optimizer.step()
-    #
-    #         print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
-    #         # if i == 10:
-    #         #     break
-    #
-    #         if epoch == 0 and i == 0:
-    #             validate(val_loader, model, epoch, n_samples=len(val_dataset))
-    #
-    #         # if i % cfg.val_every == 0:
-    #         #     validate(val_loader, model)
-    #
-    #     if epoch % cfg.val_every == 0:
-    #         validate(val_loader, model, epoch, n_samples=len(val_dataset))
-    #     # break
+    # #         nf, y, m, adj, ocoeff, vidx = batch
+    # #         mask = m.unsqueeze(2)
+    # #         vf = torch.cat((ocoeff, mask), dim=-1)
+    # #         logits = model(nf, vf, adj, vidx)
+    # #         # print(logits.shape)
+    # #         # print(logits[:5])
+    # #
+    # #         # Compute loss
+    # #         loss = F.cross_entropy(logits, y.view(-1))
+    # #
+    # #         # Learn
+    # #         optimizer.zero_grad()
+    # #         loss.backward()
+    # #         optimizer.step()
+    # #
+    # #         print("Epoch {}, Batch {}, Loss {}".format(epoch, i, loss.item()))
+    # #         # if i == 10:
+    # #         #     break
+    # #
+    # #         if epoch == 0 and i == 0:
+    # #             validate(val_loader, model, epoch, n_samples=len(val_dataset))
+    # #
+    # #         # if i % cfg.val_every == 0:
+    # #         #     validate(val_loader, model)
+    # #
+    # #     if epoch % cfg.val_every == 0:
+    # #         validate(val_loader, model, epoch, n_samples=len(val_dataset))
+    # #     # break
 
 
 if __name__ == "__main__":
