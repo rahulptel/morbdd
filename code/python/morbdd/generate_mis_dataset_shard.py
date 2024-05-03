@@ -1,17 +1,13 @@
+import json
 import multiprocessing as mp
-import random
+import os
+import tarfile
 
 import hydra
 import numpy as np
-import torch
-import tarfile
+
 from morbdd import ResourcePaths as path
-from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
-from morbdd.utils import get_layer_weights
-from pathlib import Path
-import json
-import os
 
 
 def get_size(cfg):
@@ -29,11 +25,6 @@ def get_node_data(pid, bdd, order):
     for lid, layer in enumerate(bdd):
         data = {"pid": pid, "lid": lid, "vid": int(order[lid + 1]), "pos": [], "neg": []}
         for nid, node in enumerate(layer):
-            # Binary state of the current node
-            # state = np.zeros(cfg.prob.n_vars)
-            # state[node['s']] = 1
-            # node_data = np.concatenate(([lid],
-            #                             state))
             if node['score'] > 0:
                 data["pos"].append(node["s"])
             else:
@@ -43,57 +34,53 @@ def get_node_data(pid, bdd, order):
     return dataset
 
 
-def worker(rank, cfg):
-    archive_bdds = path.bdd / f"{cfg.prob.name}/{cfg.size}.zip"
-    samples = []
-    for pid in range(cfg.from_pid + rank, cfg.to_pid, cfg.n_processes):
+def worker(rank, prob_name, size, split, from_pid, to_pid, n_processes):
+    archive_bdds = path.bdd / f"{prob_name}/{size}.zip"
+    root = path.dataset / f"{prob_name}/{size}/{split}"
+    root.mkdir(exist_ok=True, parents=True)
+    for pid in range(from_pid + rank, to_pid, n_processes):
         # Read instance data
         # data = get_instance_data(cfg.prob.name, cfg.size, cfg.split, pid)
-        file = f"{cfg.size}/{cfg.split}/{pid}.json"
+        file = f"{size}/{split}/{pid}.json"
         bdd = read_from_zip(archive_bdds, file, format="json")
         # Read order
-        order = path.order.joinpath(f"{cfg.prob.name}/{cfg.size}/{cfg.split}/{pid}.dat").read_text()
+        order = path.order.joinpath(f"{prob_name}/{size}/{split}/{pid}.dat").read_text()
         order = np.array(list(map(int, order.strip().split())))
         # Get node data
         samples = get_node_data(pid, bdd, order)
         for lid, sample in enumerate(samples):
-            json.dump(sample, open(f"../../resources/datasets/indepset/{pid}-{lid}.json", "w"))
+            json.dump(sample, open(f"{root}/{pid}-{lid}.json", "w"))
 
 
 @hydra.main(config_path="configs", config_name="mis_dataset", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
+    pool = mp.Pool(processes=cfg.n_processes) if cfg.n_processes > 1 else None
+    root = path.dataset / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
+    shard_counter = 0
+    for pid in range(cfg.from_pid, cfg.to_pid, cfg.shard_size):
+        # Generate jsons
+        if cfg.n_processes == 1:
+            worker(0, cfg.prob.name, cfg.size, cfg.split, pid, pid + cfg.shard_size, 1)
+        else:
+            results = []
+            for rank in range(cfg.n_processes):
+                results.append(pool.apply_async(worker, args=(rank, cfg.prob.name, cfg.size, cfg.split,
+                                                              pid, pid + 10, cfg.n_processes)))
 
-    if cfg.n_processes == 1:
-        worker(0, cfg)
-    else:
-        pool = mp.Pool(processes=cfg.n_processes)
-        results = []
+            for r in results:
+                r.get()
 
-        for rank in range(cfg.n_processes):
-            results.append(pool.apply_async(worker, args=(rank, cfg)))
+        tarname = f"bdd-layer-{shard_counter}"
+        for i in range(pid, pid + cfg.shard_size):
+            files = list(root.rglob(f"{i}-*.json"))
+            with tarfile.open(root.joinpath(f"{tarname}.tar"), 'a') as tar:
+                for file in files:
+                    tar.add(file, arcname=file.name)
 
-        for r in results:
-            r.get()
-
-    root = Path("../../resources/datasets/indepset/")
-    count = 0
-    filename = ""
-    for pid in range(cfg.from_pid, cfg.to_pid):
-        if count == 0:
-            filename = "bdd-layer-" + str(pid)
-
-        files = list(root.rglob(f"{pid}-*.json"))
-        with tarfile.open(root.joinpath(f"{filename}.tar"), 'a') as tar:
-            for file_name in files:
-                tar.add(file_name, arcname=file_name.name)
-
-        for file_name in files:
-            os.remove(file_name)
-
-        count += 1
-        if count == 10:
-            count = 0
+            for file in files:
+                os.remove(file)
+        shard_counter += 1
 
 
 if __name__ == "__main__":
