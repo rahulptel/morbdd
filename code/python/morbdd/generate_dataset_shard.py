@@ -28,9 +28,9 @@ def get_node_data_indepset(pid, bdd, order):
         data = {"pid": pid, "lid": lid, "vid": int(order[lid + 1]), "pos": [], "neg": []}
         for nid, node in enumerate(layer):
             if node['score'] > 0:
-                data["pos"].append(node["s"])
+                data["pos"].append(list(map(int, node["s"])))
             else:
-                data["neg"].append(node["s"])
+                data["neg"].append(list(map(int, node["s"])))
         dataset.append(data)
 
     return dataset

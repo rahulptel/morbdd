@@ -1097,9 +1097,13 @@ def handle_timeout(sig, frame):
 
 
 def set_seed(seed):
-    random.seed = seed
-    torch.manual_seed(seed)
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    # When running on the CuDNN backend, two further options must be set
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
 
 def set_device(device_type):
@@ -1110,6 +1114,16 @@ def set_device(device_type):
     print("Training on ", device)
 
     return device
+
+
+def get_size(cfg):
+    if cfg.problem_type == 1:
+        return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
+    elif cfg.problem_type == 2:
+        if cfg.graph_type == "stidsen":
+            return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
+        elif cfg.graph_type == "ba":
+            return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}-{cfg.prob.attach}"
 
 
 def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, weights_type, device, dataset_dict=None):

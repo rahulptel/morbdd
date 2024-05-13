@@ -120,17 +120,16 @@ class TokenEmbedGraph(nn.Module):
         super(TokenEmbedGraph, self).__init__()
         self.top_k = top_k
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
-        self.lienar2 = nn.Linear(2 * d_emb, d_emb)
+        self.linear2 = nn.Linear(2 * d_emb, d_emb)
         self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
         if self.top_k > 0:
             self.pos_encoder = nn.Linear(top_k * 2, d_emb)
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
-        B, n_objs, n_vars = n.shape
         n = F.relu(self.linear1(n))  # B x n_objs x n_vars x 2 * d_emb
         # Sum aggregate objectives
-        n = n.sum(1)  # B x n_vars x 2 * d_emb
+        n = n.sum(2)  # B x n_vars x 2 * d_emb
         n = F.relu(self.linear2(n))  # B x n_vars x d_emb
         # Update node encoding with positional encoding based on SVD
         if self.top_k:
@@ -400,31 +399,36 @@ class ParetoStatePredictorMIS(nn.Module):
 
         self.predictor = nn.Linear(d_emb, 2)
 
-    def forward(self, n_feat, e_feat, lids, vids, indices):
+    def forward(self, n_feat, e_feat, pids_index, lids, vids, indices):
         # Tokenize
-        n_feat, p_feat = self.tokenizer.tokenize(n_feat)
+        n_feat, p_feat = self.tokenizer.tokenize(n_feat, e=e_feat)
+        n_feat = torch.stack([n_feat[i] for i in pids_index]).float()
+        p_feat = torch.stack([p_feat[i] for i in pids_index]).float()
+
         # Embed
-        n_emb, e_emb = self.token_emb(n_feat, e_feat, p_feat)
+        n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), p_feat)
         # Encode
         n_emb, _ = self.encoder(n_emb, e_emb)
         # pad 0 to n_feat so that -1 results in zero vec
-        B, _, n_emb = n_emb.shape
-        n_emb = torch.cat((n_emb, torch.zeros((B, 1, n_emb)).to(self.device)), dim=1)
+        B, _, d_emb = n_emb.shape
+        n_emb = torch.cat((n_emb, torch.zeros((B, 1, d_emb)).to(self.device)), dim=1)
 
         # Instance embedding
         inst_emb = self.graph_encoder(n_emb.sum(1))
         # Layer-index embedding
         li_emb = self.layer_index_encoder(lids)
         # Layer-variable embedding
-        lv_emb = n_feat[torch.arange(n_feat.shape[0]), vids.int(), :]
+        lv_emb = n_emb[torch.arange(n_emb.shape[0]), vids.int(), :]
         # State embedding
-        state_emb = []
-        for ibatch, states in enumerate(indices):
-            state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
-                                          for state in states]))
-        state_emb = torch.stack(state_emb)
+        state_emb = torch.stack([n_emb[i][state].sum(0) for i, state in enumerate(indices)]).float()
+
+        # for ibatch, states in enumerate(indices):
+        #     state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
+        #                                   for state in states]))
+        # state_emb = torch.stack(state_emb)
         state_emb = self.aggregator(state_emb)
-        state_emb = state_emb + (inst_emb + li_emb + lv_emb).unsqueeze(1)
+        context = inst_emb + li_emb + lv_emb
+        state_emb = state_emb + context
 
         # Pareto-state predictor
         logits = self.predictor(state_emb)
