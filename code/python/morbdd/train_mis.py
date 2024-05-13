@@ -20,6 +20,91 @@ seeds = rng.randint(1, 10000, 1000)
 obj, adj = {}, {}
 
 
+class TrainingHelper:
+    def __init__(self):
+        self.train_stats = []
+        self.val_stats = []
+
+    def add_epoch_stats(self, split, stats):
+        stat_lst = getattr(self, f"{split}_stats")
+        stat_lst.append(stats)
+
+    @staticmethod
+    def get_dataloader(root_path, split, start, end, batch_size, shardshuffle=True, random_shuffle=True):
+        dataset_path = root_path + f"/{split}/bdd-layer-{start}..{end}.tar"
+        dataset = wds.WebDataset(dataset_path, shardshuffle=shardshuffle).shuffle(5000)
+        dataloader = DataLoader(dataset,
+                                batch_size=batch_size,
+                                collate_fn=CustomCollater(random_shuffle=random_shuffle))
+
+        return dataloader
+
+    @staticmethod
+    def reset_epoch_stats():
+        return {"items": 0, "loss": 0, "acc": 0, "f1": 0,
+                "tp": 0, "fp": 0, "tn": 0, "fn": 0, "pos": 0, "neg": 0}
+
+    @staticmethod
+    def update_running_stats(curr_stats, new_stats):
+        curr_stats["pos"] += new_stats["pos"]
+        curr_stats["neg"] += new_stats["neg"]
+        curr_stats["items"] += (new_stats["pos"] + new_stats["neg"])
+        curr_stats["loss"] += (new_stats["loss"] * (new_stats["pos"] + new_stats["neg"]))
+        curr_stats["tp"] += new_stats["tp"]
+        curr_stats["fp"] += new_stats["fp"]
+        curr_stats["tn"] += new_stats["tn"]
+        curr_stats["fn"] += new_stats["fn"]
+
+    @staticmethod
+    def compute_epoch_stats(stats):
+        stats["loss"] = stats["loss"] / stats["items"]
+        stats["acc"] = ((stats["tp"] + stats["fp"]) /
+                        stats["tp"] + stats["fp"] + stats["tn"] + stats["fn"])
+        stats["f1"] = stats["tp"] / (stats["tp"] + (0.5 * (stats["fn"] + stats["fp"])))
+        stats["tp"] = stats["tp"] / stats["items"]
+        stats["fp"] = stats["fp"] / stats["items"]
+        stats["tn"] = stats["tn"] / stats["items"]
+        stats["fn"] = stats["fn"] / stats["items"]
+
+    @staticmethod
+    def print_batch_stats(epoch, batch_id, stats):
+        print("\t\tEP-{}:{}: Batch loss: {:.4f}, Acc: {:.4f}, F1: {:.4f}, "
+              "TP:{:.4f}, TN:{:.4f}, FP:{:.4f}, FN:{:.4f}".format(epoch,
+                                                                  batch_id,
+                                                                  stats["loss"],
+                                                                  stats["acc"],
+                                                                  stats["f1"],
+                                                                  stats["tp"] / stats["pos"],
+                                                                  stats["tn"] / stats["neg"],
+                                                                  stats["fp"] / stats["neg"],
+                                                                  stats["fn"] / stats["pos"]))
+
+    @staticmethod
+    def print_stats(epoch, batch_id, stats):
+        print("EP-{}: Batch loss: {:.4f}, Acc: {:.4f}, F1: {:.4f}, "
+              "TP:{:.4f}, TN:{:.4f}, FP:{:.4f}, FN:{:.4f}".format(epoch,
+                                                                  stats["loss"],
+                                                                  stats["acc"],
+                                                                  stats["f1"],
+                                                                  stats["tp"],
+                                                                  stats["tn"],
+                                                                  stats["fp"],
+                                                                  stats["fn"]))
+
+    @staticmethod
+    def get_confusion_matrix(labels, classes):
+        # True positive: label=1 and class=1
+        tp = (classes[labels == 1] == 1).sum()
+        # True negative: label=0 and class=0
+        tn = (classes[labels == 0] == 0).sum()
+        # False positive: label=0 and class=1
+        fp = (classes[labels == 0] == 1).sum()
+        # False negative: label=1 and class=0
+        fn = (classes[labels == 1] == 0).sum()
+
+        return tp, tn, fp, fn
+
+
 class CustomCollater:
     def __init__(self, random_shuffle=True, seed=1231):
         self.random_shuffle = random_shuffle
@@ -64,19 +149,6 @@ class CustomCollater:
         labels = torch.from_numpy(labels).long()
 
         return pids, lids, vids, indices, weights, labels
-
-
-def get_confusion_matrix(labels, classes):
-    # True positive: label=1 and class=1
-    tp = (classes[labels == 1] == 1).sum()
-    # True negative: label=0 and class=0
-    tn = (classes[labels == 0] == 0).sum()
-    # False positive: label=0 and class=1
-    fp = (classes[labels == 0] == 1).sum()
-    # False negative: label=1 and class=0
-    fn = (classes[labels == 1] == 0).sum()
-
-    return tp, tn, fp, fn
 
 
 def get_size(cfg):
@@ -124,10 +196,11 @@ def train_batch(epoch, batch, model, optimizer, device):
 
     tp, tn, fp, fn = get_confusion_matrix(labels, classes)
 
-    return scaled_loss.item(), tp, tn, fp, fn, n_pos, n_neg
+    return {"loss": scaled_loss.item(), "tp": tp, "tn": tn, "fp": fp, "fn": fn, "pos": n_pos, "neg": n_neg}
 
 
 def validate(epoch, dataloader, model, device):
+    model.eval()
     global obj, adj
 
     with torch.no_grad():
@@ -180,31 +253,22 @@ def validate(epoch, dataloader, model, device):
                                                                                 epoch_fp / epoch_n_neg,
                                                                                 epoch_fn / epoch_n_pos))
 
+    model.train()
+
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    helper = TrainingHelper()
     # Get dataset and dataloader
     load_inst_data(cfg.prob.name, cfg.size, "train", cfg.dataset.pid.train.start, cfg.dataset.pid.train.end)
     load_inst_data(cfg.prob.name, cfg.size, "val", cfg.dataset.pid.val.start, cfg.dataset.pid.val.end)
 
     dataset_root_path = str(path.dataset) + f"/{cfg.prob.name}/{cfg.size}"
-    # Train dataloader
-    dataset_path = dataset_root_path + "/train/bdd-layer-{0..9}.tar"
-    train_dataset = wds.WebDataset(dataset_path, shardshuffle=True).shuffle(1000)
-    train_loader = DataLoader(train_dataset,
-                              batch_size=cfg.batch_size,
-                              collate_fn=CustomCollater(random_shuffle=True))
-    # Val dataloader
-    dataset_path = dataset_root_path + "/val/bdd-layer-{0..9}.tar"
-    val_dataset = wds.WebDataset(dataset_path)
-    val_loader = DataLoader(val_dataset,
-                            batch_size=cfg.batch_size,
-                            collate_fn=CustomCollater(random_shuffle=False))
+    val_dataloader = helper.get_dataloader(dataset_root_path, "val", 0, 9, 128,
+                                           shardshuffle=False, random_shuffle=False)
 
-    # Build model
     model = ParetoStatePredictor(d_emb=64,
                                  top_k=5,
                                  n_blocks=2,
@@ -216,53 +280,32 @@ def main(cfg):
                                  h2i_ratio=2,
                                  node_residual=True,
                                  edge_residual=True).to(device)
-
-    # Initialize optimizer
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
-    batch_counter = 0
+    batch_counter, inst_start = 0, cfg.dataset.pid.train.start
+
     for epoch in range(cfg.epochs):
-        epoch_loss, epoch_items, epoch_tp, epoch_fp, epoch_tn, epoch_fn = 0, 0, 0, 0, 0, 0
-        epoch_n_pos, epoch_n_neg = 0, 0
-        for batch_id, batch in enumerate(train_loader):
-            loss, tp, tn, fp, fn, n_pos, n_neg = train_batch(epoch, batch, model, optimizer, device)
-            epoch_loss += (loss * (n_pos + n_neg))
-            epoch_items += (n_pos + n_neg)
-            epoch_tp += tp
-            epoch_fp += fp
-            epoch_tn += tn
-            epoch_fn += fn
-            epoch_n_pos += n_pos
-            epoch_n_neg += n_neg
-            print("\t\t{}:{}: Batch loss: {:.4f} TP:{:.4f} TN:{:.4f} FP:{:.4f} FN:{:.4f}".format(epoch,
-                                                                                                 batch_id,
-                                                                                                 loss,
-                                                                                                 tp / n_pos,
-                                                                                                 tn / n_neg,
-                                                                                                 fp / n_neg,
-                                                                                                 fn / n_pos))
+        if epoch % cfg.refresh_training_dataset or epoch == 0:
+            start, end = inst_start, inst_start + cfg.n_inst_per_group
+            train_dataloader = helper.get_dataloader(dataset_root_path, "train", start, end, cfg.batch_size,
+                                                     shardshuffle=True, random_shuffle=True)
+            inst_start = inst_start + cfg.n_inst_per_group if inst_start < cfg.dataset.pid.train.end else 0
 
-            batch_counter += 1
-            if batch_counter == 1:
-                model.eval()
-                validate(epoch, val_loader, model, device)
-                model.train()
+        stats = helper.reset_epoch_stats()
+        for batch_id, batch in enumerate(train_dataloader):
+            batch_stats = train_batch(epoch, batch, model, optimizer, device)
+            helper.update_epoch_stats(stats, batch_stats)
+            if cfg.logging > 1:
+                helper.print_stats(epoch, batch_id, batch_stats)
 
-        print("\t{}: Epoch loss: {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}".format(epoch,
-                                                                            epoch_loss / epoch_items,
-                                                                            epoch_tp / epoch_n_pos,
-                                                                            epoch_tn / epoch_n_neg,
-                                                                            epoch_fp / epoch_n_neg,
-                                                                            epoch_fn / epoch_n_pos))
+            if epoch == 0 and batch_id == 1:
+                val_stats = validate(epoch, val_dataloader, model, device)
+                helper.add_epoch_stats("val", val_stats)
 
-        if epoch % 2 == 0:
-            model.eval()
-            validate(epoch, val_loader, model, device)
-            model.train()
-
-    model.eval()
-    validate(1000, val_loader, model, device)
-    model.train()
+        helper.print_stats(epoch, -1, stats)
+        if (epoch + 1) % cfg.validate_every == 0:
+            val_stats = validate(epoch, val_dataloader, model, device)
+            helper.add_epoch_stats("val", val_stats)
 
 
 if __name__ == "__main__":
