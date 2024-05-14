@@ -16,7 +16,7 @@ split: val
 from_pid: 1000
 to_pid: 1100
 n_processes: 4
-
+shard_size: 10
 
 # Dataset
 problem_type: 2

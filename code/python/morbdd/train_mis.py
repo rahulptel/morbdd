@@ -14,6 +14,7 @@ from morbdd import ResourcePaths as path
 from morbdd.model import ParetoStatePredictorMIS
 from morbdd.utils import get_instance_data
 from morbdd.utils import get_size
+import time
 
 obj, adj = {}, {}
 
@@ -56,13 +57,13 @@ class TrainingHelper:
     @staticmethod
     def compute_epoch_stats(stats):
         stats["loss"] = np.round(stats["loss"] / stats["items"], 3)
-        stats["acc"] = np.round(((stats["tp"] + stats["fp"]) /
+        stats["acc"] = np.round(((stats["tp"] + stats["tn"]) /
                                  (stats["tp"] + stats["fp"] + stats["tn"] + stats["fn"])), 3)
         stats["f1"] = np.round(stats["tp"] / (stats["tp"] + (0.5 * (stats["fn"] + stats["fp"]))), 3)
-        stats["tp"] = np.round(stats["tp"] / stats["items"], 3)
-        stats["fp"] = np.round(stats["fp"] / stats["items"], 3)
-        stats["tn"] = np.round(stats["tn"] / stats["items"], 3)
-        stats["fn"] = np.round(stats["fn"] / stats["items"], 3)
+        stats["tp"] = np.round(stats["tp"] / stats["pos"], 3)
+        stats["fp"] = np.round(stats["fp"] / stats["neg"], 3)
+        stats["tn"] = np.round(stats["tn"] / stats["neg"], 3)
+        stats["fn"] = np.round(stats["fn"] / stats["pos"], 3)
 
     @staticmethod
     def print_batch_stats(epoch, batch_id, stats):
@@ -78,10 +79,11 @@ class TrainingHelper:
                                                                   stats["fn"] / stats["pos"]))
 
     @staticmethod
-    def print_stats(epoch, stats):
+    def print_stats(epoch, stats, split="train"):
         print("------------------------")
-        print("EP-{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
+        print("EP-{}: {} loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
               "TP:{:.3f}, TN:{:.3f}, FP:{:.3f}, FN:{:.3f}".format(epoch,
+                                                                  split,
                                                                   stats["loss"],
                                                                   stats["acc"],
                                                                   stats["f1"],
@@ -263,7 +265,7 @@ def main(cfg):
                                            cfg.dataset.shard.val.end, cfg.batch_size,
                                            num_workers=cfg.n_worker_dataloader,
                                            shardshuffle=False, random_shuffle=False)
-    best_tp = 0
+    best_f1, best_tp = 0, 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
                                     n_edge_type=2,
@@ -297,7 +299,9 @@ def main(cfg):
         stats = helper.reset_epoch_stats()
 
         for batch_id, batch in enumerate(train_dataloader):
+            start_time = time.time()
             batch_stats = train_batch(epoch, batch, model, optimizer, device, helper)
+            batch_stats["time"] = time.time() - start_time
             helper.update_running_stats(stats, batch_stats)
             if cfg.logging > 1:
                 helper.print_batch_stats(epoch, batch_id, batch_stats)
@@ -307,12 +311,12 @@ def main(cfg):
                                                             cfg.dataset.shard.val.end))
                 val_stats = validate(epoch, val_dataloader, model, device, helper)
                 helper.compute_epoch_stats(val_stats)
-                helper.print_stats(epoch, val_stats)
+                helper.print_stats(epoch, val_stats, split="Val")
                 helper.add_epoch_stats("val", (0, val_stats))
 
         helper.compute_epoch_stats(stats)
-        helper.add_epoch_stats("train", (epoch, stats))
         helper.print_stats(epoch, stats)
+        helper.add_epoch_stats("train", (epoch, stats))
 
         # Validate
         if (epoch + 1) % cfg.validate_every == 0:
@@ -320,15 +324,23 @@ def main(cfg):
                                                         cfg.dataset.shard.val.end))
             val_stats = validate(epoch, val_dataloader, model, device, helper)
             helper.compute_epoch_stats(val_stats)
-            helper.print_stats(epoch, val_stats)
+            helper.print_stats(epoch, val_stats, split="Val")
             helper.add_epoch_stats("val", (epoch, val_stats))
-            if val_stats["tp"] > best_tp:
-                torch.save({"best_model": model}, ckpt_path / "best_model.pt")
+            if val_stats["f1"] > best_f1:
+                torch.save({"epoch": epoch,
+                            "best_model": model.cpu().state_dict(),
+                            "optimizer": optimizer.state_dict()},
+                           ckpt_path / "best_model.pt")
+                best_f1 = val_stats["f1"]
 
-        torch.save({"stats/train": helper.train_stats,
-                    "stats/val": helper.val_stats,
-                    "model": model},
-                   ckpt_path / "ckpt.pt")
+        torch.save({"epoch": epoch,
+                    "train": helper.train_stats,
+                    "val": helper.val_stats},
+                   ckpt_path / "ckpt_stats.pt")
+        torch.save({"epoch": epoch,
+                    "model": model.cpu().state_dict(),
+                    "optimizer": optimizer.state_dict()},
+                   ckpt_path / "ckpt_model.pt")
 
 
 if __name__ == "__main__":

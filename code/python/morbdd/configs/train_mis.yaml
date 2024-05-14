@@ -14,11 +14,15 @@ prob:
 size:
 
 # Training config
-epochs: 50
-refresh_training_dataset: 10
-n_inst_per_group: 50
-batch_size: 512
-n_emb: 128
+logging: 2
+epochs: 500
+refresh_training_dataset: 5
+validate_every: 5
+shards_per_epoch: 5
+batch_size: 64
+# Set this to a positive number when using GPU
+n_worker_dataloader: 4
+
 opt:
   name: Adam
   lr: 1e-3
@@ -27,13 +31,13 @@ dropout: 0
 val_every: 5
 
 dataset:
-  pid:
+  shard:
     train:
       start: 0
-      end: 100
+      end: 49
     val:
-      start: 1000
-      end: 1100
+      start: 0
+      end: 9
 
   # Save parents of nodes in the dataset
   with_parent: false
@@ -42,13 +46,15 @@ dataset:
   layer_weight: exponential
 
 # Graph_enc
-graph_enc:
-  n_layers: 2
-  n_feat: 4
-  n_emb: ${n_emb}
-  activation: relu
-  dropout: 0.1
-  bias: true
+d_emb: 64
+top_k: 5
+n_blocks: 2
+n_heads: 8
+bias_mha: false
+dropout_mha: 0
+bias_mlp: 0.1
+dropout_mlp: 0.1
+h2i_ratio: 2
 
 # Problem
 problem_type: 2

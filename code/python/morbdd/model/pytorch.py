@@ -127,7 +127,7 @@ class TokenEmbedGraph(nn.Module):
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
-        n = F.relu(self.linear1(n))  # B x n_objs x n_vars x 2 * d_emb
+        n = F.relu(self.linear1(n))  # B x n_vars x n_objs x 2 * d_emb
         # Sum aggregate objectives
         n = n.sum(2)  # B x n_vars x 2 * d_emb
         n = F.relu(self.linear2(n))  # B x n_vars x d_emb
@@ -402,25 +402,32 @@ class ParetoStatePredictorMIS(nn.Module):
     def forward(self, n_feat, e_feat, pids_index, lids, vids, indices):
         # Tokenize
         n_feat, p_feat = self.tokenizer.tokenize(n_feat, e=e_feat)
-        n_feat = torch.stack([n_feat[i] for i in pids_index]).float()
-        p_feat = torch.stack([p_feat[i] for i in pids_index]).float()
-
         # Embed
-        n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), p_feat)
-        # Encode
+        n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), p_feat.float())
+        # Encode: B' x n_vars x d_emb
         n_emb, _ = self.encoder(n_emb, e_emb)
-        # pad 0 to n_feat so that -1 results in zero vec
-        B, _, d_emb = n_emb.shape
-        n_emb = torch.cat((n_emb, torch.zeros((B, 1, d_emb)).to(self.device)), dim=1)
+        # pad 0 to n_emb so that -1 results in zero vec
+        B_prime, _, d_emb = n_emb.shape
+        # B' x (n_vars + 1) x d_emb
+        n_emb = torch.cat((n_emb, torch.zeros((B_prime, 1, d_emb)).to(self.device)), dim=1)
 
         # Instance embedding
+        # B' x d_emb
         inst_emb = self.graph_encoder(n_emb.sum(1))
+        # B x d_emb
+        inst_emb = torch.stack([inst_emb[pid] for pid in pids_index])
+
         # Layer-index embedding
+        # B x d_emb
         li_emb = self.layer_index_encoder(lids)
+
         # Layer-variable embedding
-        lv_emb = n_emb[torch.arange(n_emb.shape[0]), vids.int(), :]
+        # B x d_emb
+        lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in zip(pids_index, vids.int())])
+
         # State embedding
-        state_emb = torch.stack([n_emb[i][state].sum(0) for i, state in enumerate(indices)]).float()
+        n_emb = torch.stack([n_emb[pid] for pid in pids_index])
+        state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
 
         # for ibatch, states in enumerate(indices):
         #     state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
