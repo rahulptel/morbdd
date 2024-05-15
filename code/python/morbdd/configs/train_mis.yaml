@@ -15,10 +15,10 @@ size:
 
 # Training config
 logging: 2
-epochs: 500
+epochs: 10
+shards_per_epoch: 5
 refresh_training_dataset: 5
 validate_every: 5
-shards_per_epoch: 5
 batch_size: 64
 # Set this to a positive number when using GPU
 n_worker_dataloader: 4
@@ -27,8 +27,6 @@ opt:
   name: Adam
   lr: 1e-3
 agg: sum            # cat | sum
-dropout: 0
-val_every: 5
 
 dataset:
   shard:
@@ -46,14 +44,15 @@ dataset:
   layer_weight: exponential
 
 # Graph_enc
+model: transformer
 d_emb: 64
 top_k: 5
 n_blocks: 2
 n_heads: 8
+dropout_token: 0
+dropout: 0.2
 bias_mha: false
-dropout_mha: 0
-bias_mlp: 0.1
-dropout_mlp: 0.1
+bias_mlp: false
 h2i_ratio: 2
 
 # Problem

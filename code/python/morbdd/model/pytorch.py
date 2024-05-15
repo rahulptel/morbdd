@@ -31,9 +31,8 @@ class MLP(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        if self.normalize:
-            x = self.ln1(x)
-        x = self.dropout(self.act(self.linear1(x)))
+        x = self.ln(x) if self.normalize else x
+        x = self.act(self.dropout(self.linear1(x)))
         x = self.act(self.linear2(x))
 
         return x
@@ -116,9 +115,10 @@ class TokenEmbedGraph(nn.Module):
     edge embeddings
     """
 
-    def __init__(self, n_node_feat, n_edge_type=2, d_emb=64, top_k=0):
+    def __init__(self, n_node_feat, n_edge_type=2, d_emb=64, top_k=0, dropout=0.0):
         super(TokenEmbedGraph, self).__init__()
         self.top_k = top_k
+        self.dropout = nn.Dropout(dropout)
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
         self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
@@ -127,16 +127,16 @@ class TokenEmbedGraph(nn.Module):
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
-        n = F.relu(self.linear1(n))  # B x n_vars x n_objs x 2 * d_emb
+        n = F.relu(self.dropout(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
         # Sum aggregate objectives
         n = n.sum(2)  # B x n_vars x 2 * d_emb
-        n = F.relu(self.linear2(n))  # B x n_vars x d_emb
+        n = F.relu(self.dropout(self.linear2(n)))  # B x n_vars x d_emb
         # Update node encoding with positional encoding based on SVD
         if self.top_k:
             p = self.pos_encoder(p)  # B x n_vars x d_emb
             n = n + p
 
-        e = self.edge_encoder(e)  # B x n_vars x n_vars x d_emb
+        e = self.edge_encoder(self.dropout(e))  # B x n_vars x n_vars x d_emb
 
         return n, e
 
@@ -245,9 +245,9 @@ class GTEncoderLayer(nn.Module):
                  d_emb=64,
                  n_heads=8,
                  bias_mha=False,
-                 dropout_mha=0,
-                 bias_mlp=True,
-                 dropout_mlp=0.1,
+                 dropout_mha=0.2,
+                 bias_mlp=False,
+                 dropout_mlp=0.2,
                  h2i_ratio=2,
                  with_edge=False):
         super(GTEncoderLayer, self).__init__()
@@ -299,9 +299,9 @@ class GTEncoder(nn.Module):
                  n_blocks=2,
                  n_heads=8,
                  bias_mha=False,
-                 dropout_mha=0,
-                 bias_mlp=True,
-                 dropout_mlp=0.1,
+                 dropout_mha=0.2,
+                 bias_mlp=False,
+                 dropout_mlp=0.2,
                  h2i_ratio=2,
                  with_edge=False):
         super(GTEncoder, self).__init__()
@@ -332,9 +332,9 @@ def get_encoder(encoder_type,
                 n_blocks=2,
                 n_heads=8,
                 bias_mha=False,
-                dropout_mha=0,
-                bias_mlp=True,
-                dropout_mlp=0.1,
+                dropout_mha=0.2,
+                bias_mlp=False,
+                dropout_mlp=0.2,
                 h2i_ratio=2,
                 with_edge=False,
                 dropout_gat=0.1):
@@ -364,10 +364,10 @@ class ParetoStatePredictorMIS(nn.Module):
                  top_k=5,
                  n_blocks=2,
                  n_heads=8,
+                 dropout_token=0.2,
+                 dropout=0.2,
                  bias_mha=False,
-                 dropout_mha=0,
-                 bias_mlp=True,
-                 dropout_mlp=0.1,
+                 bias_mlp=False,
                  h2i_ratio=2,
                  device=None):
         super(ParetoStatePredictorMIS, self).__init__()
@@ -376,27 +376,28 @@ class ParetoStatePredictorMIS(nn.Module):
         self.token_emb = TokenEmbedGraph(n_node_feat,
                                          n_edge_type=n_edge_type,
                                          d_emb=d_emb,
-                                         top_k=top_k)
+                                         top_k=top_k,
+                                         dropout=dropout_token)
         self.encoder = get_encoder(encoder_type,
                                    d_emb=d_emb,
                                    n_blocks=n_blocks,
                                    n_heads=n_heads,
                                    bias_mha=bias_mha,
-                                   dropout_mha=dropout_mha,
+                                   dropout_mha=dropout,
                                    bias_mlp=bias_mlp,
-                                   dropout_mlp=dropout_mlp,
+                                   dropout_mlp=dropout,
                                    h2i_ratio=h2i_ratio,
                                    with_edge=True)
 
         # Graph context
-        self.graph_encoder = MLP(d_emb, h2i_ratio * d_emb, d_emb)
+        self.graph_encoder = MLP(d_emb, d_emb, d_emb, dropout=dropout)
         # Layer index context
-        self.layer_index_encoder = nn.Embedding(100, d_emb)
-        # Layer variable context
-        self.layer_var_encoder = nn.Embedding(100, d_emb)
+        self.layer_index_encoder = MLP(1, d_emb, d_emb, dropout=dropout)
+        # self.layer_index_encoder = nn.Embedding(100, d_emb)
         # State
-        self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb)
+        self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb, dropout=dropout)
 
+        self.ln = nn.LayerNorm(d_emb)
         self.predictor = nn.Linear(d_emb, 2)
 
     def forward(self, n_feat, e_feat, pids_index, lids, vids, indices):
@@ -419,7 +420,7 @@ class ParetoStatePredictorMIS(nn.Module):
 
         # Layer-index embedding
         # B x d_emb
-        li_emb = self.layer_index_encoder(lids)
+        li_emb = self.layer_index_encoder(lids.reshape(-1, 1))
 
         # Layer-variable embedding
         # B x d_emb
@@ -434,11 +435,10 @@ class ParetoStatePredictorMIS(nn.Module):
         #                                   for state in states]))
         # state_emb = torch.stack(state_emb)
         state_emb = self.aggregator(state_emb)
-        context = inst_emb + li_emb + lv_emb
-        state_emb = state_emb + context
+        state_emb = state_emb + inst_emb + li_emb + lv_emb
 
         # Pareto-state predictor
-        logits = self.predictor(state_emb)
+        logits = self.predictor(self.ln(state_emb))
 
         return logits
 
@@ -476,9 +476,8 @@ class ParetoStatePredictorKnapsack(nn.Module):
         # Graph context
         self.instance_encoder = MLP(d_emb, h2i_ratio * d_emb, d_emb)
         # Layer index context
-        self.layer_index_encoder = nn.Embedding(100, d_emb)
-        # Layer variable context
-        self.layer_var_encoder = nn.Embedding(100, d_emb)
+        self.layer_index_encoder = MLP(1, d_emb, d_emb)
+        # self.layer_index_encoder = nn.Embedding(100, d_emb)
         # State
         self.aggregator = MLP(1, h2i_ratio * d_emb, d_emb)
 

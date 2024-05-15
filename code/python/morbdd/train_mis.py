@@ -41,18 +41,42 @@ class TrainingHelper:
     @staticmethod
     def reset_epoch_stats():
         return {"items": 0, "loss": 0, "acc": 0, "f1": 0,
-                "tp": 0, "fp": 0, "tn": 0, "fn": 0, "pos": 0, "neg": 0}
+                "tp": 0, "fp": 0, "tn": 0, "fn": 0, "pos": 0, "neg": 0,
+                "time": 0}
+
+    @staticmethod
+    def compute_batch_stats(labels, preds):
+        # True positive: label=1 and class=1
+        tp = (preds[labels == 1] == 1).sum()
+        # True negative: label=0 and class=0
+        tn = (preds[labels == 0] == 0).sum()
+        # False positive: label=0 and class=1
+        fp = (preds[labels == 0] == 1).sum()
+        # False negative: label=1 and class=0
+        fn = (preds[labels == 1] == 0).sum()
+
+        acc = np.round(((tp + tn) / (tp + fp + tn + fn)), 3)
+        f1 = np.round(tp / (tp + (0.5 * (fn + fp))), 3)
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn)
+        specificity = tn / (tn + fp + 1e-10)
+        pos = labels.sum()
+        neg = labels.shape[0] - pos
+        items = pos + neg
+        return {"tp": tp, "tn": tn, "fp": fp, "fn": fn, "acc": acc, "f1": f1, "precision": precision,
+                "recall": recall, "specificity": specificity, "pos": pos, "neg": neg, "items": items}
 
     @staticmethod
     def update_running_stats(curr_stats, new_stats):
         curr_stats["pos"] += new_stats["pos"]
         curr_stats["neg"] += new_stats["neg"]
-        curr_stats["items"] += (new_stats["pos"] + new_stats["neg"])
-        curr_stats["loss"] += (new_stats["loss"] * (new_stats["pos"] + new_stats["neg"]))
+        curr_stats["items"] += new_stats["items"]
+        curr_stats["loss"] += (new_stats["loss"] * (new_stats["items"]))
         curr_stats["tp"] += new_stats["tp"]
         curr_stats["fp"] += new_stats["fp"]
         curr_stats["tn"] += new_stats["tn"]
         curr_stats["fn"] += new_stats["fn"]
+        curr_stats["time"] += new_stats["time"]
 
     @staticmethod
     def compute_epoch_stats(stats):
@@ -60,55 +84,70 @@ class TrainingHelper:
         stats["acc"] = np.round(((stats["tp"] + stats["tn"]) /
                                  (stats["tp"] + stats["fp"] + stats["tn"] + stats["fn"])), 3)
         stats["f1"] = np.round(stats["tp"] / (stats["tp"] + (0.5 * (stats["fn"] + stats["fp"]))), 3)
-        stats["tp"] = np.round(stats["tp"] / stats["pos"], 3)
-        stats["fp"] = np.round(stats["fp"] / stats["neg"], 3)
-        stats["tn"] = np.round(stats["tn"] / stats["neg"], 3)
-        stats["fn"] = np.round(stats["fn"] / stats["pos"], 3)
+        stats["precision"] = np.round(stats["tp"] / (stats["tp"] + stats["fp"]), 3)
+        stats["recall"] = np.round(stats["tp"] / (stats["tp"] + stats["fn"]), 3)
+        stats["specificity"] = np.round(stats["tn"] / (stats["tn"] + stats["fp"]), 3)
 
     @staticmethod
     def print_batch_stats(epoch, batch_id, stats):
         print("EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
-              "TP:{:.3f}, TN:{:.3f}, FP:{:.3f}, FN:{:.3f}".format(epoch,
-                                                                  batch_id,
-                                                                  stats["loss"],
-                                                                  stats["acc"],
-                                                                  stats["f1"],
-                                                                  stats["tp"] / stats["pos"],
-                                                                  stats["tn"] / stats["neg"],
-                                                                  stats["fp"] / stats["neg"],
-                                                                  stats["fn"] / stats["pos"]))
+              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+              "Time: {:.2f}, Items: {}".format(epoch,
+                                               batch_id,
+                                               stats["loss"],
+                                               stats["acc"],
+                                               stats["f1"],
+                                               stats["precision"],
+                                               stats["recall"],
+                                               stats["specificity"],
+                                               stats["time"],
+                                               stats["items"]))
 
     @staticmethod
     def print_stats(epoch, stats, split="train"):
         print("------------------------")
         print("EP-{}: {} loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
-              "TP:{:.3f}, TN:{:.3f}, FP:{:.3f}, FN:{:.3f}".format(epoch,
-                                                                  split,
-                                                                  stats["loss"],
-                                                                  stats["acc"],
-                                                                  stats["f1"],
-                                                                  stats["tp"],
-                                                                  stats["tn"],
-                                                                  stats["fp"],
-                                                                  stats["fn"]))
+              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+              "Time: {:.2f}".format(epoch,
+                                    split,
+                                    stats["loss"],
+                                    stats["acc"],
+                                    stats["f1"],
+                                    stats["precision"],
+                                    stats["recall"],
+                                    stats["specificity"],
+                                    stats["time"]))
         print("------------------------")
 
+    def save(self, epoch, save_path, stats=False, best_model=False, model=None, optimizer=None):
+        print("Saving stats={}, model={}".format(stats, best_model))
+        model_path = "best_model.pt" if best_model else "model.pt"
+        model_path = save_path / model_path
+        print("Saving model to: {}".format(model_path))
+        model_obj = {"epoch": epoch, "model": model, "optimizer": optimizer}
+        torch.save(model_obj, model_path)
+
+        if stats:
+            stats_path = save_path / f"stats.pt"
+            print("Saving stats to: {}".format(stats_path))
+            stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
+            torch.save(stats_obj, stats_path)
+
     @staticmethod
-    def get_confusion_matrix(labels, classes):
-        # True positive: label=1 and class=1
-        tp = (classes[labels == 1] == 1).sum()
-        # True negative: label=0 and class=0
-        tn = (classes[labels == 0] == 0).sum()
-        # False positive: label=0 and class=1
-        fp = (classes[labels == 0] == 1).sum()
-        # False negative: label=1 and class=0
-        fn = (classes[labels == 1] == 0).sum()
+    def get_checkpoint_path(cfg):
+        if cfg.model == "transformer":
+            exp = ("d{}-p{}-b{}-h{}-dtk{}"
+                   "-dp{}-t{}-v{}").format(cfg.d_emb,
+                                           cfg.top_k,
+                                           cfg.n_blocks,
+                                           cfg.n_heads,
+                                           cfg.dropout_token,
+                                           cfg.dropout,
+                                           cfg.dataset.shard.train.end,
+                                           cfg.dataset.shard.val.end)
+        ckpt_path = path.resource / "checkpoint" / exp
 
-        return tp, tn, fp, fn
-
-    def save_stats(self, stats_path):
-        json.dump({"train": self.train_stats, "val": self.val_stats},
-                  stats_path)
+        return ckpt_path
 
 
 class CustomCollater:
@@ -158,7 +197,7 @@ class CustomCollater:
             states = states_neg if states is None else np.vstack((states, states_neg))
 
         pids, pids_index, lids, vids = (torch.tensor(pids).int(), torch.tensor(pids_index).int(),
-                                        torch.tensor(lids).int(), torch.tensor(vids).int())
+                                        torch.tensor(lids).float(), torch.tensor(vids).int())
         indices = torch.from_numpy(states).int()
         labels = torch.tensor(labels).long()
 
@@ -195,25 +234,22 @@ def train_batch(epoch, batch, model, optimizer, device, helper):
     optimizer.step()
 
     # Compute stats
-    classes = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
-    labels, classes = labels.cpu().numpy(), classes.cpu().numpy()
-    n_pos = labels.sum()
-    n_neg = labels.shape[0] - n_pos
-    tp, tn, fp, fn = helper.get_confusion_matrix(labels, classes)
-    acc = (tp + tn) / (n_pos + n_neg)
-    f1 = tp / (tp + (0.5 * (fn + fp)))
+    preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+    labels, preds = labels.cpu().numpy(), preds.cpu().numpy()
+    batch_stats = helper.compute_batch_stats(labels, preds)
+    batch_stats["loss"] = loss.item()
 
-    return {"loss": loss.item(), "tp": tp, "tn": tn, "fp": fp, "fn": fn, "acc": acc, "f1": f1,
-            "pos": n_pos, "neg": n_neg}
+    return batch_stats
 
 
 def validate(epoch, dataloader, model, device, helper):
-    model.eval()
     global obj, adj
-
     stats = helper.reset_epoch_stats()
+
+    model.eval()
     with torch.no_grad():
         for batch in dataloader:
+            start = time.time()
             pids, pids_index, lids, vids, indices, labels = batch
             obj_batch, adj_batch = [obj[pid] for pid in pids.tolist()], [adj[pid] for pid in pids.tolist()]
             obj_batch, adj_batch = torch.stack(obj_batch) / 100, torch.stack(adj_batch)
@@ -230,13 +266,17 @@ def validate(epoch, dataloader, model, device, helper):
             loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
 
             # Compute stats
-            classes = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
-            labels, classes = labels.cpu().numpy(), classes.cpu().numpy()
-            n_pos = labels.sum()
-            n_neg = labels.shape[0] - n_pos
-            tp, tn, fp, fn = helper.get_confusion_matrix(labels, classes)
-            batch_stats = {"loss": loss.item(), "pos": n_pos, "neg": n_neg, "tp": tp, "tn": tn, "fp": fp, "fn": fn}
+            preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+            end_time = time.time() - start
+
+            labels, preds = labels.cpu().numpy(), preds.cpu().numpy()
+            batch_stats = helper.compute_batch_stats(labels, preds)
+            batch_stats["loss"] = loss.item()
+            batch_stats["time"] = end_time
             helper.update_running_stats(stats, batch_stats)
+
+    helper.compute_epoch_stats(stats)
+    helper.print_stats(epoch, stats, split="Val")
 
     model.train()
 
@@ -245,17 +285,12 @@ def validate(epoch, dataloader, model, device, helper):
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
-    ckpt_path = path.resource / "checkpoint" / "d{}-p{}-b{}-h{}-t{}-v{}".format(cfg.d_emb,
-                                                                                cfg.top_k,
-                                                                                cfg.n_blocks,
-                                                                                cfg.n_heads,
-                                                                                cfg.dataset.shard.train.end,
-                                                                                cfg.dataset.shard.val.end)
-    ckpt_path.mkdir(exist_ok=True, parents=True)
-
     cfg.size = get_size(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     helper = TrainingHelper()
+    ckpt_path = helper.get_checkpoint_path(cfg)
+    ckpt_path.mkdir(exist_ok=True, parents=True)
+    
     # Get dataset and dataloader
     load_inst_data(cfg.prob.name, cfg.size, "train", 0, 500)
     load_inst_data(cfg.prob.name, cfg.size, "val", 1000, 1100)
@@ -265,7 +300,7 @@ def main(cfg):
                                            cfg.dataset.shard.val.end, cfg.batch_size,
                                            num_workers=cfg.n_worker_dataloader,
                                            shardshuffle=False, random_shuffle=False)
-    best_f1, best_tp = 0, 0
+    best_recall = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
                                     n_edge_type=2,
@@ -273,10 +308,10 @@ def main(cfg):
                                     top_k=cfg.top_k,
                                     n_blocks=cfg.n_blocks,
                                     n_heads=cfg.n_heads,
+                                    dropout_token=cfg.dropout_token,
                                     bias_mha=cfg.bias_mha,
-                                    dropout_mha=cfg.dropout_mha,
-                                    bias_mlp=cfg.bias_mha,
-                                    dropout_mlp=cfg.dropout_mlp,
+                                    dropout=cfg.dropout,
+                                    bias_mlp=cfg.bias_mlp,
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
     opt_cls = getattr(optim, cfg.opt.name)
@@ -288,7 +323,7 @@ def main(cfg):
         if epoch % cfg.refresh_training_dataset == 0 or epoch == 0:
             shard_start = shard_start if shard_start < cfg.dataset.shard.train.end else cfg.dataset.shard.train.start
             start, end = shard_start, shard_start + cfg.shards_per_epoch - 1
-            print("Training on shards: {} {}".format(start, end))
+            print("Training on shards: {}..{}".format(start, end))
 
             train_dataloader = helper.get_dataloader(dataset_root_path, cfg.prob.n_vars, "train", start, end,
                                                      cfg.batch_size, num_workers=cfg.n_worker_dataloader,
@@ -306,41 +341,38 @@ def main(cfg):
             if cfg.logging > 1:
                 helper.print_batch_stats(epoch, batch_id, batch_stats)
 
-            if epoch == 0 and batch_id == 0:
-                print("Validating on shards: {}..{}".format(cfg.dataset.shard.val.start,
-                                                            cfg.dataset.shard.val.end))
-                val_stats = validate(epoch, val_dataloader, model, device, helper)
-                helper.compute_epoch_stats(val_stats)
-                helper.print_stats(epoch, val_stats, split="Val")
-                helper.add_epoch_stats("val", (0, val_stats))
+            # if epoch == 0 and batch_id == 0:
+            #     print("Validating on shards: {}..{}".format(cfg.dataset.shard.val.start,
+            #                                                 cfg.dataset.shard.val.end))
+            #     val_stats = validate(epoch, val_dataloader, model, device, helper)
+            #     helper.add_epoch_stats("val", (0, val_stats))
 
         helper.compute_epoch_stats(stats)
         helper.print_stats(epoch, stats)
         helper.add_epoch_stats("train", (epoch, stats))
+        helper.save(epoch,
+                    ckpt_path,
+                    stats=True,
+                    best_model=False,
+                    model={k: v.cpu() for k, v in model.state_dict().items()},
+                    optimizer=optimizer.state_dict())
 
         # Validate
         if (epoch + 1) % cfg.validate_every == 0:
             print("Validating on shards: {}..{}".format(cfg.dataset.shard.val.start,
                                                         cfg.dataset.shard.val.end))
             val_stats = validate(epoch, val_dataloader, model, device, helper)
-            helper.compute_epoch_stats(val_stats)
-            helper.print_stats(epoch, val_stats, split="Val")
             helper.add_epoch_stats("val", (epoch, val_stats))
-            if val_stats["f1"] > best_f1:
-                torch.save({"epoch": epoch,
-                            "best_model": model.cpu().state_dict(),
-                            "optimizer": optimizer.state_dict()},
-                           ckpt_path / "best_model.pt")
-                best_f1 = val_stats["f1"]
 
-        torch.save({"epoch": epoch,
-                    "train": helper.train_stats,
-                    "val": helper.val_stats},
-                   ckpt_path / "ckpt_stats.pt")
-        torch.save({"epoch": epoch,
-                    "model": model.cpu().state_dict(),
-                    "optimizer": optimizer.state_dict()},
-                   ckpt_path / "ckpt_model.pt")
+            if val_stats["recall"] > best_recall:
+                print("***{} Best recall: {}".format(epoch, val_stats["recall"]))
+                helper.save(epoch,
+                            ckpt_path,
+                            stats=False,
+                            best_model=True,
+                            model={k: v.cpu() for k, v in model.state_dict().items()},
+                            optimizer=optimizer.state_dict())
+                best_recall = val_stats["recall"]
 
 
 if __name__ == "__main__":
