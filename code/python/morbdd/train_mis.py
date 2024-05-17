@@ -1,6 +1,4 @@
-import ast
-import json
-import random
+import time
 
 import hydra
 import numpy as np
@@ -9,28 +7,81 @@ import torch.nn.functional as F
 import torch.optim as optim
 import webdataset as wds
 from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
 
 from morbdd import ResourcePaths as path
 from morbdd.model import ParetoStatePredictorMIS
-from morbdd.utils import get_instance_data
-from morbdd.utils import get_size
-import time
+from morbdd.utils import TrainingHelper
+from morbdd.utils.mis import CustomCollater
+from morbdd.utils.mis import get_checkpoint_path
+from morbdd.utils.mis import get_instance_data
+from morbdd.utils.mis import get_size
 
 obj, adj = {}, {}
 
 
-class TrainingHelper:
-    def __init__(self):
-        self.train_stats = []
-        self.val_stats = []
+class MISInstanceDataset(Dataset):
+    def __init__(self, size, split, from_pid, to_pid, device, top_k=5):
+        super(MISInstanceDataset, self).__init__()
+        self.obj, self.adj = [], []
+        for pid in range(from_pid, to_pid):
+            data = get_instance_data(size, split, pid)
+            self.obj.append(torch.tensor(data["obj_coeffs"]))
+            self.adj.append(torch.from_numpy(data["adj_list"]))
+        self.obj = torch.stack(self.obj)
+        self.adj = torch.stack(self.adj)
+        self.pos_enc = self.precompute_pos_enc(top_k)
 
-    def add_epoch_stats(self, split, stats):
-        stat_lst = getattr(self, f"{split}_stats")
-        stat_lst.append(stats)
+    def __getitem__(self, item):
+        return self.obj[item], self.adj[item], self.pos_enc[item]
+
+    def __len__(self):
+        return self.adj.shape[0]
+
+    def precompute_pos_enc(self, top_k):
+        p = None
+        if top_k > 0:
+            # Calculate position encoding
+            U, S, Vh = torch.linalg.svd(self.adj)
+            U = U[:, :, :top_k]
+            S = (torch.diag_embed(S)[:, :top_k, :top_k]) ** (1 / 2)
+            Vh = Vh[:, :top_k, :]
+
+            L, R = U @ S, S @ Vh
+            R = R.permute(0, 2, 1)
+            p = torch.cat((L, R), dim=-1)  # B x n_vars x (2*top_k)
+
+        return p
+
+
+class MISBDDNodeDataset(Dataset):
+    def __init__(self, root_path, split, device):
+        super(MISBDDNodeDataset, self).__init__()
+        self.nodes = torch.from_numpy(np.load(root_path / f"{split}.npy"))
+
+    def __getitem__(self, item):
+        return (self.nodes[item, 0],
+                self.nodes[item, 1],
+                self.nodes[item, 2],
+                self.nodes[item, 3:103],
+                self.nodes[item, 103])
+
+    def __len__(self):
+        return self.nodes.shape[0]
+
+
+class MISTrainingHelper(TrainingHelper):
+    def __init__(self, cfg):
+        super(MISTrainingHelper, self).__init__()
+        self.cfg = cfg
+
+    def get_inst_dataset(self, split, from_pid, to_pid, device=None):
+        inst_dataset = MISInstanceDataset(self.cfg.size, split, from_pid, to_pid, device=None)
+        return inst_dataset
 
     @staticmethod
-    def get_dataloader(root_path, n_vars, split, start, end, batch_size, num_workers=0, shardshuffle=True,
-                       random_shuffle=True):
+    def get_dataloader_v1(root_path, n_vars, split, start, end, batch_size, num_workers=0, shardshuffle=True,
+                          random_shuffle=True, device=None):
         dataset_path = root_path + f"/{split}/" + "bdd-layer-{" + f"{start}..{end}" + "}.tar"
         dataset = wds.WebDataset(dataset_path, shardshuffle=shardshuffle).shuffle(5000)
         dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers,
@@ -38,178 +89,20 @@ class TrainingHelper:
 
         return dataloader
 
-    @staticmethod
-    def reset_epoch_stats():
-        return {"items": 0, "loss": 0, "acc": 0, "f1": 0,
-                "tp": 0, "fp": 0, "tn": 0, "fn": 0, "pos": 0, "neg": 0,
-                "time": 0}
+    def get_dataloader_v2(self, root_path, size, split, from_pid, to_pid, batch_size, num_workers=1, device=None):
+        node_dataset = MISBDDNodeDataset(root_path, split, device=device)
+        dataloader = DataLoader(node_dataset, batch_size=batch_size, num_workers=num_workers)
 
-    @staticmethod
-    def compute_batch_stats(labels, preds):
-        # True positive: label=1 and class=1
-        tp = (preds[labels == 1] == 1).sum()
-        # True negative: label=0 and class=0
-        tn = (preds[labels == 0] == 0).sum()
-        # False positive: label=0 and class=1
-        fp = (preds[labels == 0] == 1).sum()
-        # False negative: label=1 and class=0
-        fn = (preds[labels == 1] == 0).sum()
+        return dataloader
 
-        acc = np.round(((tp + tn) / (tp + fp + tn + fn)), 3)
-        f1 = np.round(tp / (tp + (0.5 * (fn + fp))), 3)
-        precision = tp / (tp + fp + 1e-10)
-        recall = tp / (tp + fn)
-        specificity = tn / (tn + fp + 1e-10)
-        pos = labels.sum()
-        neg = labels.shape[0] - pos
-        items = pos + neg
-        return {"tp": tp, "tn": tn, "fp": fp, "fn": fn, "acc": acc, "f1": f1, "precision": precision,
-                "recall": recall, "specificity": specificity, "pos": pos, "neg": neg, "items": items}
+    def get_dataloader(self, version="v2", root_path=None, n_vars=3, split="train", start=0, end=1000, batch_size=64,
+                       num_workers=0, shardshuffle=True, random_shuffle=True, device=torch.device('cpu')):
+        if version == "v2":
+            return self.get_dataloader_v1(root_path, n_vars, split, start, end, batch_size, num_workers=num_workers,
+                                          shardshuffle=shardshuffle, random_shuffle=random_shuffle)
 
-    @staticmethod
-    def update_running_stats(curr_stats, new_stats):
-        curr_stats["pos"] += new_stats["pos"]
-        curr_stats["neg"] += new_stats["neg"]
-        curr_stats["items"] += new_stats["items"]
-        curr_stats["loss"] += (new_stats["loss"] * (new_stats["items"]))
-        curr_stats["tp"] += new_stats["tp"]
-        curr_stats["fp"] += new_stats["fp"]
-        curr_stats["tn"] += new_stats["tn"]
-        curr_stats["fn"] += new_stats["fn"]
-        curr_stats["time"] += new_stats["time"]
-
-    @staticmethod
-    def compute_epoch_stats(stats):
-        stats["loss"] = np.round(stats["loss"] / stats["items"], 3)
-        stats["acc"] = np.round(((stats["tp"] + stats["tn"]) /
-                                 (stats["tp"] + stats["fp"] + stats["tn"] + stats["fn"])), 3)
-        stats["f1"] = np.round(stats["tp"] / (stats["tp"] + (0.5 * (stats["fn"] + stats["fp"]))), 3)
-        stats["precision"] = np.round(stats["tp"] / (stats["tp"] + stats["fp"]), 3)
-        stats["recall"] = np.round(stats["tp"] / (stats["tp"] + stats["fn"]), 3)
-        stats["specificity"] = np.round(stats["tn"] / (stats["tn"] + stats["fp"]), 3)
-
-    @staticmethod
-    def print_batch_stats(epoch, batch_id, stats):
-        print("EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
-              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
-              "Time: {:.2f}, Items: {}".format(epoch,
-                                               batch_id,
-                                               stats["loss"],
-                                               stats["acc"],
-                                               stats["f1"],
-                                               stats["precision"],
-                                               stats["recall"],
-                                               stats["specificity"],
-                                               stats["time"],
-                                               stats["items"]))
-
-    @staticmethod
-    def print_stats(epoch, stats, split="train"):
-        print("------------------------")
-        print("EP-{}: {} loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
-              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
-              "Time: {:.2f}".format(epoch,
-                                    split,
-                                    stats["loss"],
-                                    stats["acc"],
-                                    stats["f1"],
-                                    stats["precision"],
-                                    stats["recall"],
-                                    stats["specificity"],
-                                    stats["time"]))
-        print("------------------------")
-
-    def save(self, epoch, save_path, stats=False, best_model=False, model=None, optimizer=None):
-        print("Saving stats={}, model={}".format(stats, best_model))
-        model_path = "best_model.pt" if best_model else "model.pt"
-        model_path = save_path / model_path
-        print("Saving model to: {}".format(model_path))
-        model_obj = {"epoch": epoch, "model": model, "optimizer": optimizer}
-        torch.save(model_obj, model_path)
-
-        if stats:
-            stats_path = save_path / f"stats.pt"
-            print("Saving stats to: {}".format(stats_path))
-            stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
-            torch.save(stats_obj, stats_path)
-
-    @staticmethod
-    def get_checkpoint_path(cfg):
-        if cfg.model == "transformer":
-            exp = ("d{}-p{}-b{}-h{}-dtk{}"
-                   "-dp{}-t{}-v{}").format(cfg.d_emb,
-                                           cfg.top_k,
-                                           cfg.n_blocks,
-                                           cfg.n_heads,
-                                           cfg.dropout_token,
-                                           cfg.dropout,
-                                           cfg.dataset.shard.train.end,
-                                           cfg.dataset.shard.val.end)
-        ckpt_path = path.resource / "checkpoint" / exp
-
-        return ckpt_path
-
-
-class CustomCollater:
-    def __init__(self, n_vars=100, random_shuffle=True, seed=1231, neg_to_pos_ratio=1):
-        self.n_vars = n_vars
-        self.random_shuffle = random_shuffle
-        self.seed = seed
-        self.neg_to_pos_ratio = neg_to_pos_ratio
-
-    def get_states(self, items):
-        n_items = len(items)
-        states = np.ones((n_items, self.n_vars)) * -1
-
-        for i, indices in enumerate(items):
-            states[i][:len(indices)] = indices
-
-        return states
-
-    def __call__(self, batch):
-        max_pos = 0
-
-        pids, pids_index, lids, vids, states, labels = [], [], [], [], None, []
-        for item in batch:
-            item["json"] = ast.literal_eval(item["json"].decode("utf-8"))
-
-            n_pos = len(item["json"]["pos"])
-            n_neg = min(len(item["json"]["neg"]), self.neg_to_pos_ratio * n_pos)
-
-            if item["json"]["pid"] not in pids:
-                pids.append(item["json"]["pid"])
-            index = pids.index(item["json"]["pid"])
-            pids_index.extend([index] * (n_pos + n_neg))
-            lids.extend([item["json"]["lid"]] * (n_pos + n_neg))
-            vids.extend([item["json"]["vid"]] * (n_pos + n_neg))
-            labels.extend([1] * n_pos)
-            labels.extend([0] * n_neg)
-
-            states_pos = self.get_states(item["json"]["pos"])
-            states = states_pos if states is None else np.vstack((states, states_pos))
-
-            # For validation set keep the shuffling fixed
-            if not self.random_shuffle:
-                random.seed(self.seed)
-            random.shuffle(item["json"]["neg"])
-
-            states_neg = self.get_states(item["json"]["neg"][:n_neg])
-            states = states_neg if states is None else np.vstack((states, states_neg))
-
-        pids, pids_index, lids, vids = (torch.tensor(pids).int(), torch.tensor(pids_index).int(),
-                                        torch.tensor(lids).float(), torch.tensor(vids).int())
-        indices = torch.from_numpy(states).int()
-        labels = torch.tensor(labels).long()
-
-        return pids, pids_index, lids, vids, indices, labels
-
-
-def load_inst_data(prob_name, size, split, from_pid, to_pid):
-    global obj, adj
-    for pid in range(from_pid, to_pid):
-        data = get_instance_data(prob_name, size, split, pid)
-        obj[pid] = torch.tensor(data["obj_coeffs"])
-        adj[pid] = torch.from_numpy(data["adj_list"])
+        elif version == "v2":
+            return self.get_dataloader_v2(root_path, split, batch_size, num_workers=num_workers)
 
 
 def train_batch(epoch, batch, model, optimizer, device, helper):
@@ -287,19 +180,21 @@ def validate(epoch, dataloader, model, device, helper):
 def main(cfg):
     cfg.size = get_size(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    helper = TrainingHelper()
-    ckpt_path = helper.get_checkpoint_path(cfg)
+    helper = MISTrainingHelper()
+    ckpt_path = get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
-    
-    # Get dataset and dataloader
-    load_inst_data(cfg.prob.name, cfg.size, "train", 0, 500)
-    load_inst_data(cfg.prob.name, cfg.size, "val", 1000, 1100)
 
     dataset_root_path = str(path.dataset) + f"/{cfg.prob.name}/{cfg.size}"
-    val_dataloader = helper.get_dataloader(dataset_root_path, cfg.prob.n_vars, "val", cfg.dataset.shard.val.start,
-                                           cfg.dataset.shard.val.end, cfg.batch_size,
+    val_dataloader = helper.get_dataloader(version=cfg.dataset_version,
+                                           root_path=dataset_root_path,
+                                           n_vars=cfg.prob.n_vars,
+                                           split="val",
+                                           start=cfg.dataset.shard.val.start,
+                                           end=cfg.dataset.shard.val.end,
+                                           batch_size=cfg.batch_size,
                                            num_workers=cfg.n_worker_dataloader,
-                                           shardshuffle=False, random_shuffle=False)
+                                           shardshuffle=False,
+                                           random_shuffle=False)
     best_recall = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
@@ -319,16 +214,16 @@ def main(cfg):
     shard_start = cfg.dataset.shard.train.start
 
     for epoch in range(cfg.epochs):
-        # Update training dataset
-        if epoch % cfg.refresh_training_dataset == 0 or epoch == 0:
-            shard_start = shard_start if shard_start < cfg.dataset.shard.train.end else cfg.dataset.shard.train.start
-            start, end = shard_start, shard_start + cfg.shards_per_epoch - 1
-            print("Training on shards: {}..{}".format(start, end))
-
-            train_dataloader = helper.get_dataloader(dataset_root_path, cfg.prob.n_vars, "train", start, end,
-                                                     cfg.batch_size, num_workers=cfg.n_worker_dataloader,
-                                                     shardshuffle=True, random_shuffle=True)
-            shard_start += cfg.shards_per_epoch
+        # # Update training dataset
+        # if epoch % cfg.refresh_training_dataset == 0 or epoch == 0:
+        #     shard_start = shard_start if shard_start < cfg.dataset.shard.train.end else cfg.dataset.shard.train.start
+        #     start, end = shard_start, shard_start + cfg.shards_per_epoch - 1
+        #     print("Training on shards: {}..{}".format(start, end))
+        #
+        #     train_dataloader = helper.get_dataloader(dataset_root_path, cfg.prob.n_vars, "train", start, end,
+        #                                              cfg.batch_size, num_workers=cfg.n_worker_dataloader,
+        #                                              shardshuffle=True, random_shuffle=True)
+        #     shard_start += cfg.shards_per_epoch
 
         # Reset training stats per epoch
         stats = helper.reset_epoch_stats()

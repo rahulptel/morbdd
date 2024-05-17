@@ -14,6 +14,110 @@ ZERO_ARC = -1
 ONE_ARC = 1
 
 
+class TrainingHelper:
+    def __init__(self):
+        self.train_stats = []
+        self.val_stats = []
+
+    def add_epoch_stats(self, split, stats):
+        stat_lst = getattr(self, f"{split}_stats")
+        stat_lst.append(stats)
+
+    @staticmethod
+    def reset_epoch_stats():
+        return {"items": 0, "loss": 0, "acc": 0, "f1": 0, "precision": 0, "recall": 0, "specificity": 0,
+                "tp": 0, "fp": 0, "tn": 0, "fn": 0, "pos": 0, "neg": 0, "time": 0}
+
+    @staticmethod
+    def compute_batch_stats(labels, preds):
+        # True positive: label=1 and class=1
+        tp = (preds[labels == 1] == 1).sum()
+        # True negative: label=0 and class=0
+        tn = (preds[labels == 0] == 0).sum()
+        # False positive: label=0 and class=1
+        fp = (preds[labels == 0] == 1).sum()
+        # False negative: label=1 and class=0
+        fn = (preds[labels == 1] == 0).sum()
+
+        acc = np.round(((tp + tn) / (tp + fp + tn + fn)), 3)
+        f1 = np.round(tp / (tp + (0.5 * (fn + fp))), 3)
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn)
+        specificity = tn / (tn + fp + 1e-10)
+        pos = labels.sum()
+        neg = labels.shape[0] - pos
+        items = pos + neg
+        return {"tp": tp, "tn": tn, "fp": fp, "fn": fn, "acc": acc, "f1": f1, "precision": precision,
+                "recall": recall, "specificity": specificity, "pos": pos, "neg": neg, "items": items}
+
+    @staticmethod
+    def update_running_stats(curr_stats, batch_stats):
+        curr_stats["pos"] += batch_stats["pos"]
+        curr_stats["neg"] += batch_stats["neg"]
+        curr_stats["items"] += batch_stats["items"]
+        curr_stats["loss"] += (batch_stats["loss"] * (batch_stats["items"]))
+        curr_stats["tp"] += batch_stats["tp"]
+        curr_stats["fp"] += batch_stats["fp"]
+        curr_stats["tn"] += batch_stats["tn"]
+        curr_stats["fn"] += batch_stats["fn"]
+        curr_stats["time"] += batch_stats["time"]
+
+    @staticmethod
+    def compute_epoch_stats(stats):
+        stats["loss"] = np.round(stats["loss"] / stats["items"], 3)
+        stats["acc"] = np.round(((stats["tp"] + stats["tn"]) /
+                                 (stats["tp"] + stats["fp"] + stats["tn"] + stats["fn"])), 3)
+        stats["f1"] = np.round(stats["tp"] / (stats["tp"] + (0.5 * (stats["fn"] + stats["fp"]))), 3)
+        stats["precision"] = np.round(stats["tp"] / (stats["tp"] + stats["fp"]), 3)
+        stats["recall"] = np.round(stats["tp"] / (stats["tp"] + stats["fn"]), 3)
+        stats["specificity"] = np.round(stats["tn"] / (stats["tn"] + stats["fp"]), 3)
+
+    @staticmethod
+    def print_batch_stats(epoch, batch_id, stats):
+        print("EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
+              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+              "Time: {:.2f}, Items: {}".format(epoch,
+                                               batch_id,
+                                               stats["loss"],
+                                               stats["acc"],
+                                               stats["f1"],
+                                               stats["precision"],
+                                               stats["recall"],
+                                               stats["specificity"],
+                                               stats["time"],
+                                               stats["items"]))
+
+    @staticmethod
+    def print_stats(epoch, stats, split="train"):
+        print("------------------------")
+        print("EP-{}: {} loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
+              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+              "Time: {:.2f}".format(epoch,
+                                    split,
+                                    stats["loss"],
+                                    stats["acc"],
+                                    stats["f1"],
+                                    stats["precision"],
+                                    stats["recall"],
+                                    stats["specificity"],
+                                    stats["time"]))
+        print("------------------------")
+
+    def save(self, epoch, save_path, stats=False, best_model=False, model=None, optimizer=None):
+        print("Saving stats={}, model={}".format(stats, best_model))
+        model_path = "best_model.pt" if best_model else "model.pt"
+        model_path = save_path / model_path
+        print("Saving model to: {}".format(model_path))
+        model_obj = {"epoch": epoch, "model": model, "optimizer": optimizer}
+        torch.save(model_obj, model_path)
+
+        if stats:
+            stats_path = save_path / f"stats.pt"
+            print("Saving stats to: {}".format(stats_path))
+            stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
+            torch.save(stats_obj, stats_path)
+
+
 class KnapsackBDDDataset(Dataset):
     def __init__(self, size=None, split=None, pid=None,
                  sampling_type=None, labels_type=None, weights_type=None, device=None):
@@ -1119,11 +1223,6 @@ def set_device(device_type):
 def get_size(cfg):
     if cfg.problem_type == 1:
         return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
-    elif cfg.problem_type == 2:
-        if cfg.graph_type == "stidsen":
-            return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
-        elif cfg.graph_type == "ba":
-            return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}-{cfg.prob.attach}"
 
 
 def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, weights_type, device, dataset_dict=None):
