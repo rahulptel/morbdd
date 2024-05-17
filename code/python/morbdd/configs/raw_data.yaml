@@ -13,9 +13,9 @@ prob:
 
 size:
 split: train
-from_pid: 0
-to_pid: 1
-n_processes: 1
+from_pid: 500
+to_pid: 1000
+n_processes: 4
 
 # Which binary version to use
 # multiobj: Bergman, D., & Cire, A. A. (2016). Multiobjective optimization by decision diagrams. In Principles and Practice of Constraint Programming: 22nd International Conference, CP 2016, Toulouse, France, September 5-9, 2016, Proceedings 22 (pp. 86-95). Springer International Publishing.

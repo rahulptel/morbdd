@@ -12,10 +12,10 @@ prob:
   seed: 7
 
 size:
-split: val
-from_pid: 1000
-to_pid: 1100
-n_processes: 4
+split: train
+from_pid: 0
+to_pid: 1000
+n_processes: 8
 shard_size: 10
 
 # Dataset
@@ -27,7 +27,7 @@ graph_type: stidsen
 # Save parents of nodes in the dataset
 with_parent: false
 # Number of negative samples per one positive sample
-neg_to_pos_ratio: 2
+neg_to_pos_ratio: 1
 layer_weight: exponential
 
 hydra:
