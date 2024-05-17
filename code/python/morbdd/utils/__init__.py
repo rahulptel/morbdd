@@ -103,19 +103,20 @@ class TrainingHelper:
                                     stats["time"]))
         print("------------------------")
 
-    def save(self, epoch, save_path, stats=False, best_model=False, model=None, optimizer=None):
-        print("Saving stats={}, model={}".format(stats, best_model))
-        model_path = "best_model.pt" if best_model else "model.pt"
-        model_path = save_path / model_path
+    def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
+        print("Saving model={}".format(best_model))
+        model_path = save_path / "model.pt"
         print("Saving model to: {}".format(model_path))
         model_obj = {"epoch": epoch, "model": model, "optimizer": optimizer}
         torch.save(model_obj, model_path)
+        if best_model:
+            model_path = save_path / "best_model.pt"
+            torch.save(model_obj, model_path)
 
-        if stats:
-            stats_path = save_path / f"stats.pt"
-            print("Saving stats to: {}".format(stats_path))
-            stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
-            torch.save(stats_obj, stats_path)
+        stats_path = save_path / f"stats.pt"
+        print("Saving stats to: {}".format(stats_path))
+        stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
+        torch.save(stats_obj, stats_path)
 
 
 class KnapsackBDDDataset(Dataset):
