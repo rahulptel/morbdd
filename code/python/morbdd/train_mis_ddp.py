@@ -19,6 +19,8 @@ from morbdd.utils.mis import get_size
 from torch.distributed import init_process_group
 import os
 from morbdd import machine
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DistributedSampler
 
 
 class MISBDDNodeDataset(Dataset):
@@ -80,6 +82,23 @@ class MISTrainingHelper(TrainingHelper):
     def __init__(self, cfg):
         super(MISTrainingHelper, self).__init__()
         self.cfg = cfg
+
+    def get_dataset(self, split, from_pid, to_pid, shuffle=True, drop_last=False):
+        bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
+        valid_rows = (from_pid <= bdd_node_dataset[:, 0])
+        valid_rows &= (bdd_node_dataset[:, 0] <= to_pid)
+
+        bdd_node_dataset = bdd_node_dataset[valid_rows]
+
+        obj, adj = [], []
+        for pid in range(from_pid, to_pid):
+            data = get_instance_data(self.cfg.size, split, pid)
+            obj.append(data["obj_coeffs"])
+            adj.append(data["adj_list"])
+        obj, adj = np.array(obj), np.stack(adj)
+        dataset = MISBDDNodeDataset(bdd_node_dataset, obj, adj, top_k=self.cfg.top_k)
+
+        return dataset
 
     def get_dataloader(self, split, from_pid, to_pid, shuffle=True, drop_last=False):
         bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
@@ -173,48 +192,63 @@ def validate(epoch, dataloader, model, device, helper):
     return stats
 
 
+def setup_ddp(cfg):
+    world_size = int(os.environ.get("SLURM_JOB_NUM_NODES"), 1)
+    n_gpus_per_node = torch.cuda.device_count()
+    world_size *= n_gpus_per_node
+    # The id of the node on which the current process is running
+    node_id = int(os.environ.get("SLURM_NODEID"), 0)
+    # The id of the current process inside a node
+    local_rank = int(os.environ.get("SLURM_LOCALID"))
+    # Unique id of the current process across processes spawned across all nodes
+    global_rank = (node_id * n_gpus_per_node) + local_rank
+    # The local cuda device id we assign to the current process
+    device_id = local_rank
+    # Initialize process group and initiate communications between all processes
+    # running on all nodes
+    print("From Rank: {}, ==> Initializing Process Group...".format(global_rank))
+    # init the process group
+    init_process_group(backend=cfg.dist_backend,
+                       init_method=cfg.init_method,
+                       world_size=world_size,
+                       rank=global_rank)
+    print("Process group ready!")
+    print("From Rank: {}, ==> Making model...".format(global_rank))
+
+    return global_rank, device_id
+
+
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
-    device, dist = "cpu", None
-    if torch.cuda.is_available():
-        if machine == "cc":
-            ngpus_per_node = torch.cuda.device_count()
-            """ 
-            This next line is the key to getting DistributedDataParallel working on SLURM:
-            SLURM_NODEID is 0 or 1 in this example, SLURM_LOCALID is the id of the 
-            current process inside a node and is also 0 or 1 in this example.
-            """
-            local_rank = int(os.environ.get("SLURM_LOCALID"))
-            rank = int(os.environ.get("SLURM_NODEID")) * ngpus_per_node + local_rank
-            device = local_rank
-            """ 
-            this block initializes a process group and initiate communications
-            between all processes running on all nodes 
-            """
-            print('From Rank: {}, ==> Initializing Process Group...'.format(rank))
-            # init the process group
-            init_process_group(backend=cfg.dist_backend,
-                               init_method=cfg.init_method,
-                               world_size=cfg.world_size,
-                               rank=rank)
-            print("Process group ready!")
-            print('From Rank: {}, ==> Making model..'.format(rank))
-
-        else:
-            master_process = True
-            device = "cuda:0"
-            seed_offset = 0
-            world_size = 1
-    device = torch.device(device)
+    rank, device_id = setup_ddp(cfg)
+    is_master = rank == 0
+    device = torch.device(device_id)
 
     helper = MISTrainingHelper(cfg)
     ckpt_path = get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
 
-    n_train, train_dataloader = helper.get_dataloader("train", 0, 1000, drop_last=True)
-    n_val, val_dataloader = helper.get_dataloader("val", 1000, 1100, drop_last=False)
-    print("Train samples: {}, Val samples {}".format(n_train, n_val))
+    train_dataset = helper.get_dataset("train", 0, 1000)
+    train_sampler = DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=cfg.batch_size,
+                                  sampler=train_sampler,
+                                  shuffle=(train_sampler is None),
+                                  num_workers=cfg.n_worker_dataloader,
+                                  pin_memory=True)
+
+    val_dataset = helper.get_dataset("val", 1000, 1100)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=cfg.batch_size,
+                                sampler=val_sampler,
+                                num_workers=cfg.n_worker_dataloader,
+                                pin_memory=True)
+
+    if is_master:
+        print("Train samples: {}, Val samples {}".format(len(train_dataset),
+                                                         len(val_dataset)))
 
     best_f1 = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
@@ -230,6 +264,7 @@ def main(cfg):
                                     bias_mlp=cfg.bias_mlp,
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
+    model = DDP(model, device_ids=[device_id])
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
 
