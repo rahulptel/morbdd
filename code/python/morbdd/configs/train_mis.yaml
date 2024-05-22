@@ -13,19 +13,29 @@ prob:
 
 size:
 
+env: local
+dist_backend: nccl
+init_method: tcp://127.0.0.1:3456
+world_size: 1
+
 # Training config
 logging: 2
 epochs: 10
-shards_per_epoch: 5
-refresh_training_dataset: 5
-validate_every: 5
-batch_size: 64
+
+#shards_per_epoch: 5
+#refresh_training_dataset: 5
+validate_every: 1
+save_every: 1
+batch_size: 100
 # Set this to a positive number when using GPU
-n_worker_dataloader: 4
+n_worker_dataloader: 1
 
 opt:
   name: Adam
   lr: 1e-3
+  wd: 1e-4
+clip_grad: 1.0
+norm_type: 2.0
 agg: sum            # cat | sum
 
 dataset:
