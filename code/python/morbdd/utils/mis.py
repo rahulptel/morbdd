@@ -128,8 +128,8 @@ def get_checkpoint_path(cfg):
                                        cfg.n_heads,
                                        cfg.dropout_token,
                                        cfg.dropout,
-                                       cfg.dataset.shard.train.end,
-                                       cfg.dataset.shard.val.end)
+                                       cfg.dataset.train.to_pid,
+                                       cfg.dataset.val.to_pid)
     ckpt_path = path.resource / "checkpoint" / exp
 
     return ckpt_path

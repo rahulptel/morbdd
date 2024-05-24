@@ -81,6 +81,24 @@ class MISTrainingHelper(TrainingHelper):
         super(MISTrainingHelper, self).__init__()
         self.cfg = cfg
 
+    def get_dataset(self, split, from_pid, to_pid):
+        bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
+        valid_rows = (from_pid <= bdd_node_dataset[:, 0])
+        valid_rows &= (bdd_node_dataset[:, 0] <= to_pid)
+
+        bdd_node_dataset = bdd_node_dataset[valid_rows]
+
+        obj, adj = [], []
+        for pid in range(from_pid, to_pid):
+            data = get_instance_data(self.cfg.size, split, pid)
+            obj.append(data["obj_coeffs"])
+            adj.append(data["adj_list"])
+        obj, adj = np.array(obj), np.stack(adj)
+
+        dataset = MISBDDNodeDataset(bdd_node_dataset, obj, adj, top_k=self.cfg.top_k)
+
+        return dataset
+
     def get_dataloader(self, split, from_pid, to_pid, shuffle=True, drop_last=False):
         bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
         valid_rows = (from_pid <= bdd_node_dataset[:, 0])

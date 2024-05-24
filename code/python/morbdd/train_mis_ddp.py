@@ -76,15 +76,20 @@ class AverageMeter(object):
 
 
 def setup_ddp(cfg):
-    world_size = int(os.environ.get("SLURM_JOB_NUM_NODES"), 1)
+    world_size = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
+    print("World size", world_size)
     n_gpus_per_node = torch.cuda.device_count()
     world_size *= n_gpus_per_node
+    print("World size", world_size)
     # The id of the node on which the current process is running
-    node_id = int(os.environ.get("SLURM_NODEID"), 0)
+    node_id = int(os.environ.get("SLURM_NODEID", 0))
+    print(node_id)
     # The id of the current process inside a node
     local_rank = int(os.environ.get("SLURM_LOCALID"))
+    print("Local rank ", local_rank)
     # Unique id of the current process across processes spawned across all nodes
     global_rank = (node_id * n_gpus_per_node) + local_rank
+    print("Global rank: ", global_rank)
     # The local cuda device id we assign to the current process
     device_id = local_rank
     # Initialize process group and initiate communications between all processes
@@ -251,8 +256,10 @@ def main(cfg):
 
     # Initialize train data loader with distributed sampler
     # Use pin-memory for async
-    train_dataset = helper.get_dataset("train", 0, 1000)
-    train_sampler = DistributedSampler(train_dataset)
+    train_dataset = helper.get_dataset("train",
+                                       cfg.dataset.train.from_pid,
+                                       cfg.dataset.train.to_pid)
+    train_sampler = DistributedSampler(train_dataset, shuffle=True)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=cfg.batch_size,
                                   sampler=train_sampler,
@@ -260,7 +267,9 @@ def main(cfg):
                                   num_workers=cfg.n_worker_dataloader,
                                   pin_memory=True)
     # Initialize val data loader with distributed sampler
-    val_dataset = helper.get_dataset("val", 1000, 1100)
+    val_dataset = helper.get_dataset("val",
+                                     cfg.dataset.val.from_pid,
+                                     cfg.dataset.val.to_pid)
     val_sampler = DistributedSampler(val_dataset, shuffle=False)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=cfg.batch_size,
@@ -293,16 +302,18 @@ def main(cfg):
         train_sampler.set_epoch(epoch)
         stats = train(train_dataloader, model, optimizer, device, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type)
         if master:
-            stats.update({"epoch": epoch + 1})
-            train_stats_lst.append(compute_meta_stats(stats))
+            meta_stats = compute_meta_stats(stats)
+            meta_stats.update({"epoch": epoch + 1})
+            train_stats_lst.append(meta_stats)
             print_stats(epoch, "train", train_stats_lst[-1])
 
         best_model = False
         if (epoch + 1) % cfg.validate_every == 0:
             stats = validate(val_dataloader, model, device)
             if master:
-                stats.update({"epoch": epoch + 1})
-                val_stats_lst.append(compute_meta_stats(stats))
+                meta_stats = compute_meta_stats(stats)
+                meta_stats.update({"epoch": epoch + 1})
+                val_stats_lst.append(meta_stats)
                 if val_stats_lst[-1]["f1"] > best_f1:
                     best_f1 = val_stats_lst[-1]["f1"]
                     best_model = True
