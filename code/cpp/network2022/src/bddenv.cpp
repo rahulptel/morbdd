@@ -455,6 +455,31 @@ void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
     bdd->layers[layer] = restricted_layer;
 }
 
+void BDDEnv::restrict(vector<vector<int>> states_to_remove)
+{
+    vector<int>::iterator it1;
+
+    for (int layer = 0; layer < states_to_remove.size(); ++layer)
+    {
+        vector<Node *> restricted_layer;
+        restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
+        for (int i = 0; i < bdd->layers[layer].size(); ++i)
+        {
+            it1 = find(states_to_remove[layer].begin(), states_to_remove[layer].end(), i);
+            if (it1 != states_to_remove[layer].end())
+            {
+                bdd->remove_node_ref_prev(bdd->layers[layer][i]);
+                states_to_remove[layer].erase(it1);
+            }
+            else
+            {
+                restricted_layer.push_back(bdd->layers[layer][i]);
+            }
+        }
+        bdd->layers[layer] = restricted_layer;
+    }
+}
+
 void BDDEnv::relax_layer(int layer, int method, vector<int> states) {}
 
 int BDDEnv::reduce_dd()

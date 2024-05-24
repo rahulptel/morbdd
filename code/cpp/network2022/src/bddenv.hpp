@@ -147,6 +147,8 @@ public:
 
     int get_num_nodes_per_layer(int);
 
+    void restrict(vector<vector<int>> states_to_remove);
+
 private:
     void initialize();
 
