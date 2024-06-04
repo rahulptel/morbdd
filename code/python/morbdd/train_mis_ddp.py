@@ -1,46 +1,27 @@
+import os
 import time
 
 import hydra
-import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn.functional as F
 import torch.optim as optim
-import webdataset as wds
-from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
-
-from morbdd import ResourcePaths as path
-from morbdd.model import ParetoStatePredictorMIS
-from morbdd.utils import TrainingHelper
-from morbdd.utils.mis import CustomCollater
-from morbdd.utils.mis import get_checkpoint_path
-from morbdd.utils.mis import get_instance_data
-from morbdd.utils.mis import get_size
 from torch.distributed import init_process_group
-import os
-from morbdd import machine
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler
-from morbdd.train_mis import MISBDDNodeDataset
+
+from morbdd.model import ParetoStatePredictorMIS
 from morbdd.train_mis import MISTrainingHelper
-import torch.distributed as dist
-from enum import Enum
+from morbdd.utils.mis import get_checkpoint_path
+from morbdd.utils.mis import get_size
 
 
-class Summary(Enum):
-    NONE = 0
-    AVERAGE = 1
-    SUM = 2
-    COUNT = 3
-
-
-class AverageMeter(object):
+class Meter(object):
     """Computes and stores the average and current value"""
 
-    def __init__(self, name, fmt=':f', summary_type=Summary.AVERAGE):
+    def __init__(self, name):
         self.name = name
-        self.fmt = fmt
-        self.summary_type = summary_type
         self.reset()
 
     def reset(self):
@@ -54,25 +35,6 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-    def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
-        return fmtstr.format(**self.__dict__)
-
-    def summary(self):
-        fmtstr = ''
-        if self.summary_type is Summary.NONE:
-            fmtstr = ''
-        elif self.summary_type is Summary.AVERAGE:
-            fmtstr = '{name} {avg:.3f}'
-        elif self.summary_type is Summary.SUM:
-            fmtstr = '{name} {sum:.3f}'
-        elif self.summary_type is Summary.COUNT:
-            fmtstr = '{name} {count:.3f}'
-        else:
-            raise ValueError('invalid summary type %r' % self.summary_type)
-
-        return fmtstr.format(**self.__dict__)
 
 
 def setup_ddp(cfg):
@@ -122,44 +84,85 @@ def compute_batch_stats(labels, preds):
     return tp, tn, fp, fn, pos, neg
 
 
-def compute_meta_stats(*stats):
-    losses, tp, tn, fp, fn, n_pos, n_neg = stats
-    losses, tp, tn, fp, fn, n_pos, n_neg = (losses.numpy(), tp.numpy(), tn.numpy(), fp.numpy(), fn.numpy(),
-                                            n_pos.numpy(), n_neg.numpy())
-    losses = losses / (n_pos + n_neg)
+def compute_meta_stats(stats):
+    stats = {k: v.cpu().numpy() if v is not None else None for k, v in stats.items()}
+    loss, tp, tn, fp, fn, n_pos, n_neg = (stats["loss"], stats["tp"], stats["tn"], stats["fp"], stats["fn"],
+                                          stats["n_pos"], stats["n_neg"])
+
+    loss = loss / (n_pos + n_neg)
     acc = ((tp + tn) / (tp + fp + tn + fn))
     f1 = tp / (tp + (0.5 * (fn + fp)))
     precision = tp / (tp + fp + 1e-10)
-    recall = tp / (tp + fn + + 1e-10)
+    recall = tp / (tp + fn + 1e-10)
     specificity = tn / (tn + fp + 1e-10)
 
-    return {"losses": losses, "tp": tp, "tn": tn, "fp": fp, "fn": fn, "acc": acc, "precision": precision,
-            "recall": recall, "specificity": specificity}
+    stats.update({
+        "loss": loss, "acc": acc, "f1": f1, "precision": precision, "recall": recall, "specificity": specificity
+    })
+
+    return stats
+
+
+def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None, epoch_time=None):
+    dist.all_reduce(losses.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(tp.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(tn.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(fp.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(fn.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(n_pos.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(n_neg.sum, dist.ReduceOp.SUM, async_op=False)
+    data_time_val, batch_time_val, epoch_time_val = None, None, None
+    if data_time is not None:
+        dist.all_reduce(data_time.sum, dist.ReduceOp.AVG, async_op=False)
+        data_time_val = data_time.sum
+    if batch_time is not None:
+        dist.all_reduce(batch_time.sum, dist.ReduceOp.AVG, async_op=False)
+        batch_time_val = batch_time.sum
+    if epoch_time is not None:
+        dist.all_reduce(epoch_time.sum, dist.ReduceOp.AVG, async_op=False)
+        epoch_time_val = epoch_time.sum
+
+    return {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum, "n_pos": n_pos.sum,
+            "n_neg": n_neg.sum, "batch_time": batch_time_val, "data_time": data_time_val, "epoch_time": epoch_time_val}
+
+
+def print_stats(split, stats):
+    print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
+    print_str += "Epoch Time: {:.2f}, Batch Time: {:.4f}, Data Time: {:.4f}"
+    ept, bt, dt = -1, -1, -1
+    if split == "train":
+        ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
+
+    print(print_str.format(stats["epoch"], split, stats["f1"], stats["acc"], stats["loss"], stats["recall"],
+                           stats["precision"], stats["specificity"], ept, bt, dt))
+
+
+def compute_meta_stats_and_print(master, epoch, split, stats_lst, stats):
+    if master:
+        meta_stats = compute_meta_stats(stats)
+        meta_stats.update({"epoch": epoch + 1})
+        stats_lst.append(meta_stats)
+        print_stats(split, stats_lst[-1])
 
 
 def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
-    batch_time = AverageMeter('Time', ':6.3f')
-    data_time = AverageMeter('Data', ':6.3f')
-    losses = AverageMeter('Loss', ':.4e')
-    tp = AverageMeter('TP', ':6.3f')
-    fp = AverageMeter('FP', ':6.3f')
-    tn = AverageMeter('TN', ':6.3f')
-    fn = AverageMeter('FN', ':6.3f')
-    n_pos = AverageMeter('n_pos')
-    n_neg = AverageMeter('n_neg')
+    data_time, batch_time, epoch_time = Meter('DataTime'), Meter('BatchTime'), Meter('EpochTime')
+    losses = Meter('Loss')
+    tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
+    n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
 
     model.train()
     start_time = time.time()
     for batch_id, batch in enumerate(dataloader):
-        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-
         batch = [item.to(device, non_blocking=True) for item in batch]
         objs, adjs, pos, _, lids, vids, states, labels = batch
         objs = objs / 100
+        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device) / objs.shape[0],
+                         n=objs.shape[0])
 
         # Get logits and compute loss
         logits = model(objs, adjs, pos, lids, vids, states)
-        logits, labels = logits.reshape(-1, 2), labels.to(device).long().reshape(-1)
+        logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
         loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
 
         # Backprop with gradient clipping
@@ -172,35 +175,28 @@ def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
         # Compute stats
         preds = torch.argmax(F.softmax(logits.detach(), dim=-1), dim=-1)
         _tp, _tn, _fp, _fn, _n_pos, _n_neg = compute_batch_stats(labels, preds)
+
         losses.update(loss.detach(), labels.size(0))
-        tp.update(_tp, labels.size(0))
-        tn.update(_tn, labels.size(0))
-        fp.update(_fp, labels.size(0))
-        fn.update(_fn, labels.size(0))
+        tp.update(_tp)
+        tn.update(_tn)
+        fp.update(_fp)
+        fn.update(_fn)
         n_pos.update(_n_pos)
         n_neg.update(_n_neg)
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+    epoch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
-    losses = dist.all_reduce(losses.sum, dist.ReduceOp.SUM)
-    tp = dist.all_reduce(tp, dist.ReduceOp.SUM)
-    tn = dist.all_reduce(tn, dist.ReduceOp.SUM)
-    fp = dist.all_reduce(fp, dist.ReduceOp.SUM)
-    fn = dist.all_reduce(fn, dist.ReduceOp.SUM)
-    n_pos = dist.all_reduce(n_pos, dist.ReduceOp.SUM)
-    n_neg = dist.all_reduce(n_neg, dist.ReduceOp.SUM)
+    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time,
+                         epoch_time=epoch_time)
 
-    return losses, tp, tn, fp, fn, n_pos, n_neg
+    return epoch_stats
 
 
 @torch.no_grad()
 def validate(dataloader, model, device):
-    losses = AverageMeter('Loss', ':.4e')
-    tp = AverageMeter('TP', ':6.3f')
-    fp = AverageMeter('FP', ':6.3f')
-    tn = AverageMeter('TN', ':6.3f')
-    fn = AverageMeter('FN', ':6.3f')
-    n_pos = AverageMeter('n_pos')
-    n_neg = AverageMeter('n_neg')
+    losses = Meter('Loss')
+    tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
+    n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
 
     model.eval()
     for batch in dataloader:
@@ -216,27 +212,18 @@ def validate(dataloader, model, device):
         # Compute stats
         preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
         _tp, _tn, _fp, _fn, _n_pos, _n_neg = compute_batch_stats(labels, preds)
+
         losses.update(loss.detach(), labels.size(0))
-        tp.update(_tp, labels.size(0))
-        tn.update(_tn, labels.size(0))
-        fp.update(_fp, labels.size(0))
-        fn.update(_fn, labels.size(0))
+        tp.update(_tp)
+        tn.update(_tn)
+        fp.update(_fp)
+        fn.update(_fn)
         n_pos.update(_n_pos)
         n_neg.update(_n_neg)
 
-    losses = dist.all_reduce(losses.sum, dist.ReduceOp.SUM)
-    tp = dist.all_reduce(tp, dist.ReduceOp.SUM)
-    tn = dist.all_reduce(tn, dist.ReduceOp.SUM)
-    fp = dist.all_reduce(fp, dist.ReduceOp.SUM)
-    fn = dist.all_reduce(fn, dist.ReduceOp.SUM)
-    n_pos = dist.all_reduce(n_pos, dist.ReduceOp.SUM)
-    n_neg = dist.all_reduce(n_neg, dist.ReduceOp.SUM)
+    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg)
 
-    return losses, tp, tn, fp, fn, n_pos, n_neg
-
-
-def print_stats(epoch, split, stats):
-    pass
+    return epoch_stats
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
@@ -246,13 +233,13 @@ def main(cfg):
     helper = MISTrainingHelper(cfg)
     ckpt_path = get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
+    print("Checkpoint path: {}".format(ckpt_path))
 
     # Set-up DDP and device
     rank, device_id = setup_ddp(cfg)
     master = rank == 0
     device = torch.device(device_id)
-    if master:
-        train_stats_lst, val_stats_lst = [], []
+    train_stats_lst, val_stats_lst = [], []
 
     # Initialize train data loader with distributed sampler
     # Use pin-memory for async
@@ -289,8 +276,8 @@ def main(cfg):
                                     n_blocks=cfg.n_blocks,
                                     n_heads=cfg.n_heads,
                                     dropout_token=cfg.dropout_token,
-                                    bias_mha=cfg.bias_mha,
                                     dropout=cfg.dropout,
+                                    bias_mha=cfg.bias_mha,
                                     bias_mlp=cfg.bias_mlp,
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
@@ -301,23 +288,18 @@ def main(cfg):
     for epoch in range(cfg.epochs):
         train_sampler.set_epoch(epoch)
         stats = train(train_dataloader, model, optimizer, device, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type)
-        if master:
-            meta_stats = compute_meta_stats(stats)
-            meta_stats.update({"epoch": epoch + 1})
-            train_stats_lst.append(meta_stats)
-            print_stats(epoch, "train", train_stats_lst[-1])
+        compute_meta_stats_and_print(master, epoch, "train", train_stats_lst, stats)
 
-        best_model = False
         if (epoch + 1) % cfg.validate_every == 0:
             stats = validate(val_dataloader, model, device)
-            if master:
-                meta_stats = compute_meta_stats(stats)
-                meta_stats.update({"epoch": epoch + 1})
-                val_stats_lst.append(meta_stats)
-                if val_stats_lst[-1]["f1"] > best_f1:
-                    best_f1 = val_stats_lst[-1]["f1"]
-                    best_model = True
-                    print("***{} Best f1: {}".format(epoch + 1, best_f1))
+            compute_meta_stats_and_print(master, epoch, "val", val_stats_lst, stats)
+
+        best_model = False
+        if master:
+            if val_stats_lst[-1]["f1"] > best_f1:
+                best_f1 = val_stats_lst[-1]["f1"]
+                best_model = True
+                print("***{} Best f1: {}".format(epoch + 1, best_f1))
 
         # if master and (epoch + 1) % cfg.save_every == 0:
         #     helper.save(epoch,
@@ -325,6 +307,8 @@ def main(cfg):
         #                 best_model=best_model,
         #                 model=model.module.state_dict(),
         #                 optimizer=optimizer.state_dict())
+
+        print()
 
 
 if __name__ == "__main__":
