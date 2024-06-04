@@ -84,7 +84,7 @@ class MISTrainingHelper(TrainingHelper):
     def get_dataset(self, split, from_pid, to_pid):
         bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
         valid_rows = (from_pid <= bdd_node_dataset[:, 0])
-        valid_rows &= (bdd_node_dataset[:, 0] <= to_pid)
+        valid_rows &= (bdd_node_dataset[:, 0] < to_pid)
 
         bdd_node_dataset = bdd_node_dataset[valid_rows]
         if split == "val":
@@ -197,45 +197,42 @@ def validate(epoch, dataloader, model, device, helper):
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
-    device, dist = "cpu", None
-    if torch.cuda.is_available():
-        if machine == "cc":
-            ngpus_per_node = torch.cuda.device_count()
-            """ 
-            This next line is the key to getting DistributedDataParallel working on SLURM:
-            SLURM_NODEID is 0 or 1 in this example, SLURM_LOCALID is the id of the 
-            current process inside a node and is also 0 or 1 in this example.
-            """
-            local_rank = int(os.environ.get("SLURM_LOCALID"))
-            rank = int(os.environ.get("SLURM_NODEID")) * ngpus_per_node + local_rank
-            device = local_rank
-            """ 
-            this block initializes a process group and initiate communications
-            between all processes running on all nodes 
-            """
-            print('From Rank: {}, ==> Initializing Process Group...'.format(rank))
-            # init the process group
-            init_process_group(backend=cfg.dist_backend,
-                               init_method=cfg.init_method,
-                               world_size=cfg.world_size,
-                               rank=rank)
-            print("Process group ready!")
-            print('From Rank: {}, ==> Making model..'.format(rank))
 
-        else:
-            master_process = True
-            device = "cuda:0"
-            seed_offset = 0
-            world_size = 1
-    device = torch.device(device)
+    device_str = "cpu"
+    pin_memory = False
+    if torch.cuda.is_available():
+        device_str = "cuda"
+        pin_memory = True
+    device = torch.device(device_str)
 
     helper = MISTrainingHelper(cfg)
     ckpt_path = get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
 
-    n_train, train_dataloader = helper.get_dataloader("train", 0, 1000, drop_last=True)
-    n_val, val_dataloader = helper.get_dataloader("val", 1000, 1100, drop_last=False)
-    print("Train samples: {}, Val samples {}".format(n_train, n_val))
+    # n_train, train_dataloader = helper.get_dataloader("train",
+    #                                                   cfg.dataset.train.from_pid,
+    #                                                   cfg.dataset.train.to_pid,
+    #                                                   drop_last=True)
+    # n_val, val_dataloader = helper.get_dataloader("val",
+    #                                               cfg.dataset.val.from_pid,
+    #                                               cfg.dataset.val.to_pid, drop_last=False)
+    train_dataset = helper.get_dataset("train",
+                                       cfg.dataset.train.from_pid,
+                                       cfg.dataset.train.to_pid)
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=cfg.batch_size,
+                                  shuffle=True,
+                                  num_workers=cfg.n_worker_dataloader,
+                                  pin_memory=pin_memory)
+    val_dataset = helper.get_dataset("val",
+                                     cfg.dataset.val.from_pid,
+                                     cfg.dataset.val.to_pid)
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=cfg.batch_size,
+                                shuffle=False,
+                                num_workers=cfg.n_worker_dataloader,
+                                pin_memory=pin_memory)
+    print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
 
     best_f1 = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
@@ -252,7 +249,7 @@ def main(cfg):
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
     opt_cls = getattr(optim, cfg.opt.name)
-    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=1e-3)
+    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
 
     # Reset training stats per epoch
     stats = helper.reset_epoch_stats()
