@@ -39,13 +39,12 @@ norm_type: 2.0
 agg: sum            # cat | sum
 
 dataset:
-  shard:
-    train:
-      start: 0
-      end: 49
-    val:
-      start: 0
-      end: 9
+  train:
+    from_pid: 0
+    to_pid: 49
+  val:
+    from_pid: 1000
+    to_pid: 1010
 
   # Save parents of nodes in the dataset
   with_parent: false
