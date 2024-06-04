@@ -1223,6 +1223,8 @@ def set_device(device_type):
 
 def get_size(cfg):
     if cfg.problem_type == 1:
+        return f"{cfg.prob.n_objs}_{cfg.prob.n_vars}"
+    elif cfg.problem_type == 2:
         return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
 
 
