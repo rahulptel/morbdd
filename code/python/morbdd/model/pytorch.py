@@ -9,11 +9,6 @@ import torch.nn.functional as F
 # from torch_geometric.data import Data
 
 
-def clones(module, N):
-    """Produce N identical layers."""
-    return nn.ModuleList([copy.deepcopy(module) for _ in range(N)])
-
-
 class MLP(nn.Module):
     def __init__(self, d_in, d_hid, d_out, bias=True, ln_eps=1e-5, act="relu",
                  dropout=0.1, normalize=False):
@@ -142,16 +137,12 @@ class TokenEmbedGraph(nn.Module):
 
 
 class MultiHeadSelfAttention(nn.Module):
-    """
-    Based on: Global Self-Attention as a Replacement for Graph Convolution
-    https://arxiv.org/pdf/2108.03348
-    """
+    """  Based on: Attention is all you need """
 
     def __init__(self,
                  d_emb=64,
                  n_heads=8,
-                 bias_mha=False,
-                 with_edge=None):
+                 bias_mha=False):
         super(MultiHeadSelfAttention, self).__init__()
         self.d_k = d_emb // n_heads
         self.d_emb = d_emb
@@ -161,16 +152,8 @@ class MultiHeadSelfAttention(nn.Module):
         self.W_k = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
         self.W_v = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
         self.O_n = nn.Linear(n_heads * self.d_k, d_emb, bias=bias_mha)
-        if with_edge:
-            # Edge bias and gating parameters
-            self.W_g = nn.Linear(d_emb, n_heads, bias=bias_mha)
-            self.W_e = nn.Linear(d_emb, n_heads, bias=bias_mha)
-            # Output mapping params
-            self.O_e = nn.Linear(n_heads, d_emb, bias=bias_mha)
 
-        self.dynamic_forward = getattr(self, "forward_with_e" if with_edge is None else "forward_without_e")
-
-    def forward(self, n, e=None):
+    def forward(self, n):
         """
         n : batch_size x n_nodes x d_emb
         e : batch_size x n_nodes x n_nodes x d_emb
@@ -189,13 +172,6 @@ class MultiHeadSelfAttention(nn.Module):
         K = K.transpose(1, 2)
         V = V.transpose(1, 2)
 
-        n, e = self.dynamic_forward(B, Q, K, V, e=e)
-
-        return n, e
-
-    def forward_without_e(self, B, Q, K, V, e=None):
-        """Normal attention"""
-
         # Compute implicit attention
         # batch_size x n_heads x n_nodes x n_nodes
         _A = torch.einsum('ijkl,ijlm->ijkm', [Q, K.transpose(-2, -1)])
@@ -208,10 +184,58 @@ class MultiHeadSelfAttention(nn.Module):
         # batch_size x n_nodes x d_emb
         n = self.O_n(_V.transpose(1, 2).reshape(B, -1, self.d_emb))
 
-        return n, e
+        return n
 
-    def forward_with_e(self, B, Q, K, V, e=None):
-        """Attention conditioned on edge features"""
+
+class MultiHeadSelfAttentionWithEdge(nn.Module):
+    """
+        Based on: Global Self-Attention as a Replacement for Graph Convolution
+        https://arxiv.org/pdf/2108.03348
+        """
+
+    def __init__(self,
+                 d_emb=64,
+                 n_heads=8,
+                 bias_mha=False,
+                 is_last_block=False):
+        super(MultiHeadSelfAttentionWithEdge, self).__init__()
+        self.d_emb = d_emb
+        self.d_k = d_emb // n_heads
+        self.n_heads = n_heads
+        self.is_last_block = is_last_block
+
+        # Node Q, K, V params
+        self.W_q = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        self.W_k = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        self.W_v = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        self.O_n = nn.Linear(n_heads * self.d_k, d_emb, bias=bias_mha)
+
+        # Edge bias and gating parameters
+        self.W_g = nn.Linear(d_emb, n_heads, bias=bias_mha)
+        self.W_e = nn.Linear(d_emb, n_heads, bias=bias_mha)
+
+        # Output mapping params
+        self.O_e = None if is_last_block else nn.Linear(n_heads, d_emb, bias=bias_mha)
+
+    def forward(self, n, e):
+        """
+        n : batch_size x n_nodes x d_emb
+        e : batch_size x n_nodes x n_nodes x d_emb
+        """
+        assert e is not None
+        B = n.shape[0]
+
+        # Compute QKV and reshape
+        # batch_size x n_nodes x (n_heads * d_k)
+        Q, K, V = self.W_q(n), self.W_k(n), self.W_v(n)
+        # batch_size x n_nodes x n_heads x d_k
+        Q = Q.view(B, -1, self.n_heads, self.d_k)
+        K = K.view(B, -1, self.n_heads, self.d_k)
+        V = V.view(B, -1, self.n_heads, self.d_k)
+        # batch_size x n_heads x n_nodes x d_k
+        Q = Q.transpose(1, 2)
+        K = K.transpose(1, 2)
+        V = V.transpose(1, 2)
 
         # Compute edge bias and gate
         # batch_size x n_nodes x n_nodes x n_heads
@@ -235,9 +259,40 @@ class MultiHeadSelfAttention(nn.Module):
         _V = torch.einsum('ijkl,ijk->ijkl', [_V, dynamic_centrality])
 
         n = self.O_n(_V.transpose(1, 2).reshape(B, -1, self.d_emb))
-        e = self.O_e(_E.permute(0, 2, 3, 1))
+        e = None if self.O_e is None else self.O_e(_E.permute(0, 2, 3, 1))
 
         return n, e
+
+
+class EncoderLayer(nn.Module):
+    def __init__(self,
+                 d_emb=64,
+                 n_heads=8,
+                 bias_mha=False,
+                 dropout_mha=0.2,
+                 bias_mlp=False,
+                 dropout_mlp=0.2,
+                 h2i_ratio=2):
+        super(EncoderLayer, self).__init__()
+        # MHA
+        self.ln_n1 = nn.LayerNorm(d_emb)
+        self.mha = MultiHeadSelfAttention(d_emb=d_emb,
+                                          n_heads=n_heads,
+                                          bias_mha=bias_mha)
+        self.dropout_mha = nn.Dropout(dropout_mha)
+        # FF
+        self.ln_n2 = nn.LayerNorm(d_emb)
+        self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
+        self.dropout_mlp = nn.Dropout(dropout_mlp)
+
+    def forward(self, n):
+        n = self.ln_n1(n)
+        n = n + self.dropout_mha(self.mha(n))
+
+        n = self.ln_n2(n)
+        n = n + self.dropout_mlp(self.mlp_node(n))
+
+        return n
 
 
 class GTEncoderLayer(nn.Module):
@@ -249,30 +304,36 @@ class GTEncoderLayer(nn.Module):
                  bias_mlp=False,
                  dropout_mlp=0.2,
                  h2i_ratio=2,
-                 with_edge=False):
+                 is_last_block=False):
         super(GTEncoderLayer, self).__init__()
-
+        self.is_last_block = is_last_block
+        # MHA
         self.ln_n1 = nn.LayerNorm(d_emb)
         self.ln_e1 = nn.LayerNorm(d_emb)
-        self.mha = MultiHeadSelfAttention(d_emb=d_emb,
-                                          n_heads=n_heads,
-                                          bias_mha=bias_mha,
-                                          with_edge=with_edge)
+        self.mha = MultiHeadSelfAttentionWithEdge(d_emb=d_emb,
+                                                  n_heads=n_heads,
+                                                  bias_mha=bias_mha,
+                                                  is_last_block=is_last_block)
         self.dropout_mha = nn.Dropout(dropout_mha)
-
+        # FF
         self.ln_n2 = nn.LayerNorm(d_emb)
-        self.ln_e2 = nn.LayerNorm(d_emb)
         self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
-        self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
         self.dropout_mlp = nn.Dropout(dropout_mlp)
+        if not is_last_block:
+            self.ln_e2 = nn.LayerNorm(d_emb)
+            self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
 
     def forward(self, n, e=None):
-        n, e = self.ln_n1(n), e if e is None else self.ln_e1(e)
+        n, e = self.ln_n1(n), self.ln_e1(e)
         n_, e_ = self.mha(n, e)
-        n, e = n + self.dropout_mha(n_), e if e is None else e + self.dropout_mha(e_)
+        n = n + self.dropout_mha(n_)
 
-        n, e = self.ln_n2(n), e if e is None else self.ln_e2(e)
-        n, e = n + self.dropout_mlp(self.mlp_node(n)), e if e is None else e + self.dropout_mlp(self.mlp_edge(e))
+        n = self.ln_n2(n)
+        n = n + self.dropout_mlp(self.mlp_node(n))
+        if not self.is_last_block:
+            e = e + self.dropout_mha(e_)
+            e = self.ln_e2(e)
+            e = e + self.dropout_mlp(self.mlp_edge(e))
 
         return n, e
 
@@ -293,6 +354,33 @@ class GTEncoderLayer(nn.Module):
 #         return F.log_softmax(x, dim=1)
 
 
+class Encoder(nn.Module):
+    def __init__(self,
+                 d_emb=64,
+                 n_blocks=2,
+                 n_heads=8,
+                 bias_mha=False,
+                 dropout_mha=0.2,
+                 bias_mlp=False,
+                 dropout_mlp=0.2,
+                 h2i_ratio=2):
+        super(Encoder, self).__init__()
+        self.encoder_blocks = nn.ModuleList([EncoderLayer(d_emb=d_emb,
+                                                          n_heads=n_heads,
+                                                          bias_mha=bias_mha,
+                                                          dropout_mha=dropout_mha,
+                                                          bias_mlp=bias_mlp,
+                                                          dropout_mlp=dropout_mlp,
+                                                          h2i_ratio=h2i_ratio)
+                                             for _ in range(n_blocks)])
+
+    def forward(self, n):
+        for block in self.encoder_blocks:
+            n = block(n)
+
+        return n
+
+
 class GTEncoder(nn.Module):
     def __init__(self,
                  d_emb=64,
@@ -302,20 +390,19 @@ class GTEncoder(nn.Module):
                  dropout_mha=0.2,
                  bias_mlp=False,
                  dropout_mlp=0.2,
-                 h2i_ratio=2,
-                 with_edge=False):
+                 h2i_ratio=2):
         super(GTEncoder, self).__init__()
-        self.encoder_blocks = clones(GTEncoderLayer(d_emb=d_emb,
-                                                    n_heads=n_heads,
-                                                    bias_mha=bias_mha,
-                                                    dropout_mha=dropout_mha,
-                                                    bias_mlp=bias_mlp,
-                                                    dropout_mlp=dropout_mlp,
-                                                    h2i_ratio=h2i_ratio,
-                                                    with_edge=with_edge),
-                                     n_blocks)
+        self.encoder_blocks = nn.ModuleList([GTEncoderLayer(d_emb=d_emb,
+                                                            n_heads=n_heads,
+                                                            bias_mha=bias_mha,
+                                                            dropout_mha=dropout_mha,
+                                                            bias_mlp=bias_mlp,
+                                                            dropout_mlp=dropout_mlp,
+                                                            h2i_ratio=h2i_ratio,
+                                                            is_last_block=i == n_blocks - 1)
+                                             for i in range(n_blocks)])
 
-    def forward(self, n, e=None):
+    def forward(self, n, e):
         for block in self.encoder_blocks:
             n, e = block(n, e)
 
@@ -338,7 +425,7 @@ def get_encoder(encoder_type,
                 h2i_ratio=2,
                 with_edge=False,
                 dropout_gat=0.1):
-    if encoder_type == "transformer":
+    if encoder_type == "transformer" and with_edge:
         return GTEncoder(d_emb=d_emb,
                          n_blocks=n_blocks,
                          n_heads=n_heads,
@@ -346,13 +433,22 @@ def get_encoder(encoder_type,
                          dropout_mha=dropout_mha,
                          bias_mlp=bias_mlp,
                          dropout_mlp=dropout_mlp,
-                         h2i_ratio=h2i_ratio,
-                         with_edge=with_edge)
-    # if self.encoder_type == "gat":
-    #     return encoder_cls(d_emb,
-    #                        n_heads=n_heads,
-    #                        n_blocks=n_blocks,
-    #                        dropout=dropout_gat)
+                         h2i_ratio=h2i_ratio)
+    elif encoder_type == "transformer" and not with_edge:
+        return Encoder(d_emb=d_emb,
+                       n_blocks=n_blocks,
+                       n_heads=n_heads,
+                       bias_mha=bias_mha,
+                       dropout_mha=dropout_mha,
+                       bias_mlp=bias_mlp,
+                       dropout_mlp=dropout_mlp,
+                       h2i_ratio=h2i_ratio)
+    if encoder_type == "gat":
+        pass
+        #     return encoder_cls(d_emb,
+        #                        n_heads=n_heads,
+        #                        n_blocks=n_blocks,
+        #                        dropout=dropout_gat)
 
 
 class ParetoStatePredictorMIS(nn.Module):
@@ -372,7 +468,6 @@ class ParetoStatePredictorMIS(nn.Module):
                  device=None):
         super(ParetoStatePredictorMIS, self).__init__()
         self.device = device
-        self.tokenizer = MISInstanceTokenizer(top_k=top_k, device=device)
         self.token_emb = TokenEmbedGraph(n_node_feat,
                                          n_edge_type=n_edge_type,
                                          d_emb=d_emb,
@@ -401,8 +496,6 @@ class ParetoStatePredictorMIS(nn.Module):
         self.predictor = nn.Linear(d_emb, 2)
 
     def forward(self, n_feat, e_feat, pos_feat, lids, vids, states):
-        # # Tokenize
-        # n_feat, p_feat = self.tokenizer.tokenize(n_feat, e=e_feat)
         # Embed
         n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), pos_feat.float())
         # Encode: B' x n_vars x d_emb
