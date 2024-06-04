@@ -87,6 +87,8 @@ class MISTrainingHelper(TrainingHelper):
         valid_rows &= (bdd_node_dataset[:, 0] <= to_pid)
 
         bdd_node_dataset = bdd_node_dataset[valid_rows]
+        if split == "val":
+            bdd_node_dataset[:, 0] -= 1000
 
         obj, adj = [], []
         for pid in range(from_pid, to_pid):
@@ -94,7 +96,6 @@ class MISTrainingHelper(TrainingHelper):
             obj.append(data["obj_coeffs"])
             adj.append(data["adj_list"])
         obj, adj = np.array(obj), np.stack(adj)
-
         dataset = MISBDDNodeDataset(bdd_node_dataset, obj, adj, top_k=self.cfg.top_k)
 
         return dataset
@@ -105,6 +106,8 @@ class MISTrainingHelper(TrainingHelper):
         valid_rows &= (bdd_node_dataset[:, 0] <= to_pid)
 
         bdd_node_dataset = bdd_node_dataset[valid_rows]
+        if split == "val":
+            bdd_node_dataset[:, 0] -= 1000
 
         obj, adj = [], []
         for pid in range(from_pid, to_pid):
@@ -249,7 +252,7 @@ def main(cfg):
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
     opt_cls = getattr(optim, cfg.opt.name)
-    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr)
+    optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=1e-3)
 
     # Reset training stats per epoch
     stats = helper.reset_epoch_stats()
