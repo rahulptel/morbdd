@@ -157,8 +157,7 @@ def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
         batch = [item.to(device, non_blocking=True) for item in batch]
         objs, adjs, pos, _, lids, vids, states, labels = batch
         objs = objs / 100
-        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device) / objs.shape[0],
-                         n=objs.shape[0])
+        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
         # Get logits and compute loss
         logits = model(objs, adjs, pos, lids, vids, states)
@@ -266,8 +265,7 @@ def main(cfg):
     if master:
         print("Train samples: {}, Val samples {}".format(len(train_dataset),
                                                          len(val_dataset)))
-        best_f1 = 0
-
+    best_f1 = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
                                     n_edge_type=2,

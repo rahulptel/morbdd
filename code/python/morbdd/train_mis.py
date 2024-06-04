@@ -21,6 +21,59 @@ import os
 from morbdd import machine
 
 
+def compute_batch_stats(labels, preds):
+    # True positive: label=1 and class=1
+    tp = (preds[labels == 1] == 1).sum()
+    # True negative: label=0 and class=0
+    tn = (preds[labels == 0] == 0).sum()
+    # False positive: label=0 and class=1
+    fp = (preds[labels == 0] == 1).sum()
+    # False negative: label=1 and class=0
+    fn = (preds[labels == 1] == 0).sum()
+
+    pos = labels.sum()
+    neg = labels.shape[0] - pos
+    # items = pos + neg
+    return tp, tn, fp, fn, pos, neg
+
+
+def compute_meta_stats(stats):
+    loss, tp, tn, fp, fn, n_pos, n_neg = (stats["loss"], stats["tp"], stats["tn"], stats["fp"], stats["fn"],
+                                          stats["n_pos"], stats["n_neg"])
+
+    loss = loss / (n_pos + n_neg)
+    acc = ((tp + tn) / (tp + fp + tn + fn))
+    f1 = tp / (tp + (0.5 * (fn + fp)))
+    precision = tp / (tp + fp + 1e-10)
+    recall = tp / (tp + fn + 1e-10)
+    specificity = tn / (tn + fp + 1e-10)
+
+    stats.update({
+        "loss": loss, "acc": acc, "f1": f1, "precision": precision, "recall": recall, "specificity": specificity
+    })
+
+    return stats
+
+
+def print_stats(split, stats):
+    print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
+    print_str += "Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
+    ept, bt, dt = -1, -1, -1
+    if split == "train":
+        ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
+
+    print(print_str.format(stats["epoch"], split, stats["f1"], stats["acc"], stats["loss"], stats["recall"],
+                           stats["precision"], stats["specificity"], ept, bt, dt))
+
+
+def compute_meta_stats_and_print(master, epoch, split, stats_lst, stats):
+    if master:
+        meta_stats = compute_meta_stats(stats)
+        meta_stats.update({"epoch": epoch + 1})
+        stats_lst.append(meta_stats)
+        print_stats(split, stats_lst[-1])
+
+
 class MISBDDNodeDataset(Dataset):
     def __init__(self, bdd_node_dataset, obj, adj, top_k=5, norm_const=100, max_objs=10):
         super(MISBDDNodeDataset, self).__init__()
@@ -123,99 +176,110 @@ class MISTrainingHelper(TrainingHelper):
         return len(dataset), dataloader
 
 
-def train_batch(epoch, batch, model, optimizer, device, helper, clip_grad=1.0, norm_type=2.0):
-    objs, adjs, pos, pids, lids, vids, states, labels = batch
-    objs = objs / 100
+def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
+    data_time, batch_time, epoch_time = 0.0, 0.0, 0.0
+    losses = 0.0
+    tp, fp, tn, fn = 0, 0, 0, 0
+    n_pos, n_neg = 0, 0
 
-    # Get logits
-    logits = model(objs.to(device),
-                   adjs.to(device),
-                   pos.to(device),
-                   lids.to(device),
-                   vids.to(device),
-                   states.to(device))
+    model.train()
+    start_time = time.time()
+    for batch_id, batch in enumerate(dataloader):
+        batch = [item.to(device, non_blocking=True) for item in batch]
+        objs, adjs, pos, _, lids, vids, states, labels = batch
+        objs = objs / 100
+        data_time += time.time() - start_time
 
-    # Compute loss
-    logits, labels = logits.reshape(-1, 2), labels.to(device).long().reshape(-1)
-    loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
+        # Get logits and compute loss
+        logits = model(objs, adjs, pos, lids, vids, states)
+        logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
+        loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
 
-    # Learn
-    optimizer.zero_grad()
-    loss.backward()
-    if clip_grad > 0:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type)
-    optimizer.step()
+        # Learn
+        optimizer.zero_grad()
+        loss.backward()
+        if clip_grad > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type)
+        optimizer.step()
 
-    # Compute stats
-    preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
-    labels, preds = labels.cpu().numpy(), preds.cpu().numpy()
-    batch_stats = helper.compute_batch_stats(labels, preds)
-    batch_stats["loss"] = loss.item()
+        # Compute stats
+        preds = torch.argmax(F.softmax(logits.detach(), dim=-1), dim=-1)
+        _tp, _tn, _fp, _fn, _n_pos, _n_neg = compute_batch_stats(labels.cpu().numpy(),
+                                                                 preds.detach().cpu().numpy())
 
-    return batch_stats
+        losses += (loss.item() * objs.shape[0])
+        tp += _tp
+        tn += _tn
+        fp += _fp
+        fn += _fn
+        n_pos += _n_pos
+        n_neg += _n_neg
+        batch_time += time.time() - start_time
+        start_time = time.time()
+
+    data_time /= len(dataloader)
+    batch_time /= len(dataloader)
+    losses /= (n_pos + n_neg)
+
+    return {"loss": losses, "tp": tp, "tn": tn, "fp": fp, "fn": fn, "n_pos": n_pos, "n_neg": n_neg,
+            "data_time": data_time, "batch_time": batch_time, "epoch_time": epoch_time}
 
 
 @torch.no_grad()
-def validate(epoch, dataloader, model, device, helper):
-    stats = helper.reset_epoch_stats()
+def validate(dataloader, model, device):
+    losses = 0.0
+    tp, fp, tn, fn = 0, 0, 0, 0
+    n_pos, n_neg = 0, 0
 
     model.eval()
     for batch in dataloader:
-        start = time.time()
-        objs, adjs, pos, pids, lids, vids, states, labels = batch
+        batch = [item.to(device, non_blocking=True) for item in batch]
+        objs, adjs, pos, _, lids, vids, states, labels = batch
         objs = objs / 100
 
         # Get logits
-        logits = model(objs.to(device),
-                       adjs.to(device),
-                       pos.to(device),
-                       lids.to(device),
-                       vids.to(device),
-                       states.to(device))
-        # Compute loss
-        logits, labels = logits.reshape(-1, 2), labels.to(device).long().reshape(-1)
+        logits = model(objs, adjs, pos, lids, vids, states)
+        logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
         loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
 
         # Compute stats
         preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
-        end_time = time.time() - start
+        _tp, _tn, _fp, _fn, _n_pos, _n_neg = compute_batch_stats(labels.cpu().numpy(),
+                                                                 preds.detach().cpu().numpy())
+        losses += (loss.item() * objs.shape[0])
+        tp += _tp
+        tn += _tn
+        fp += _fp
+        fn += _fn
+        n_pos += _n_pos
+        n_neg += _n_neg
 
-        labels, preds = labels.cpu().numpy(), preds.cpu().numpy()
-        batch_stats = helper.compute_batch_stats(labels, preds)
-        batch_stats["loss"] = loss.item()
-        batch_stats["time"] = end_time
-        helper.update_running_stats(stats, batch_stats)
+    losses /= (n_pos + n_neg)
 
-    helper.compute_epoch_stats(stats)
-    helper.print_stats(epoch, stats, split="Val")
-
-    model.train()
-
-    return stats
+    return {"loss": losses, "tp": tp, "tn": tn, "fp": fp, "fn": fn, "n_pos": n_pos, "n_neg": n_neg,
+            "data_time": None, "batch_time": None, "epoch_time": None}
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
+    helper = MISTrainingHelper(cfg)
+    ckpt_path = get_checkpoint_path(cfg)
+    ckpt_path.mkdir(exist_ok=True, parents=True)
+    print("Checkpoint path: {}".format(ckpt_path))
 
+    # Set-up device
     device_str = "cpu"
     pin_memory = False
     if torch.cuda.is_available():
         device_str = "cuda"
         pin_memory = True
     device = torch.device(device_str)
+    print("Device :", device)
+    train_stats_lst, val_stats_lst = [], []
 
-    helper = MISTrainingHelper(cfg)
-    ckpt_path = get_checkpoint_path(cfg)
-    ckpt_path.mkdir(exist_ok=True, parents=True)
-
-    # n_train, train_dataloader = helper.get_dataloader("train",
-    #                                                   cfg.dataset.train.from_pid,
-    #                                                   cfg.dataset.train.to_pid,
-    #                                                   drop_last=True)
-    # n_val, val_dataloader = helper.get_dataloader("val",
-    #                                               cfg.dataset.val.from_pid,
-    #                                               cfg.dataset.val.to_pid, drop_last=False)
+    # Initialize train data loader
+    print("N worker dataloader: ", cfg.n_worker_dataloader)
     train_dataset = helper.get_dataset("train",
                                        cfg.dataset.train.from_pid,
                                        cfg.dataset.train.to_pid)
@@ -233,6 +297,7 @@ def main(cfg):
                                 num_workers=cfg.n_worker_dataloader,
                                 pin_memory=pin_memory)
     print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
+    print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
 
     best_f1 = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
@@ -243,8 +308,8 @@ def main(cfg):
                                     n_blocks=cfg.n_blocks,
                                     n_heads=cfg.n_heads,
                                     dropout_token=cfg.dropout_token,
-                                    bias_mha=cfg.bias_mha,
                                     dropout=cfg.dropout,
+                                    bias_mha=cfg.bias_mha,
                                     bias_mlp=cfg.bias_mlp,
                                     h2i_ratio=cfg.h2i_ratio,
                                     device=device).to(device)
@@ -252,34 +317,29 @@ def main(cfg):
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
 
     # Reset training stats per epoch
-    stats = helper.reset_epoch_stats()
     for epoch in range(cfg.epochs):
-        for batch_id, batch in enumerate(train_dataloader):
-            start_time = time.time()
-            batch_stats = train_batch(epoch, batch, model, optimizer, device, helper)
-            batch_stats["time"] = time.time() - start_time
-            helper.update_running_stats(stats, batch_stats)
-            if cfg.logging > 1:
-                helper.print_batch_stats(epoch, batch_id, batch_stats)
+        start_time = time.time()
+        stats = train(train_dataloader, model, optimizer, device, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type)
+        stats["epoch_time"] = time.time() - start_time
+        compute_meta_stats_and_print(True, epoch, "train", train_stats_lst, stats)
 
-        helper.compute_epoch_stats(stats)
-        helper.print_stats(epoch, stats)
-        helper.add_epoch_stats("train", (epoch + 1, stats))
+        if (epoch + 1) % cfg.validate_every == 0:
+            stats = validate(val_dataloader, model, device)
+            compute_meta_stats_and_print(True, epoch, "val", val_stats_lst, stats)
 
         best_model = False
-        if (epoch + 1) % cfg.validate_every == 0:
-            val_stats = validate(epoch, val_dataloader, model, device, helper)
-            helper.add_epoch_stats("val", (epoch, val_stats))
-            if val_stats["f1"] > best_f1:
-                best_f1 = val_stats["f1"]
-                best_model = True
-                print("***{} Best f1: {}".format(epoch + 1, val_stats["f1"]))
+        if val_stats_lst[-1]["f1"] > best_f1:
+            best_f1 = val_stats_lst[-1]["f1"]
+            best_model = True
+            print("***{} Best f1: {}".format(epoch + 1, best_f1))
 
-        helper.save(epoch,
-                    ckpt_path,
-                    best_model=best_model,
-                    model=model.state_dict(),
-                    optimizer=optimizer.state_dict())
+        # helper.save(epoch,
+        #             ckpt_path,
+        #             best_model=best_model,
+        #             model=model.state_dict(),
+        #             optimizer=optimizer.state_dict())
+
+        print()
 
 
 if __name__ == "__main__":
