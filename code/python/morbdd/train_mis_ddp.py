@@ -39,21 +39,22 @@ class Meter(object):
 
 def setup_ddp(cfg):
     world_size = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
-    print("World size", world_size)
+    # print("World size", world_size)
     n_gpus_per_node = torch.cuda.device_count()
     world_size *= n_gpus_per_node
-    print("World size", world_size)
+    # print("World size", world_size)
     # The id of the node on which the current process is running
     node_id = int(os.environ.get("SLURM_NODEID", 0))
-    print(node_id)
+    # print(node_id)
     # The id of the current process inside a node
     local_rank = int(os.environ.get("SLURM_LOCALID"))
-    print("Local rank ", local_rank)
+    # print("Local rank ", local_rank)
     # Unique id of the current process across processes spawned across all nodes
     global_rank = (node_id * n_gpus_per_node) + local_rank
-    print("Global rank: ", global_rank)
+    # print("Global rank: ", global_rank)
     # The local cuda device id we assign to the current process
     device_id = local_rank
+    print("World size: {}, Rank: {}, Node: {}, Local Rank: {}".format(world_size, global_rank, node_id, local_rank))
     # Initialize process group and initiate communications between all processes
     # running on all nodes
     print("From Rank: {}, ==> Initializing Process Group...".format(global_rank))
@@ -85,7 +86,6 @@ def compute_batch_stats(labels, preds):
 
 
 def compute_meta_stats(stats):
-    stats = {k: v.cpu().numpy() if v is not None else None for k, v in stats.items()}
     loss, tp, tn, fp, fn, n_pos, n_neg = (stats["loss"], stats["tp"], stats["tn"], stats["fp"], stats["fn"],
                                           stats["n_pos"], stats["n_neg"])
 
@@ -103,7 +103,7 @@ def compute_meta_stats(stats):
     return stats
 
 
-def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None, epoch_time=None):
+def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None):
     dist.all_reduce(losses.sum, dist.ReduceOp.SUM, async_op=False)
     dist.all_reduce(tp.sum, dist.ReduceOp.SUM, async_op=False)
     dist.all_reduce(tn.sum, dist.ReduceOp.SUM, async_op=False)
@@ -111,42 +111,38 @@ def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None
     dist.all_reduce(fn.sum, dist.ReduceOp.SUM, async_op=False)
     dist.all_reduce(n_pos.sum, dist.ReduceOp.SUM, async_op=False)
     dist.all_reduce(n_neg.sum, dist.ReduceOp.SUM, async_op=False)
-    data_time_val, batch_time_val, epoch_time_val = None, None, None
+    data_time_val, batch_time_val = None, None
     if data_time is not None:
-        dist.all_reduce(data_time.sum, dist.ReduceOp.AVG, async_op=False)
-        data_time_val = data_time.sum
+        dist.all_reduce(data_time.avg, dist.ReduceOp.AVG, async_op=False)
+        data_time_val = data_time.avg
     if batch_time is not None:
-        dist.all_reduce(batch_time.sum, dist.ReduceOp.AVG, async_op=False)
-        batch_time_val = batch_time.sum
-    if epoch_time is not None:
-        dist.all_reduce(epoch_time.sum, dist.ReduceOp.AVG, async_op=False)
-        epoch_time_val = epoch_time.sum
+        dist.all_reduce(batch_time.avg, dist.ReduceOp.AVG, async_op=False)
+        batch_time_val = batch_time.avg
 
-    return {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum, "n_pos": n_pos.sum,
-            "n_neg": n_neg.sum, "batch_time": batch_time_val, "data_time": data_time_val, "epoch_time": epoch_time_val}
+    return {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum,
+            "n_pos": n_pos.sum, "n_neg": n_neg.sum, "batch_time": batch_time_val, "data_time": data_time_val}
 
 
 def print_stats(split, stats):
     print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
     print_str += "Epoch Time: {:.2f}, Batch Time: {:.4f}, Data Time: {:.4f}"
-    ept, bt, dt = -1, -1, -1
-    if split == "train":
-        ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
-
+    # ept, bt, dt = -1, -1, -1
+    # if split == "train":
+    ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
     print(print_str.format(stats["epoch"], split, stats["f1"], stats["acc"], stats["loss"], stats["recall"],
                            stats["precision"], stats["specificity"], ept, bt, dt))
 
 
-def compute_meta_stats_and_print(master, epoch, split, stats_lst, stats):
-    if master:
-        meta_stats = compute_meta_stats(stats)
-        meta_stats.update({"epoch": epoch + 1})
-        stats_lst.append(meta_stats)
-        print_stats(split, stats_lst[-1])
+def compute_meta_stats_and_print(epoch, split, stats_lst, stats):
+    stats = {k: v.cpu().numpy() if v is not None else None for k, v in stats.items()}
+    meta_stats = compute_meta_stats(stats)
+    meta_stats.update({"epoch": epoch + 1})
+    stats_lst.append(meta_stats)
+    print_stats(split, stats_lst[-1])
 
 
 def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
-    data_time, batch_time, epoch_time = Meter('DataTime'), Meter('BatchTime'), Meter('EpochTime')
+    data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
     losses = Meter('Loss')
     tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
     n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
@@ -183,25 +179,26 @@ def train(dataloader, model, optimizer, device, clip_grad=1.0, norm_type=2.0):
         n_pos.update(_n_pos)
         n_neg.update(_n_neg)
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-    epoch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+        start_time = time.time()
 
-    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time,
-                         epoch_time=epoch_time)
-
+    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time)
     return epoch_stats
 
 
 @torch.no_grad()
 def validate(dataloader, model, device):
+    data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
     losses = Meter('Loss')
     tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
     n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
 
     model.eval()
+    start_time = time.time()
     for batch in dataloader:
         batch = [item.to(device, non_blocking=True) for item in batch]
         objs, adjs, pos, _, lids, vids, states, labels = batch
         objs = objs / 100
+        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
         # Get logits and compute loss
         logits = model(objs, adjs, pos, lids, vids, states)
@@ -219,8 +216,10 @@ def validate(dataloader, model, device):
         fn.update(_fn)
         n_pos.update(_n_pos)
         n_neg.update(_n_neg)
+        batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+        start_time = time.time()
 
-    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg)
+    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time)
 
     return epoch_stats
 
@@ -262,9 +261,7 @@ def main(cfg):
                                 sampler=val_sampler,
                                 num_workers=cfg.n_worker_dataloader,
                                 pin_memory=True)
-    if master:
-        print("Train samples: {}, Val samples {}".format(len(train_dataset),
-                                                         len(val_dataset)))
+
     best_f1 = 0
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
@@ -283,30 +280,43 @@ def main(cfg):
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
 
+    if master:
+        print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
+        print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
+        print("Started Training...\n")
+
     for epoch in range(cfg.epochs):
         train_sampler.set_epoch(epoch)
+        start_time = time.time()
         stats = train(train_dataloader, model, optimizer, device, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type)
-        compute_meta_stats_and_print(master, epoch, "train", train_stats_lst, stats)
-
-        if (epoch + 1) % cfg.validate_every == 0:
-            stats = validate(val_dataloader, model, device)
-            compute_meta_stats_and_print(master, epoch, "val", val_stats_lst, stats)
+        epoch_time = torch.tensor(time.time() - start_time, dtype=torch.float32, device=device)
+        dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
+        if master:
+            stats["epoch_time"] = epoch_time
+            compute_meta_stats_and_print(epoch, "train", train_stats_lst, stats)
 
         best_model = False
-        if master:
-            if val_stats_lst[-1]["f1"] > best_f1:
-                best_f1 = val_stats_lst[-1]["f1"]
-                best_model = True
-                print("***{} Best f1: {}".format(epoch + 1, best_f1))
+        if (epoch + 1) % cfg.validate_every == 0:
+            start_time = time.time()
+            stats = validate(val_dataloader, model, device)
+            epoch_time = torch.tensor(time.time() - start_time, dtype=torch.float32, device=device)
+            dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
+            if master:
+                stats["epoch_time"] = epoch_time
+                compute_meta_stats_and_print(epoch, "val", val_stats_lst, stats)
+                if val_stats_lst[-1]["f1"] > best_f1:
+                    best_f1 = val_stats_lst[-1]["f1"]
+                    best_model = True
+                    print("* Best F1: {}".format(best_f1))
 
-        # if master and (epoch + 1) % cfg.save_every == 0:
-        #     helper.save(epoch,
-        #                 ckpt_path,
-        #                 best_model=best_model,
-        #                 model=model.module.state_dict(),
-        #                 optimizer=optimizer.state_dict())
+            # if master and (epoch + 1) % cfg.save_every == 0:
+            #     helper.save(epoch,
+            #                 ckpt_path,
+            #                 best_model=best_model,
+            #                 model=model.module.state_dict(),
+            #                 optimizer=optimizer.state_dict())
 
-        print()
+        # print()
 
 
 if __name__ == "__main__":
