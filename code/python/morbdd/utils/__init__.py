@@ -14,6 +14,26 @@ ZERO_ARC = -1
 ONE_ARC = 1
 
 
+class Meter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
 class TrainingHelper:
     def __init__(self):
         self.train_stats = []
@@ -113,9 +133,24 @@ class TrainingHelper:
             model_path = save_path / "best_model.pt"
             torch.save(model_obj, model_path)
 
+    @staticmethod
+    def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
+        # print(epoch)
+        # print("Is best: {}".format(best_model))
+        if best_model:
+            model_path = save_path / "best_model.pt"
+        else:
+            model_path = save_path / "model.pt"
+        # print("Saving model to: {}".format(model_path))
+
+        model_obj = {"epoch": epoch + 1, "model": model, "optimizer": optimizer}
+        torch.save(model_obj, model_path)
+
+    @staticmethod
+    def save_stats(save_path, train_stats=None, val_stats=None):
         stats_path = save_path / f"stats.pt"
-        print("Saving stats to: {}".format(stats_path))
-        stats_obj = {"epoch": epoch, "train": self.train_stats, "val": self.val_stats}
+        # print("Saving stats to: {}".format(stats_path))
+        stats_obj = {"train": train_stats, "val": val_stats}
         torch.save(stats_obj, stats_path)
 
 

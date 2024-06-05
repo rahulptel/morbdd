@@ -13,28 +13,9 @@ from torch.utils.data import DistributedSampler
 
 from morbdd.model import ParetoStatePredictorMIS
 from morbdd.train_mis import MISTrainingHelper
+from morbdd.utils import Meter
 from morbdd.utils.mis import get_checkpoint_path
 from morbdd.utils.mis import get_size
-
-
-class Meter(object):
-    """Computes and stores the average and current value"""
-
-    def __init__(self, name):
-        self.name = name
-        self.reset()
-
-    def reset(self):
-        self.val = 0
-        self.avg = 0
-        self.sum = 0
-        self.count = 0
-
-    def update(self, val, n=1):
-        self.val = val
-        self.sum += val * n
-        self.count += n
-        self.avg = self.sum / self.count
 
 
 def setup_ddp(cfg):
@@ -295,7 +276,6 @@ def main(cfg):
             stats["epoch_time"] = epoch_time
             compute_meta_stats_and_print(epoch, "train", train_stats_lst, stats)
 
-        best_model = False
         if (epoch + 1) % cfg.validate_every == 0:
             start_time = time.time()
             stats = validate(val_dataloader, model, device)
@@ -306,17 +286,23 @@ def main(cfg):
                 compute_meta_stats_and_print(epoch, "val", val_stats_lst, stats)
                 if val_stats_lst[-1]["f1"] > best_f1:
                     best_f1 = val_stats_lst[-1]["f1"]
-                    best_model = True
+                    val_stats_lst[-1]["is_best"] = 1
+                    helper.save_model_and_opt(epoch,
+                                              ckpt_path,
+                                              best_model=True,
+                                              model=model.module.state_dict(),
+                                              optimizer=optimizer.state_dict())
                     print("* Best F1: {}".format(best_f1))
 
-            # if master and (epoch + 1) % cfg.save_every == 0:
-            #     helper.save(epoch,
-            #                 ckpt_path,
-            #                 best_model=best_model,
-            #                 model=model.module.state_dict(),
-            #                 optimizer=optimizer.state_dict())
+        if master:
+            helper.save_model_and_opt(epoch,
+                                      ckpt_path,
+                                      best_model=False,
+                                      model=model.module.state_dict(),
+                                      optimizer=optimizer.state_dict())
 
-        # print()
+            helper.save_stats(ckpt_path, train_stats=train_stats_lst, val_stats=val_stats_lst)
+        print()
 
 
 if __name__ == "__main__":
