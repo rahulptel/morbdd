@@ -5,6 +5,28 @@ from morbdd import ResourcePaths as path
 from morbdd.model import ParetoStatePredictorMIS
 from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
+from morbdd.train_mis import MISTrainingHelper
+import time
+
+import hydra
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+import webdataset as wds
+from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
+
+from morbdd import ResourcePaths as path
+from morbdd.model import ParetoStatePredictorMIS
+from morbdd.utils import TrainingHelper
+from morbdd.utils.mis import CustomCollater
+from morbdd.utils.mis import get_checkpoint_path
+from morbdd.utils.mis import get_instance_data
+from morbdd.utils.mis import get_size
+from torch.distributed import init_process_group
+import os
+from morbdd import machine
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 problem = "indepset"
@@ -15,8 +37,9 @@ size = f"{n_objs}-{n_vars}"
 archive_bdds = path.bdd / f"{problem}/{size}.zip"
 
 
-def load_model():
-    best_model = torch.load(path.resource / "checkpoint/d64-p5-b2-h8-dtk0-dp0.2-t49-v9_1" / "best_model.pt")
+def load_model(model_path):
+    best_model = torch.load(path.resource / "checkpoint" / model_path,
+                            map_location=torch.device("cpu"))
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
                                     n_edge_type=2,
@@ -143,16 +166,39 @@ def compute_pareto_frontier_on_pareto_bdd(cfg, env, pareto_states, inst_data, or
 
 
 @torch.no_grad()
-def main():
-    model = load_model()
+def learning_eval(cfg, model, helper):
+    helper = MISTrainingHelper(cfg)
+
+    val_dataset = helper.get_dataset("val",
+                                     cfg.dataset.val.from_pid,
+                                     cfg.dataset.val.to_pid)
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=cfg.batch_size,
+                                shuffle=False,
+                                num_workers=cfg.n_worker_dataloader)
+    validate(val_dataloader, model, device)
+
+
+def downstream_eval():
+    pass
+
+
+@hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
+def main(cfg):
+    cfg.size = get_size(cfg)
+    ckpt_path = get_checkpoint_path(cfg)
+
+    model = load_model(ckpt_path / "best_model.pt")
     model.eval()
 
-    # fetch_inst_data(1000)
-    obj, adj, pos, dataset = fetch_inst_data(1000)
-    obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
-    preds = get_preds(model, obj, adj, pos, dataset)
+    learning_eval(cfg, model)
 
-    pspl = get_pareto_states_per_layer(dataset[:, 0].tolist(), preds.tolist())
+    # fetch_inst_data(1000)
+    # obj, adj, pos, dataset = fetch_inst_data(1000)
+    # obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
+    # preds = get_preds(model, obj, adj, pos, dataset)
+    #
+    # pspl = get_pareto_states_per_layer(dataset[:, 0].tolist(), preds.tolist())
 
 
 if __name__ == "__main__":
