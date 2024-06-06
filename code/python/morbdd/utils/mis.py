@@ -69,7 +69,7 @@ class MISTrainingHelper(TrainingHelper):
 
     @staticmethod
     def get_train_sampler_and_dataloader(cfg, dataset, sampler, dataloader, distributed=False, pin_memory=False):
-        if (cfg.train_percent == 100 and dataloader is None) or (cfg.train_percent < 100):
+        if (cfg.dataset.train.per_epoch == 1 and dataloader is None) or (cfg.dataset.train.per_epoch < 1):
             sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
             dataloader = DataLoader(dataset,
                                     batch_size=cfg.batch_size,

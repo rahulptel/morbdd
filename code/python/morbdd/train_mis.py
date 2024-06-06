@@ -103,13 +103,13 @@ def validate(dataloader, model, device, helper, pin_memory=True, multi_gpu=False
         # Compute stats
         preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
         _tp, _tn, _fp, _fn, _n_pos, _n_neg = helper.compute_batch_stats(labels, preds.detach())
-        losses += (loss.item() * labels.shape[0])
-        tp += _tp
-        tn += _tn
-        fp += _fp
-        fn += _fn
-        n_pos += _n_pos
-        n_neg += _n_neg
+        losses.update(loss.detach(), labels.shape[0])
+        tp.update(_tp)
+        tn.update(_tn)
+        fp.update(_fp)
+        fn.update(_fn)
+        n_pos.update(_n_pos)
+        n_neg.update(_n_neg)
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
         start_time = time.time()
 
