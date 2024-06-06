@@ -464,10 +464,8 @@ class ParetoStatePredictorMIS(nn.Module):
                  dropout=0.2,
                  bias_mha=False,
                  bias_mlp=False,
-                 h2i_ratio=2,
-                 device=None):
+                 h2i_ratio=2):
         super(ParetoStatePredictorMIS, self).__init__()
-        self.device = device
         self.token_emb = TokenEmbedGraph(n_node_feat,
                                          n_edge_type=n_edge_type,
                                          d_emb=d_emb,

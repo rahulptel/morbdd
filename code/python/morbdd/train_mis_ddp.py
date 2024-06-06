@@ -9,12 +9,11 @@ import torch.optim as optim
 from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
-from torch.utils.data import DistributedSampler
+import random
 
 from morbdd.model import ParetoStatePredictorMIS
 from morbdd.train_mis import MISTrainingHelper
 from morbdd.utils import Meter
-from morbdd.utils.mis import get_checkpoint_path
 from morbdd.utils.mis import get_size
 
 
@@ -210,7 +209,7 @@ def main(cfg):
     # Initialize size, helper and checkpoint path
     cfg.size = get_size(cfg)
     helper = MISTrainingHelper(cfg)
-    ckpt_path = get_checkpoint_path(cfg)
+    ckpt_path = helper.get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
     print("Checkpoint path: {}".format(ckpt_path))
 
@@ -225,13 +224,8 @@ def main(cfg):
     train_dataset = helper.get_dataset("train",
                                        cfg.dataset.train.from_pid,
                                        cfg.dataset.train.to_pid)
-    train_sampler = DistributedSampler(train_dataset, shuffle=True)
-    train_dataloader = DataLoader(train_dataset,
-                                  batch_size=cfg.batch_size,
-                                  sampler=train_sampler,
-                                  shuffle=(train_sampler is None),
-                                  num_workers=cfg.n_worker_dataloader,
-                                  pin_memory=True)
+    train_sampler, train_dataloader = None, None
+
     # Initialize val data loader with distributed sampler
     val_dataset = helper.get_dataset("val",
                                      cfg.dataset.val.from_pid,
@@ -260,14 +254,18 @@ def main(cfg):
     model = DDP(model, device_ids=[device_id])
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
-
     if master:
-        print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
-        print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
         print("Started Training...\n")
 
     for epoch in range(cfg.epochs):
+        train_sampler, train_dataloader = get_train_sampler_and_dataloader(cfg, train_dataset, train_sampler,
+                                                                           train_dataloader)
         train_sampler.set_epoch(epoch)
+
+        if master and epoch == 0:
+            print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
+            print("Train samples: {}, Val samples {}".format(len(train_dataloader.dataset), len(val_dataset)))
+
         start_time = time.time()
         stats = train(train_dataloader, model, optimizer, device, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type)
         epoch_time = torch.tensor(time.time() - start_time, dtype=torch.float32, device=device)
@@ -293,16 +291,15 @@ def main(cfg):
                                               model=model.module.state_dict(),
                                               optimizer=optimizer.state_dict())
                     print("* Best F1: {}".format(best_f1))
+                print()
 
-        if master:
+        if master and (epoch + 1) % cfg.save_every == 0:
             helper.save_model_and_opt(epoch,
                                       ckpt_path,
                                       best_model=False,
                                       model=model.module.state_dict(),
                                       optimizer=optimizer.state_dict())
-
             helper.save_stats(ckpt_path, train_stats=train_stats_lst, val_stats=val_stats_lst)
-        print()
 
 
 if __name__ == "__main__":
