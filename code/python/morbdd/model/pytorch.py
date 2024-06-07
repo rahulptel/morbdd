@@ -356,7 +356,6 @@ class GATEncoder(nn.Module):
 
     def forward(self, n_feat, adj_mat):
         edge_index = pyg.utils.dense_to_sparse(adj_mat)[0]
-        # x, edge_index = data.x, data.edge_index
         n = F.relu(self.conv_init(n_feat, edge_index))
         for conv in self.conv_list:
             n = F.relu(conv(n, edge_index))
