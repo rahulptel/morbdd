@@ -15,6 +15,7 @@ from morbdd.model import ParetoStatePredictorMIS
 from morbdd.utils import Meter
 from morbdd.utils.mis import MISTrainingHelper
 from morbdd.utils.mis import get_size
+from morbdd.utils import set_seed
 
 
 def setup_ddp(cfg):
@@ -70,11 +71,11 @@ def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None
     return stats
 
 
-def set_epoch_time(cfg, epoch_time, stats, device):
+def add_epoch_time_to_stats(cfg, epoch_time, stats, device):
     if cfg.multi_gpu:
         epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
         dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
-        stats["epoch_time"] = epoch_time.cpu()
+        stats["epoch_time"] = float(epoch_time.cpu().numpy())
     else:
         stats["epoch_time"] = epoch_time
 
@@ -164,8 +165,64 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
     return epoch_stats
 
 
+def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
+                  val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path):
+    best_f1 = 0
+    for epoch in range(start_epoch, end_epoch):
+        # Train on the entire dataset or a subset depending on `dataset.train.frac_per_epoch`
+        _dataset = helper.get_train_dataset(cfg, train_dataset)
+        train_sampler, train_dataloader = helper.get_train_sampler_and_dataloader(cfg, _dataset, train_sampler,
+                                                                                  train_dataloader,
+                                                                                  pin_memory=pin_memory)
+        if cfg.multi_gpu:
+            train_sampler.set_epoch(epoch)
+        if master:
+            print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
+            print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
+
+        # Train
+        start_time = time.time()
+        stats = train(train_dataloader, model, optimizer, device, helper, clip_grad=cfg.clip_grad,
+                      norm_type=cfg.norm_type, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
+        epoch_time = time.time() - start_time
+
+        add_epoch_time_to_stats(cfg, epoch_time, stats, device)
+        if master:
+            stats["epoch"] = epoch + 1
+            helper.compute_meta_stats_and_print("train", stats)
+
+        # Validate
+        if (epoch + 1) % cfg.validate_every == 0:
+            start_time = time.time()
+            stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
+            epoch_time = time.time() - start_time
+
+            add_epoch_time_to_stats(cfg, epoch_time, stats, device)
+            if master:
+                stats["epoch"] = epoch + 1
+                helper.compute_meta_stats_and_print("val", stats)
+                if helper.val_stats[-1]["f1"] > best_f1:
+                    best_f1 = helper.val_stats[-1]["f1"]
+                    helper.save_model_and_opt(epoch, ckpt_path, best_model=True,
+                                              model=(model.module.state_dict() if cfg.multi_gpu else
+                                                     model.state_dict()),
+                                              optimizer=optimizer.state_dict())
+                    helper.save_stats(ckpt_path)
+                    print("* Best F1: {}".format(best_f1))
+
+        if master and (epoch + 1) % cfg.save_every == 0:
+            helper.save_model_and_opt(epoch, ckpt_path, best_model=False,
+                                      model=(model.module.state_dict() if cfg.multi_gpu else
+                                             model.state_dict()),
+                                      optimizer=optimizer.state_dict())
+            helper.save_stats(ckpt_path)
+
+        print() if master else None
+
+
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
+    set_seed(cfg.seed)
     cfg.size = get_size(cfg)
     helper = MISTrainingHelper(cfg)
 
@@ -197,7 +254,7 @@ def main(cfg):
                                 num_workers=cfg.n_worker_dataloader,
                                 pin_memory=pin_memory)
 
-    # Initialize model and optimizer
+    # Initialize model, optimizer and epoch
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=2,
                                     n_edge_type=2,
@@ -213,7 +270,6 @@ def main(cfg):
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
     start_epoch, end_epoch, best_f1 = 0, cfg.epochs, 0
-
     # Load model if restarting
     ckpt_path = helper.get_checkpoint_path(cfg)
     ckpt_path.mkdir(exist_ok=True, parents=True)
@@ -234,55 +290,8 @@ def main(cfg):
     if cfg.multi_gpu:
         model = DDP(model, device_ids=[device_id])
 
-    # Reset training stats per epoch
-    for epoch in range(start_epoch, end_epoch):
-        _dataset = helper.get_train_dataset(cfg, train_dataset)
-        train_sampler, train_dataloader = helper.get_train_sampler_and_dataloader(cfg, _dataset, train_sampler,
-                                                                                  train_dataloader,
-                                                                                  pin_memory=pin_memory)
-        if cfg.multi_gpu:
-            train_sampler.set_epoch(epoch)
-        if master:
-            print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
-            print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
-
-        # Train
-        start_time = time.time()
-        stats = train(train_dataloader, model, optimizer, device, helper, clip_grad=cfg.clip_grad,
-                      norm_type=cfg.norm_type, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
-        epoch_time = time.time() - start_time
-        set_epoch_time(cfg, epoch_time, stats, device)
-        if master:
-            stats["epoch"] = epoch + 1
-            helper.compute_meta_stats_and_print("train", stats)
-
-        # Validate
-        if (epoch + 1) % cfg.validate_every == 0:
-            start_time = time.time()
-            stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
-            epoch_time = time.time() - start_time
-            set_epoch_time(cfg, epoch_time, stats, device)
-            if master:
-                stats["epoch"] = epoch + 1
-                helper.compute_meta_stats_and_print("val", stats)
-                if helper.val_stats[-1]["f1"] > best_f1:
-                    best_f1 = helper.val_stats[-1]["f1"]
-                    helper.save_model_and_opt(epoch, ckpt_path, best_model=True,
-                                              model=(model.module.state_dict() if cfg.multi_gpu else
-                                                     model.state_dict()),
-                                              optimizer=optimizer.state_dict())
-                    helper.save_stats(ckpt_path)
-                    print("* Best F1: {}".format(best_f1))
-
-        if master and (epoch + 1) % cfg.save_every == 0:
-            helper.save_model_and_opt(epoch, ckpt_path, best_model=True,
-                                      model=(model.module.state_dict() if cfg.multi_gpu else
-                                             model.state_dict()),
-                                      optimizer=optimizer.state_dict())
-            helper.save_stats(ckpt_path)
-
-        if master:
-            print()
+    training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
+                  val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path)
 
 
 if __name__ == "__main__":

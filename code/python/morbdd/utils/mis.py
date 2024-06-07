@@ -67,9 +67,10 @@ class MISTrainingHelper(TrainingHelper):
 
     def get_val_dataset(self, cfg, train_dataset):
         if cfg.dataset.validate_on == "train":
+            print("Validation on train set! Use only for debugging purposes")
             indices = list(range(len(train_dataset)))
             random.shuffle(indices)
-            indices = indices[:int(len(train_dataset) * cfg.validate_on_frac)]
+            indices = indices[:int(len(train_dataset) * cfg.dataset.validate_on_frac)]
             val_dataset = Subset(train_dataset, indices)
         else:
             val_dataset = self.get_dataset("val",
@@ -141,16 +142,16 @@ class MISTrainingHelper(TrainingHelper):
     @staticmethod
     def get_dataset_str(cfg):
         dstr = "t"
-        if cfg.train.from_pid != 0:
-            dstr += f"-f-{cfg.train.from_pid}"
-        if cfg.train.to_pid != 1000:
-            dstr += f"-t-{cfg.train.to_pid}"
-        if cfg.validate_on == "val":
+        if cfg.dataset.train.from_pid != 0:
+            dstr += f"-f-{cfg.dataset.train.from_pid}"
+        if cfg.dataset.train.to_pid != 1000:
+            dstr += f"-t-{cfg.dataset.train.to_pid}"
+        if cfg.dataset.validate_on == "val":
             dstr += f"-v"
-            if cfg.val.from_pid != 1000:
-                dstr += f"-f-{cfg.val.from_pid}"
-            if cfg.val.to_pid != 1100:
-                dstr += f"-t-{cfg.val.to_pid}"
+            if cfg.dataset.val.from_pid != 1000:
+                dstr += f"-f-{cfg.dataset.val.from_pid}"
+            if cfg.dataset.val.to_pid != 1100:
+                dstr += f"-t-{cfg.dataset.val.to_pid}"
         else:
             dstr += "-t"
 
