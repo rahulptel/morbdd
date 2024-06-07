@@ -230,8 +230,9 @@ def main(cfg):
     device_str, pin_memory, master, device_id = "cpu", False, True, 0
     if cfg.multi_gpu:
         rank, device_id = setup_ddp(cfg)
-        master = rank == 0
         device_str = f"cuda:{device_id}"
+        pin_memory = True
+        master = rank == 0
     elif torch.cuda.is_available():
         device_str = "cuda"
         pin_memory = True
