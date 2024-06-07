@@ -4,9 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-# from torch_geometric.nn import GATConv
-# from torch_geometric.data import Data
+from torch_geometric.nn import GATConv
+from torch_geometric.data import Data
 
 
 class MLP(nn.Module):
@@ -110,30 +109,38 @@ class TokenEmbedGraph(nn.Module):
     edge embeddings
     """
 
-    def __init__(self, n_node_feat, n_edge_type=2, d_emb=64, top_k=0, dropout=0.0):
+    def __init__(self, encoder_type, n_node_feat, n_edge_type=2, d_emb=64, top_k=0, dropout=0.0):
         super(TokenEmbedGraph, self).__init__()
+        self.encoder_type = encoder_type
+        self.n_edge_type = n_edge_type
         self.top_k = top_k
         self.dropout = nn.Dropout(dropout)
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
-        self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
-        if self.top_k > 0:
+
+        if self.top_k:
             self.pos_encoder = nn.Linear(top_k * 2, d_emb)
+
+        if self.encoder_type == "transformer":
+            self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
         n = F.relu(self.dropout(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
         # Sum aggregate objectives
         n = n.sum(2)  # B x n_vars x 2 * d_emb
-        n = F.relu(self.dropout(self.linear2(n)))  # B x n_vars x d_emb
+        n_enc = F.relu(self.dropout(self.linear2(n)))  # B x n_vars x d_emb
+
         # Update node encoding with positional encoding based on SVD
         if self.top_k:
             p = self.pos_encoder(p)  # B x n_vars x d_emb
-            n = n + p
+            n_enc = n_enc + p
 
-        e = self.edge_encoder(self.dropout(e))  # B x n_vars x n_vars x d_emb
+        e_enc = None
+        if self.encoder_type == "transformer":
+            e_enc = self.edge_encoder(self.dropout(e))  # B x n_vars x n_vars x d_emb
 
-        return n, e
+        return n_enc, e_enc
 
 
 class MultiHeadSelfAttention(nn.Module):
@@ -144,6 +151,7 @@ class MultiHeadSelfAttention(nn.Module):
                  n_heads=8,
                  bias_mha=False):
         super(MultiHeadSelfAttention, self).__init__()
+        assert d_emb // n_heads == 0
         self.d_k = d_emb // n_heads
         self.d_emb = d_emb
         self.n_heads = n_heads
@@ -338,20 +346,21 @@ class GTEncoderLayer(nn.Module):
         return n, e
 
 
-#
-# class GATEncoder(nn.Module):
-#     def __init__(self, n_emb, n_heads=8, n_blocks=2, dropout=0.1):
-#         super(GATEncoder, self).__init__()
-#         self.conv1 = GATConv(n_emb, n_heads, heads=n_heads, dropout=dropout)
-#         self.conv2 = GATConv(8 * n_heads, 8, heads=1, concat=False, dropout=dropout)
-#
-#     def forward(self, data):
-#         x, edge_index = data.x, data.edge_index
-#         x = F.dropout(x, p=0.6, training=self.training)
-#         x = F.elu(self.conv1(x, edge_index))
-#         x = F.dropout(x, p=0.6, training=self.training)
-#         x = self.conv2(x, edge_index)
-#         return F.log_softmax(x, dim=1)
+class GATEncoder(nn.Module):
+    def __init__(self, n_node_feat=2, d_emb=64, n_blocks=2, n_heads=8, dropout_token=0.0, dropout=0.2):
+        super(GATEncoder, self).__init__()
+        d_k = d_emb // n_heads
+        self.conv_init = GATConv(n_node_feat, d_k, heads=n_heads, dropout=dropout_token)
+        self.conv_list = nn.ModuleList([GATConv(d_emb, d_k, heads=n_heads, dropout=dropout)
+                                        for _ in range(n_blocks)])
+
+    def forward(self, n_feat, edge_index):
+        # x, edge_index = data.x, data.edge_index
+        n = F.relu(self.conv_init(n_feat, edge_index))
+        for conv in self.conv_list:
+            n = F.relu(conv(n, edge_index))
+
+        return n
 
 
 class Encoder(nn.Module):
@@ -409,48 +418,6 @@ class GTEncoder(nn.Module):
         return n, e
 
 
-encoder_factory = {
-    "transformer": GTEncoder
-}
-
-
-def get_encoder(encoder_type,
-                d_emb=64,
-                n_blocks=2,
-                n_heads=8,
-                bias_mha=False,
-                dropout_mha=0.2,
-                bias_mlp=False,
-                dropout_mlp=0.2,
-                h2i_ratio=2,
-                with_edge=False,
-                dropout_gat=0.1):
-    if encoder_type == "transformer" and with_edge:
-        return GTEncoder(d_emb=d_emb,
-                         n_blocks=n_blocks,
-                         n_heads=n_heads,
-                         bias_mha=bias_mha,
-                         dropout_mha=dropout_mha,
-                         bias_mlp=bias_mlp,
-                         dropout_mlp=dropout_mlp,
-                         h2i_ratio=h2i_ratio)
-    elif encoder_type == "transformer" and not with_edge:
-        return Encoder(d_emb=d_emb,
-                       n_blocks=n_blocks,
-                       n_heads=n_heads,
-                       bias_mha=bias_mha,
-                       dropout_mha=dropout_mha,
-                       bias_mlp=bias_mlp,
-                       dropout_mlp=dropout_mlp,
-                       h2i_ratio=h2i_ratio)
-    if encoder_type == "gat":
-        pass
-        #     return encoder_cls(d_emb,
-        #                        n_heads=n_heads,
-        #                        n_blocks=n_blocks,
-        #                        dropout=dropout_gat)
-
-
 class ParetoStatePredictorMIS(nn.Module):
     def __init__(self,
                  encoder_type="transformer",
@@ -466,21 +433,12 @@ class ParetoStatePredictorMIS(nn.Module):
                  bias_mlp=False,
                  h2i_ratio=2):
         super(ParetoStatePredictorMIS, self).__init__()
-        self.token_emb = TokenEmbedGraph(n_node_feat,
-                                         n_edge_type=n_edge_type,
-                                         d_emb=d_emb,
-                                         top_k=top_k,
-                                         dropout=dropout_token)
-        self.encoder = get_encoder(encoder_type,
-                                   d_emb=d_emb,
-                                   n_blocks=n_blocks,
-                                   n_heads=n_heads,
-                                   bias_mha=bias_mha,
-                                   dropout_mha=dropout,
-                                   bias_mlp=bias_mlp,
-                                   dropout_mlp=dropout,
-                                   h2i_ratio=h2i_ratio,
-                                   with_edge=True)
+        self.encoder_type = encoder_type
+        self.token_emb = TokenEmbedGraph(encoder_type, n_node_feat, n_edge_type=n_edge_type, d_emb=d_emb, top_k=top_k,
+                                         dropout=dropout)
+        self.set_node_encoder(n_node_feat=n_node_feat, d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads,
+                              dropout_token=dropout_token, bias_mha=bias_mha, dropout=dropout, bias_mlp=bias_mlp,
+                              h2i_ratio=h2i_ratio)
 
         # Graph context
         self.graph_encoder = MLP(d_emb, d_emb, d_emb, dropout=dropout)
@@ -534,6 +492,25 @@ class ParetoStatePredictorMIS(nn.Module):
 
         return logits
 
+    def set_node_encoder(self, n_node_feat=2, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2, dropout_token=0.0,
+                         bias_mha=False, bias_mlp=False, h2i_ratio=2):
+        if self.encoder_type == "transformer":
+            self.node_encoder = GTEncoder(d_emb=d_emb,
+                                          n_blocks=n_blocks,
+                                          n_heads=n_heads,
+                                          bias_mha=bias_mha,
+                                          dropout_mha=dropout,
+                                          bias_mlp=bias_mlp,
+                                          dropout_mlp=dropout,
+                                          h2i_ratio=h2i_ratio)
+        elif self.encoder_type == "gat":
+            self.node_encoder = GATEncoder(n_node_feat=n_node_feat,
+                                           d_emb=d_emb,
+                                           n_blocks=n_blocks,
+                                           n_heads=n_heads,
+                                           dropout_token=dropout_token,
+                                           dropout=dropout)
+
 
 class ParetoStatePredictorKnapsack(nn.Module):
     def __init__(self,
@@ -554,16 +531,16 @@ class ParetoStatePredictorKnapsack(nn.Module):
         self.token_emb = TokenEmbedKnapsack(n_obj_feat,
                                             n_con_feat,
                                             d_emb)
-        self.encoder = get_encoder(encoder_type,
-                                   d_emb=d_emb,
-                                   n_blocks=n_blocks,
-                                   n_heads=n_heads,
-                                   bias_mha=bias_mha,
-                                   dropout_mha=dropout_mha,
-                                   bias_mlp=bias_mlp,
-                                   dropout_mlp=dropout_mlp,
-                                   h2i_ratio=h2i_ratio,
-                                   with_edge=False)
+        self.encoder = self.get_encoder(encoder_type,
+                                        d_emb=d_emb,
+                                        n_blocks=n_blocks,
+                                        n_heads=n_heads,
+                                        bias_mha=bias_mha,
+                                        dropout_mha=dropout_mha,
+                                        bias_mlp=bias_mlp,
+                                        dropout_mlp=dropout_mlp,
+                                        h2i_ratio=h2i_ratio,
+                                        with_edge=False)
 
         # Graph context
         self.instance_encoder = MLP(d_emb, h2i_ratio * d_emb, d_emb)
