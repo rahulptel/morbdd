@@ -1,15 +1,17 @@
 import ast
 import random
+import time
 
 import numpy as np
 import torch
-from morbdd import ResourcePaths as path
-from morbdd.utils import read_from_zip
-from torch.utils.data import Dataset
-from morbdd.utils import TrainingHelper
-from torch.utils.data import Subset
-from torch.utils.data import DistributedSampler
 from torch.utils.data import DataLoader
+from torch.utils.data import Dataset
+from torch.utils.data import DistributedSampler
+from torch.utils.data import Subset
+
+from morbdd import ResourcePaths as path
+from morbdd.utils import TrainingHelper
+from morbdd.utils import read_from_zip
 
 
 class MISTrainingHelper(TrainingHelper):
@@ -39,26 +41,9 @@ class MISTrainingHelper(TrainingHelper):
         return dataset
 
     @staticmethod
-    def get_checkpoint_path(cfg):
-        exp = ""
-        if cfg.model == "transformer":
-            exp = ("tf-d{}-p{}-b{}-h{}-dtk{}"
-                   "-dp{}-t{}-v{}").format(cfg.d_emb,
-                                           cfg.top_k,
-                                           cfg.n_blocks,
-                                           cfg.n_heads,
-                                           cfg.dropout_token,
-                                           cfg.dropout,
-                                           cfg.dataset.train.to_pid,
-                                           cfg.dataset.val.to_pid)
-        ckpt_path = path.resource / "checkpoint" / exp
-
-        return ckpt_path
-
-    @staticmethod
     def get_train_dataset(cfg, dataset):
-        frac_per_epoch = cfg.dataset.train.per_epoch
-        if cfg.dataset.train.per_epoch == 1:
+        frac_per_epoch = cfg.dataset.train.frac_per_epoch
+        if frac_per_epoch == 1:
             train_dataset = dataset
         else:
             indices = list(range(len(dataset)))
@@ -68,9 +53,9 @@ class MISTrainingHelper(TrainingHelper):
         return train_dataset
 
     @staticmethod
-    def get_train_sampler_and_dataloader(cfg, dataset, sampler, dataloader, distributed=False, pin_memory=False):
-        if (cfg.dataset.train.per_epoch == 1 and dataloader is None) or (cfg.dataset.train.per_epoch < 1):
-            sampler = DistributedSampler(dataset, shuffle=True) if distributed else None
+    def get_train_sampler_and_dataloader(cfg, dataset, sampler, dataloader, pin_memory=False):
+        if (cfg.dataset.train.frac_per_epoch == 1 and dataloader is None) or (cfg.dataset.train.frac_per_epoch < 1):
+            sampler = DistributedSampler(dataset, shuffle=True) if cfg.multi_gpu else None
             dataloader = DataLoader(dataset,
                                     batch_size=cfg.batch_size,
                                     sampler=sampler,
@@ -79,6 +64,97 @@ class MISTrainingHelper(TrainingHelper):
                                     pin_memory=pin_memory)
 
         return sampler, dataloader
+
+    def get_val_dataset(self, cfg, train_dataset):
+        if cfg.dataset.validate_on == "train":
+            indices = list(range(len(train_dataset)))
+            random.shuffle(indices)
+            indices = indices[:int(len(train_dataset) * cfg.validate_on_frac)]
+            val_dataset = Subset(train_dataset, indices)
+        else:
+            val_dataset = self.get_dataset("val",
+                                           cfg.dataset.val.from_pid,
+                                           cfg.dataset.val.to_pid)
+
+        return val_dataset
+
+    def get_checkpoint_path(self, cfg):
+        exp = self.get_exp_name(cfg)
+        ckpt_path = path.resource / "checkpoint" / exp
+
+        return ckpt_path
+
+    def get_exp_name(self, cfg):
+        exp = self.get_model_str(cfg) + self.get_opt_str(cfg) + self.get_dataset_str(cfg)
+        if cfg.with_timestamp:
+            exp += "-" + str(float(time.time()))
+
+        return exp
+
+    @staticmethod
+    def get_model_str(cfg):
+        model_str = ""
+        if cfg.model == "transformer":
+            model_str += "tf"
+            if cfg.d_emb != 64:
+                model_str += f"-emb-{cfg.d_emb}"
+            if cfg.top_k != 5:
+                model_str += f"-k-{cfg.top_k}"
+            if cfg.n_blocks != 2:
+                model_str += f"-l-{cfg.n_blocks}"
+            if cfg.n_heads != 8:
+                model_str += f"-h-{cfg.n_heads}"
+            if cfg.dropout_token != 0.0:
+                model_str += f"-dptk-{cfg.dropout_token}"
+            if cfg.dropout != 0.2:
+                model_str += f"-dp-{cfg.dropout}"
+            if cfg.bias_mha:
+                model_str += f"-ba-{cfg.bias_mha}"
+            if cfg.bias_mha:
+                model_str += f"-bm-{cfg.bias_mlp}"
+            if cfg.h2i_ratio != 2:
+                model_str += f"-h2i-{cfg.h2i_ratio}"
+
+        elif cfg.model == "gnn":
+            model_str += "gnn"
+            if cfg.d_emb != 64:
+                model_str += f"-emb-{cfg.d_emb}"
+
+        return model_str
+
+    @staticmethod
+    def get_opt_str(cfg):
+        ostr = "-"
+        if cfg.opt.name != "Adam":
+            ostr += cfg.opt.name
+        if cfg.opt.lr != 1e-3:
+            ostr += f"-lr-{cfg.opt.lr}"
+        if cfg.opt.wd != 1e-4:
+            ostr += f"-wd-{cfg.opt.wd}"
+        if cfg.clip_grad != 1.0:
+            ostr += f"-clip-{cfg.clip_grad}"
+        if cfg.norm_type != 2.0:
+            ostr += f"-norm-{cfg.norm_type}"
+
+        return ostr
+
+    @staticmethod
+    def get_dataset_str(cfg):
+        dstr = "t"
+        if cfg.train.from_pid != 0:
+            dstr += f"-f-{cfg.train.from_pid}"
+        if cfg.train.to_pid != 1000:
+            dstr += f"-t-{cfg.train.to_pid}"
+        if cfg.validate_on == "val":
+            dstr += f"-v"
+            if cfg.val.from_pid != 1000:
+                dstr += f"-f-{cfg.val.from_pid}"
+            if cfg.val.to_pid != 1100:
+                dstr += f"-t-{cfg.val.to_pid}"
+        else:
+            dstr += "-t"
+
+        return dstr
 
 
 class MISBDDNodeDataset(Dataset):

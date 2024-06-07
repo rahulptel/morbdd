@@ -30,6 +30,8 @@ validate_every: 1
 save_every: 1
 # Set this to a positive number when using GPU
 n_worker_dataloader: 1
+# Checkpoint directory with timestamp
+with_timestamp: false
 
 # Dataset config
 dataset:
@@ -37,15 +39,22 @@ dataset:
     from_pid: 0
     to_pid: 10
     # Fraction of samples to use per training epoch in range (0, 1]
-    per_epoch: 1
+    frac_per_epoch: 1
   val:
     from_pid: 1000
     to_pid: 1010
-
+  # Dataset used for validation
+  # val | train
+  # When set to train, we will randomly subsample 10% of training dataset
+  # for validation. This is used as a sanity check.
+  validate_on: val
+  # Fraction of the training dataset used for validation
+  # This will only be used when validate_on == train
+  validate_on_frac: 0.1
   # Save parents of nodes in the dataset
   with_parent: false
   # Number of negative samples per one positive sample
-  neg_to_pos_ratio: 2
+  neg_to_pos_ratio: 1
   layer_weight: exponential
 
 # Optimization config

@@ -10,9 +10,9 @@ from torch.distributed import init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler
-from morbdd.utils import Meter
 
 from morbdd.model import ParetoStatePredictorMIS
+from morbdd.utils import Meter
 from morbdd.utils.mis import MISTrainingHelper
 from morbdd.utils.mis import get_size
 
@@ -187,9 +187,8 @@ def main(cfg):
                                        cfg.dataset.train.from_pid,
                                        cfg.dataset.train.to_pid)
     train_sampler, train_dataloader = None, None
-    val_dataset = helper.get_dataset("val",
-                                     cfg.dataset.val.from_pid,
-                                     cfg.dataset.val.to_pid)
+
+    val_dataset = helper.get_val_dataset(cfg, train_dataset)
     val_sampler = DistributedSampler(val_dataset, shuffle=False) if cfg.multi_gpu else None
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=cfg.batch_size,
@@ -240,13 +239,12 @@ def main(cfg):
         _dataset = helper.get_train_dataset(cfg, train_dataset)
         train_sampler, train_dataloader = helper.get_train_sampler_and_dataloader(cfg, _dataset, train_sampler,
                                                                                   train_dataloader,
-                                                                                  distributed=False,
                                                                                   pin_memory=pin_memory)
         if cfg.multi_gpu:
             train_sampler.set_epoch(epoch)
-
-        print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
-        print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
+        if master:
+            print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
+            print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
 
         # Train
         start_time = time.time()
