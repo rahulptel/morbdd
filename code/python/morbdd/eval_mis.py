@@ -1,64 +1,47 @@
-import numpy as np
-import torch
-
-from morbdd import ResourcePaths as path
-from morbdd.model import ParetoStatePredictorMIS
-from morbdd.utils import get_instance_data
-from morbdd.utils import read_from_zip
-from morbdd.train_mis import MISTrainingHelper
-import time
-
 import hydra
 import numpy as np
 import torch
-import torch.nn.functional as F
-import torch.optim as optim
-import webdataset as wds
 from torch.utils.data import DataLoader
-from torch.utils.data import Dataset
 
 from morbdd import ResourcePaths as path
 from morbdd.model import ParetoStatePredictorMIS
-from morbdd.utils import TrainingHelper
-from morbdd.utils.mis import CustomCollater
-from morbdd.utils.mis import get_checkpoint_path
+from morbdd.train_mis import MISTrainingHelper
+from morbdd.utils import get_device
+from morbdd.utils import get_instance_data
+from morbdd.utils import read_from_zip
 from morbdd.utils.mis import get_instance_data
 from morbdd.utils.mis import get_size
-from torch.distributed import init_process_group
-import os
-from morbdd import machine
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-problem = "indepset"
-split = "val"
-n_vars = 100
-n_objs = 3
-size = f"{n_objs}-{n_vars}"
-archive_bdds = path.bdd / f"{problem}/{size}.zip"
+from morbdd.train_mis import validate
 
 
-def load_model(model_path):
-    best_model = torch.load(path.resource / "checkpoint" / model_path,
-                            map_location=torch.device("cpu"))
+def load_model(cfg, model_path):
+    best_model = torch.load(path.resource / "checkpoint" / model_path, map_location="cpu")
     model = ParetoStatePredictorMIS(encoder_type="transformer",
-                                    n_node_feat=2,
-                                    n_edge_type=2,
-                                    d_emb=64,
-                                    top_k=5,
-                                    n_blocks=2,
-                                    n_heads=8,
-                                    dropout_token=0,
-                                    bias_mha=False,
-                                    dropout=0.2,
-                                    bias_mlp=False,
-                                    h2i_ratio=2,
-                                    device=device).to(device)
+                                    n_node_feat=cfg.n_node_feat,
+                                    n_edge_type=cfg.n_edge_type,
+                                    d_emb=cfg.d_emb,
+                                    top_k=cfg.top_k,
+                                    n_blocks=cfg.n_blocks,
+                                    n_heads=cfg.n_heads,
+                                    dropout_token=cfg.dropout_token,
+                                    bias_mha=cfg.bias_mha,
+                                    dropout=cfg.dropout,
+                                    bias_mlp=cfg.bias_mlp,
+                                    h2i_ratio=cfg.h2i_ratio)
     model.load_state_dict(best_model["model"])
 
     return model
 
 
-def get_node_data(order, bdd):
+def get_stats_per_layer(pspl, preds):
+    pass
+
+
+def get_approx_pareto_frontier(preds):
+    pass
+
+
+def get_node_data(n_vars, order, bdd):
     data_lst = []
 
     for lid, layer in enumerate(bdd):
@@ -88,7 +71,7 @@ def get_pos_encoding(adj, top_k=5):
     return p
 
 
-def fetch_inst_data(pid):
+def fetch_inst_data(problem, size, split, pid, archive_bdds):
     # Read instance data
     data = get_instance_data(problem, size, split, pid)
     file = f"{size}/{split}/{pid}.json"
@@ -107,7 +90,7 @@ def fetch_inst_data(pid):
 
     adj = torch.from_numpy(np.array(data["adj_list"]))
     pos = get_pos_encoding(adj)
-    dataset = get_node_data(order, bdd)
+    dataset = get_node_data(n_vars, order, bdd)
     dataset = torch.from_numpy(dataset)
 
     return obj_coeffs, adj, pos, dataset
@@ -130,7 +113,7 @@ def get_preds(model, obj, adj, pos, dataset):
     return preds
 
 
-def get_pareto_states_per_layer(lids, preds):
+def get_pareto_states_per_layer(n_vars, lids, preds):
     pareto_states_per_layer = {}
     prev_lid, counter = int(lids[0]), 0
     for lid, is_pareto in zip(lids[:20], preds[:20]):
@@ -165,40 +148,51 @@ def compute_pareto_frontier_on_pareto_bdd(cfg, env, pareto_states, inst_data, or
     return env
 
 
-@torch.no_grad()
-def learning_eval(cfg, model, helper):
-    helper = MISTrainingHelper(cfg)
-
-    val_dataset = helper.get_dataset("val",
-                                     cfg.dataset.val.from_pid,
-                                     cfg.dataset.val.to_pid)
-    val_dataloader = DataLoader(val_dataset,
-                                batch_size=cfg.batch_size,
-                                shuffle=False,
+def learning_eval(cfg, model, device, helper, pin_memory=False, multi_gpu=False):
+    print("Evaluating learning metrics on validation set")
+    val_dataset = helper.get_dataset("val", cfg.dataset.val.from_pid, cfg.dataset.val.to_pid)
+    val_dataloader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=False,
                                 num_workers=cfg.n_worker_dataloader)
-    validate(val_dataloader, model, device)
+
+    stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, multi_gpu=multi_gpu)
+    meta_stats = helper.compute_meta_stats(stats)
+    helper.print_stats("val", meta_stats)
 
 
-def downstream_eval():
-    pass
+def downstream_eval(cfg, model, device, helper, pin_memory=False, multi_gpu=False):
+    from_pid, to_pid = cfg.dataset[cfg.eval.split].from_pid, cfg.dataset[cfg.eval.split].to_pid
+    for pid in range(from_pid, to_pid):
+        obj, adj, pos, dataset = fetch_inst_data(cfg.prob.name, cfg.size, cfg.eval.split, pid,
+                                                 path.bdd / f"{cfg.prob.name}/{cfg.prob.size}.zip")
+        obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
+
+        preds = get_preds(model, obj, adj, pos, dataset)
+        pspl = get_pareto_states_per_layer(cfg.pron.n_vars, dataset[:, 0].tolist(), preds.tolist())
+        get_stats_per_layer(pspl, preds)
+        apx_frontier, apx_stats = get_approx_pareto_frontier(preds)
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
 def main(cfg):
     cfg.size = get_size(cfg)
-    ckpt_path = get_checkpoint_path(cfg)
+    helper = MISTrainingHelper(cfg)
 
-    model = load_model(ckpt_path / "best_model.pt")
+    # Set-up device
+    device, device_str, pin_memory, master, device_id = get_device(multi_gpu=False)
+    print("Device :", device)
+
+    # Load model for eval
+    ckpt_path = helper.get_checkpoint_path()
+    print("Checkpoint path: {}".format(ckpt_path))
+    model = load_model(cfg, ckpt_path / "best_model.pt")
+    model.to(device)
     model.eval()
 
-    learning_eval(cfg, model)
-
-    # fetch_inst_data(1000)
-    # obj, adj, pos, dataset = fetch_inst_data(1000)
-    # obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
-    # preds = get_preds(model, obj, adj, pos, dataset)
-    #
-    # pspl = get_pareto_states_per_layer(dataset[:, 0].tolist(), preds.tolist())
+    if cfg.eval.task == "learning":
+        assert cfg.eval.split != "test"
+        learning_eval(cfg, model, device, helper, pin_memory=pin_memory, multi_gpu=False)
+    if cfg.eval.task == "downstream":
+        downstream_eval(cfg, model, device, helper, pin_memory=pin_memory, multi_gpu=False)
 
 
 if __name__ == "__main__":

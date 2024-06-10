@@ -19,7 +19,6 @@ multi_gpu: false
 env: local
 dist_backend: nccl
 init_method: tcp://127.0.0.1:3456
-world_size: 1
 
 # Training config
 # scratch | last_checkpoint
@@ -44,6 +43,9 @@ dataset:
   val:
     from_pid: 1000
     to_pid: 1010
+  test:
+    from_pid: 1100
+    to_pid: 1200
   # Dataset used for validation
   # val | train
   # When set to train, we will randomly subsample 10% of training dataset
@@ -69,10 +71,11 @@ clip_grad: 1.0
 norm_type: 2.0
 agg: sum            # cat | sum
 
-
 # Model config
 # Graph_enc
 model: transformer
+n_node_feat: 2
+n_edge_type: 2
 d_emb: 64
 top_k: 5
 n_blocks: 2
@@ -82,6 +85,23 @@ dropout: 0.2
 bias_mha: false
 bias_mlp: false
 h2i_ratio: 2
+
+
+eval:
+  # learning | downstream
+  task: learning
+  # learning: train | val
+  # downstream: train | val | test
+  split: val
+  # Select all nodes upto layer
+  select_all: 1
+  # Method used for stitching
+  # parent: Select all nodes with a high-scoring parent
+  # min_resistance: Minimize local resistance based on lookahead
+  # mip: Minimize global resistance using MIP
+  stitch: parent
+  # To be used with min resistance
+  lookahead: 1
 
 # Problem
 problem_type: 2

@@ -9,6 +9,8 @@ from torch.utils.data import Dataset, DataLoader
 
 from morbdd import resource_path
 import hashlib
+from torch.distributed import init_process_group
+import os
 
 ZERO_ARC = -1
 ONE_ARC = 1
@@ -1235,6 +1237,53 @@ def set_device(device_type):
     print("Training on ", device)
 
     return device
+
+
+def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
+    world_size = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
+    # print("World size", world_size)
+    n_gpus_per_node = torch.cuda.device_count()
+    world_size *= n_gpus_per_node
+    # print("World size", world_size)
+    # The id of the node on which the current process is running
+    node_id = int(os.environ.get("SLURM_NODEID", 0))
+    # print(node_id)
+    # The id of the current process inside a node
+    local_rank = int(os.environ.get("SLURM_LOCALID"))
+    # print("Local rank ", local_rank)
+    # Unique id of the current process across processes spawned across all nodes
+    global_rank = (node_id * n_gpus_per_node) + local_rank
+    # print("Global rank: ", global_rank)
+    # The local cuda device id we assign to the current process
+    device_id = local_rank
+    print("World size: {}, Rank: {}, Node: {}, Local Rank: {}".format(world_size, global_rank, node_id, local_rank))
+    # Initialize process group and initiate communications between all processes
+    # running on all nodes
+    print("From Rank: {}, ==> Initializing Process Group...".format(global_rank))
+    # init the process group
+    init_process_group(backend=dist_backend,
+                       init_method=init_method,
+                       world_size=world_size,
+                       rank=global_rank)
+    print("Process group ready!")
+    print("From Rank: {}, ==> Making model...".format(global_rank))
+
+    return global_rank, device_id
+
+
+def get_device(multi_gpu=False, init_method=None, dist_backend=None):
+    device_str, pin_memory, master, device_id = "cpu", False, True, 0
+    if multi_gpu:
+        rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        device_str = f"cuda:{device_id}"
+        pin_memory = True
+        master = rank == 0
+    elif torch.cuda.is_available():
+        device_str = "cuda"
+        pin_memory = True
+    device = torch.device(device_str)
+
+    return device, device_str, pin_memory, master, device_id
 
 
 def get_size(cfg):

@@ -79,79 +79,76 @@ class MISTrainingHelper(TrainingHelper):
 
         return val_dataset
 
-    def get_checkpoint_path(self, cfg):
-        exp = self.get_exp_name(cfg)
+    def get_checkpoint_path(self):
+        exp = self.get_exp_name()
         ckpt_path = path.resource / "checkpoint" / exp
 
         return ckpt_path
 
-    def get_exp_name(self, cfg):
-        exp = self.get_model_str(cfg) + self.get_opt_str(cfg) + self.get_dataset_str(cfg)
-        if cfg.with_timestamp:
+    def get_exp_name(self):
+        exp = self.get_model_str() + self.get_opt_str() + self.get_dataset_str()
+        if self.cfg.with_timestamp:
             exp += "-" + str(float(time.time()))
 
         return exp
 
-    @staticmethod
-    def get_model_str(cfg):
+    def get_model_str(self):
         model_str = ""
-        if cfg.model == "transformer":
+        if self.cfg.model == "transformer":
             model_str += "tf"
-            if cfg.d_emb != 64:
-                model_str += f"-emb-{cfg.d_emb}"
-            if cfg.top_k != 5:
-                model_str += f"-k-{cfg.top_k}"
-            if cfg.n_blocks != 2:
-                model_str += f"-l-{cfg.n_blocks}"
-            if cfg.n_heads != 8:
-                model_str += f"-h-{cfg.n_heads}"
-            if cfg.dropout_token != 0.0:
-                model_str += f"-dptk-{cfg.dropout_token}"
-            if cfg.dropout != 0.2:
-                model_str += f"-dp-{cfg.dropout}"
-            if cfg.bias_mha:
-                model_str += f"-ba-{cfg.bias_mha}"
-            if cfg.bias_mha:
-                model_str += f"-bm-{cfg.bias_mlp}"
-            if cfg.h2i_ratio != 2:
-                model_str += f"-h2i-{cfg.h2i_ratio}"
+            if self.cfg.d_emb != 64:
+                model_str += f"-emb-{self.cfg.d_emb}"
+            if self.cfg.top_k != 5:
+                model_str += f"-k-{self.cfg.top_k}"
+            if self.cfg.n_blocks != 2:
+                model_str += f"-l-{self.cfg.n_blocks}"
+            if self.cfg.n_heads != 8:
+                model_str += f"-h-{self.cfg.n_heads}"
+            if self.cfg.dropout_token != 0.0:
+                model_str += f"-dptk-{self.cfg.dropout_token}"
+            if self.cfg.dropout != 0.2:
+                model_str += f"-dp-{self.cfg.dropout}"
+            if self.cfg.bias_mha:
+                model_str += f"-ba-{self.cfg.bias_mha}"
+            if self.cfg.bias_mha:
+                model_str += f"-bm-{self.cfg.bias_mlp}"
+            if self.cfg.h2i_ratio != 2:
+                model_str += f"-h2i-{self.cfg.h2i_ratio}"
 
-        elif cfg.model == "gnn":
+        elif self.cfg.model == "gnn":
             model_str += "gnn"
-            if cfg.d_emb != 64:
-                model_str += f"-emb-{cfg.d_emb}"
+            if self.cfg.d_emb != 64:
+                model_str += f"-emb-{self.cfg.d_emb}"
 
         return model_str
 
-    @staticmethod
-    def get_opt_str(cfg):
+    def get_opt_str(self):
         ostr = "-"
-        if cfg.opt.name != "Adam":
-            ostr += cfg.opt.name
-        if cfg.opt.lr != 1e-3:
-            ostr += f"-lr-{cfg.opt.lr}"
-        if cfg.opt.wd != 1e-4:
-            ostr += f"-wd-{cfg.opt.wd}"
-        if cfg.clip_grad != 1.0:
-            ostr += f"-clip-{cfg.clip_grad}"
-        if cfg.norm_type != 2.0:
-            ostr += f"-norm-{cfg.norm_type}"
+        if self.cfg.opt.name != "Adam":
+            ostr += self.cfg.opt.name
+        if self.cfg.opt.lr != 1e-3:
+            ostr += f"-lr-{self.cfg.opt.lr}"
+        if self.cfg.opt.wd != 1e-4:
+            ostr += f"-wd-{self.cfg.opt.wd}"
+        if self.cfg.clip_grad != 1.0:
+            ostr += f"-clip-{self.cfg.clip_grad}"
+        if self.cfg.norm_type != 2.0:
+            ostr += f"-norm-{self.cfg.norm_type}"
 
         return ostr
 
-    @staticmethod
-    def get_dataset_str(cfg):
+    def get_dataset_str(self):
         dstr = "t"
-        if cfg.dataset.train.from_pid != 0:
-            dstr += f"-f-{cfg.dataset.train.from_pid}"
-        if cfg.dataset.train.to_pid != 1000:
-            dstr += f"-t-{cfg.dataset.train.to_pid}"
-        if cfg.dataset.validate_on == "val":
+        if self.cfg.dataset.train.from_pid != 0:
+            dstr += f"-f-{self.cfg.dataset.train.from_pid}"
+        if self.cfg.dataset.train.to_pid != 1000:
+            dstr += f"-t-{self.cfg.dataset.train.to_pid}"
+        if self.cfg.dataset.validate_on == "val":
             dstr += f"-v"
-            if cfg.dataset.val.from_pid != 1000:
-                dstr += f"-f-{cfg.dataset.val.from_pid}"
-            if cfg.dataset.val.to_pid != 1100:
-                dstr += f"-t-{cfg.dataset.val.to_pid}"
+            if self.cfg.dataset.val.from_pid != 1000:
+                dstr += f"-f-{self.cfg.dataset.val.from_pid}"
+            if self.cfg.dataset.val.to_pid != 1100:
+                dstr += f"-t-{self.cfg.dataset.val.to_pid}"
         else:
             dstr += "-t"
 
@@ -322,3 +319,14 @@ def get_instance_data(size, split, pid):
     data = read_instance(archive, inst)
 
     return data
+
+
+def stitch(bdd, lidx, method="parent", lookahead=1):
+    if method == "parent":
+        pass
+    elif method == "min_resistance":
+        pass
+    elif method == "mip":
+        pass
+
+    return bdd

@@ -19,6 +19,7 @@ class ResourcePaths:
     sol = resource / "sols"
     order = resource / "orders"
     dataset = resource / "datasets"
+    checkpoint = resource / "checkpoint"
 
 
 class Const:
