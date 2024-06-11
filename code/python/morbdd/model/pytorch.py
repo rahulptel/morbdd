@@ -138,7 +138,7 @@ class TokenEmbedGraph(nn.Module):
 
         e_enc = None
         if self.encoder_type == "transformer":
-            e_enc = self.edge_encoder(self.dropout(e))  # B x n_vars x n_vars x d_emb
+            e_enc = self.dropout(self.edge_encoder(e))  # B x n_vars x n_vars x d_emb
 
         return n_enc, e_enc
 
@@ -415,7 +415,7 @@ class GTEncoder(nn.Module):
         for block in self.encoder_blocks:
             n, e = block(n, e)
 
-        return n, e
+        return n
 
 
 class ParetoStatePredictorMIS(nn.Module):
@@ -455,7 +455,7 @@ class ParetoStatePredictorMIS(nn.Module):
         # Embed
         n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), pos_feat.float())
         # Encode: B' x n_vars x d_emb
-        n_emb, _ = self.encoder(n_emb, e_emb)
+        n_emb = self.node_encoder(n_emb, e_emb)
         # pad 0 to n_emb so that -1 results in zero vec
         # B_prime, _, d_emb = n_emb.shape
         # # B' x (n_vars + 1) x d_emb
