@@ -94,7 +94,7 @@ class MISTrainingHelper(TrainingHelper):
 
     def get_model_str(self):
         model_str = ""
-        if self.cfg.model == "transformer":
+        if self.cfg.encoder_type == "transformer":
             model_str += "tf"
             if self.cfg.d_emb != 64:
                 model_str += f"-emb-{self.cfg.d_emb}"
@@ -115,8 +115,8 @@ class MISTrainingHelper(TrainingHelper):
             if self.cfg.h2i_ratio != 2:
                 model_str += f"-h2i-{self.cfg.h2i_ratio}"
 
-        elif self.cfg.model == "gnn":
-            model_str += "gnn"
+        elif self.cfg.encoder_type == "gat":
+            model_str += "gat"
             if self.cfg.d_emb != 64:
                 model_str += f"-emb-{self.cfg.d_emb}"
 

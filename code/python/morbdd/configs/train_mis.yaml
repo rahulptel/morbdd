@@ -72,8 +72,8 @@ norm_type: 2.0
 agg: sum            # cat | sum
 
 # Model config
-# Graph_enc
-model: transformer
+# transformer | gat
+encoder_type: transformer
 n_node_feat: 2
 n_edge_type: 2
 d_emb: 64

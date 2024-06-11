@@ -198,24 +198,8 @@ def main(cfg):
                                                                    dist_backend=cfg.dist_backend)
     print("Device :", device)
 
-    # Initialize dataloaders
-    print("N worker dataloader: ", cfg.n_worker_dataloader)
-    train_dataset = helper.get_dataset("train",
-                                       cfg.dataset.train.from_pid,
-                                       cfg.dataset.train.to_pid)
-    train_sampler, train_dataloader = None, None
-
-    val_dataset = helper.get_val_dataset(cfg, train_dataset)
-    val_sampler = DistributedSampler(val_dataset, shuffle=False) if cfg.multi_gpu else None
-    val_dataloader = DataLoader(val_dataset,
-                                batch_size=cfg.batch_size,
-                                sampler=val_sampler,
-                                shuffle=False,
-                                num_workers=cfg.n_worker_dataloader,
-                                pin_memory=pin_memory)
-
     # Initialize model, optimizer and epoch
-    model = ParetoStatePredictorMIS(encoder_type="transformer",
+    model = ParetoStatePredictorMIS(encoder_type=cfg.encoder_type,
                                     n_node_feat=2,
                                     n_edge_type=2,
                                     d_emb=cfg.d_emb,
@@ -249,6 +233,22 @@ def main(cfg):
     model.to(device)
     if cfg.multi_gpu:
         model = DDP(model, device_ids=[device_id])
+
+    # Initialize dataloaders
+    print("N worker dataloader: ", cfg.n_worker_dataloader)
+    train_dataset = helper.get_dataset("train",
+                                       cfg.dataset.train.from_pid,
+                                       cfg.dataset.train.to_pid)
+    train_sampler, train_dataloader = None, None
+
+    val_dataset = helper.get_val_dataset(cfg, train_dataset)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False) if cfg.multi_gpu else None
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=cfg.batch_size,
+                                sampler=val_sampler,
+                                shuffle=False,
+                                num_workers=cfg.n_worker_dataloader,
+                                pin_memory=pin_memory)
 
     training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
                   val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path)
