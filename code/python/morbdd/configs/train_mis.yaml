@@ -26,6 +26,7 @@ training_from: scratch
 logging: 2
 # Epochs after which to validate the model
 validate_every: 1
+validate_on_master: true
 # Epochs after which to save the model
 save_every: 1
 # Set this to a positive number when using GPU

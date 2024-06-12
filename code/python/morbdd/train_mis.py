@@ -17,25 +17,32 @@ from morbdd.utils.mis import MISTrainingHelper
 from morbdd.utils.mis import get_size
 
 
-def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=None, batch_time=None, multi_gpu=False):
-    if multi_gpu:
-        dist.all_reduce(losses.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(tp.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(tn.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(fp.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(fn.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(n_pos.sum, dist.ReduceOp.SUM, async_op=False)
-        dist.all_reduce(n_neg.sum, dist.ReduceOp.SUM, async_op=False)
-        if data_time is not None:
-            dist.all_reduce(data_time.avg, dist.ReduceOp.AVG, async_op=False)
-        if batch_time is not None:
-            dist.all_reduce(batch_time.avg, dist.ReduceOp.AVG, async_op=False)
+def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
+    dist.all_reduce(losses.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(tp.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(tn.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(fp.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(fn.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(n_pos.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(n_neg.sum, dist.ReduceOp.SUM, async_op=False)
+    dist.all_reduce(data_time.avg, dist.ReduceOp.AVG, async_op=False)
+    dist.all_reduce(batch_time.avg, dist.ReduceOp.AVG, async_op=False)
 
-    stats = {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum,
-             "n_pos": n_pos.sum, "n_neg": n_neg.sum, "batch_time": batch_time.avg, "data_time": data_time.avg}
-    stats = {k: v.cpu().numpy() for k, v in stats.items()}
 
-    return stats
+def stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
+    return {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum,
+            "n_pos": n_pos.sum, "n_neg": n_neg.sum, "batch_time": batch_time.avg, "data_time": data_time.avg}
+
+
+def dict2cpu(stats):
+    cpu_stats = {}
+    for k, v in stats.items():
+        if v is not None:
+            cpu_stats[k] = v.cpu().numpy()
+        else:
+            cpu_stats[k] = None
+
+    return cpu_stats
 
 
 def add_epoch_time_to_stats(cfg, epoch_time, stats, device):
@@ -48,41 +55,46 @@ def add_epoch_time_to_stats(cfg, epoch_time, stats, device):
 
 
 @torch.no_grad()
-def validate(dataloader, model, device, helper, pin_memory=True, multi_gpu=False):
-    data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
-    losses = Meter('Loss')
-    tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
-    n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
+def validate(dataloader, model, device, helper, pin_memory=True, master=False, multi_gpu=False,
+             validate_on_master=True):
+    epoch_stats = None
+    if (not multi_gpu) or (multi_gpu and validate_on_master and master) or (multi_gpu and not validate_on_master):
+        data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
+        losses = Meter('Loss')
+        tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
+        n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
 
-    model.eval()
-    start_time = time.time()
-    for batch in dataloader:
-        if pin_memory:
-            batch = [item.to(device, non_blocking=True) for item in batch]
-        objs, adjs, pos, _, lids, vids, states, labels = batch
-        objs = objs / 100
-        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-
-        # Get logits
-        logits = model(objs, adjs, pos, lids, vids, states)
-        logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
-        loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
-
-        # Compute stats
-        preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
-        _tp, _tn, _fp, _fn, _n_pos, _n_neg = helper.compute_batch_stats(labels, preds.detach())
-        losses.update(loss.detach(), labels.shape[0])
-        tp.update(_tp)
-        tn.update(_tn)
-        fp.update(_fp)
-        fn.update(_fn)
-        n_pos.update(_n_pos)
-        n_neg.update(_n_neg)
-        batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+        model.eval()
         start_time = time.time()
+        for batch in dataloader:
+            if pin_memory:
+                batch = [item.to(device, non_blocking=True) for item in batch]
+            objs, adjs, pos, _, lids, vids, states, labels = batch
+            objs = objs / 100
+            data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
-    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time,
-                         multi_gpu=multi_gpu)
+            # Get logits
+            logits = model(objs, adjs, pos, lids, vids, states)
+            logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
+            loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
+
+            # Compute stats
+            preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+            _tp, _tn, _fp, _fn, _n_pos, _n_neg = helper.compute_batch_stats(labels, preds.detach())
+            losses.update(loss.detach(), labels.shape[0])
+            tp.update(_tp)
+            tn.update(_tn)
+            fp.update(_fp)
+            fn.update(_fn)
+            n_pos.update(_n_pos)
+            n_neg.update(_n_neg)
+            batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+            start_time = time.time()
+
+        reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time,
+               batch_time) if multi_gpu and not validate_on_master else None
+        epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+
     return epoch_stats
 
 
@@ -127,8 +139,9 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
         start_time = time.time()
 
-    epoch_stats = reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time=data_time, batch_time=batch_time,
-                         multi_gpu=multi_gpu)
+    reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time) if multi_gpu else None
+    epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+
     return epoch_stats
 
 
@@ -153,19 +166,22 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
                       norm_type=cfg.norm_type, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
         epoch_time = time.time() - start_time
 
-        add_epoch_time_to_stats(cfg, epoch_time, stats, device)
         if master:
+            stats = dict2cpu(stats) if "cpu" not in str(device) else stats
+            add_epoch_time_to_stats(cfg, epoch_time, stats, device)
             stats["epoch"] = epoch + 1
             helper.compute_meta_stats_and_print("train", stats)
 
         # Validate
         if (epoch + 1) % cfg.validate_every == 0:
             start_time = time.time()
-            stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
+            stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, master=master,
+                             multi_gpu=cfg.multi_gpu, validate_on_master=cfg.validate_on_master)
             epoch_time = time.time() - start_time
 
-            add_epoch_time_to_stats(cfg, epoch_time, stats, device)
             if master:
+                stats = dict2cpu(stats) if "cpu" not in str(device) else stats
+                add_epoch_time_to_stats(cfg, epoch_time, stats, device)
                 stats["epoch"] = epoch + 1
                 helper.compute_meta_stats_and_print("val", stats)
                 if helper.val_stats[-1]["f1"] > best_f1:
@@ -242,7 +258,9 @@ def main(cfg):
     train_sampler, train_dataloader = None, None
 
     val_dataset = helper.get_val_dataset(cfg, train_dataset)
-    val_sampler = DistributedSampler(val_dataset, shuffle=False) if cfg.multi_gpu else None
+    val_sampler = None
+    if cfg.multi_gpu and not cfg.validate_on_master:
+        val_sampler = DistributedSampler(val_dataset, shuffle=False)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=cfg.batch_size,
                                 sampler=val_sampler,
