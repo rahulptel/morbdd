@@ -15,6 +15,7 @@ from morbdd.utils import get_device
 from morbdd.utils import set_seed
 from morbdd.utils.mis import MISTrainingHelper
 from morbdd.utils.mis import get_size
+from morbdd.utils import dict2cpu
 
 
 def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
@@ -29,36 +30,36 @@ def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
     dist.all_reduce(batch_time.avg, dist.ReduceOp.AVG, async_op=False)
 
 
+def reduce_epoch_time(epoch_time, device):
+    epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
+    dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
+    return epoch_time
+
+
 def stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
     return {"loss": losses.sum, "tp": tp.sum, "tn": tn.sum, "fp": fp.sum, "fn": fn.sum,
             "n_pos": n_pos.sum, "n_neg": n_neg.sum, "batch_time": batch_time.avg, "data_time": data_time.avg}
 
 
-def dict2cpu(stats):
-    cpu_stats = {}
-    for k, v in stats.items():
-        if v is not None:
-            cpu_stats[k] = v.cpu().numpy()
+def print_validation_machine(master, val_sampler, device_str, distributed):
+    if master:
+        if val_sampler is None:
+            if "cuda" in device_str:
+                if distributed:
+                    print("Multi-GPU: Validation on master GPU")
+                else:
+                    print("Validation on GPU")
+            else:
+                print("Validation on CPU")
         else:
-            cpu_stats[k] = None
-
-    return cpu_stats
-
-
-def add_epoch_time_to_stats(cfg, epoch_time, stats, device):
-    if cfg.multi_gpu:
-        epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
-        dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
-        stats["epoch_time"] = float(epoch_time.cpu().numpy())
-    else:
-        stats["epoch_time"] = epoch_time
+            print("Multi-GPU: Validation across GPUs")
 
 
 @torch.no_grad()
-def validate(dataloader, model, device, helper, pin_memory=True, master=False, multi_gpu=False,
+def validate(dataloader, model, device, helper, pin_memory=True, master=False, distributed=False,
              validate_on_master=True):
     epoch_stats = None
-    if (not multi_gpu) or (multi_gpu and validate_on_master and master) or (multi_gpu and not validate_on_master):
+    if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
         data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
         losses = Meter('Loss')
         tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
@@ -91,14 +92,15 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, m
             batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
             start_time = time.time()
 
-        reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time,
-               batch_time) if multi_gpu and not validate_on_master else None
+        if distributed and not validate_on_master:
+            reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
         epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
 
     return epoch_stats
 
 
-def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type=2.0, pin_memory=True, multi_gpu=False):
+def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type=2.0, pin_memory=True,
+          distributed=False):
     data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
     losses = Meter('Loss')
     tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
@@ -139,7 +141,7 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
         start_time = time.time()
 
-    reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time) if multi_gpu else None
+    reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time) if distributed else None
     epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
 
     return epoch_stats
@@ -154,7 +156,7 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
         train_sampler, train_dataloader = helper.get_train_sampler_and_dataloader(cfg, _dataset, train_sampler,
                                                                                   train_dataloader,
                                                                                   pin_memory=pin_memory)
-        if cfg.multi_gpu:
+        if cfg.distributed:
             train_sampler.set_epoch(epoch)
         if master:
             print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
@@ -163,31 +165,35 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
         # Train
         start_time = time.time()
         stats = train(train_dataloader, model, optimizer, device, helper, clip_grad=cfg.clip_grad,
-                      norm_type=cfg.norm_type, pin_memory=pin_memory, multi_gpu=cfg.multi_gpu)
+                      norm_type=cfg.norm_type, pin_memory=pin_memory, distributed=cfg.distributed)
         epoch_time = time.time() - start_time
+        epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed else epoch_time
 
         if master:
             stats = dict2cpu(stats) if "cpu" not in str(device) else stats
-            add_epoch_time_to_stats(cfg, epoch_time, stats, device)
-            stats["epoch"] = epoch + 1
+            epoch_time = float(epoch_time.cpu().numpy()) if cfg.distributed else epoch_time
+            stats.update({"epoch_time": epoch_time, "epoch": epoch + 1})
             helper.compute_meta_stats_and_print("train", stats)
 
         # Validate
         if (epoch + 1) % cfg.validate_every == 0:
             start_time = time.time()
             stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, master=master,
-                             multi_gpu=cfg.multi_gpu, validate_on_master=cfg.validate_on_master)
+                             distributed=cfg.distributed, validate_on_master=cfg.validate_on_master)
             epoch_time = time.time() - start_time
+            epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed and not cfg.validate_on_master \
+                else epoch_time
 
             if master:
                 stats = dict2cpu(stats) if "cpu" not in str(device) else stats
-                add_epoch_time_to_stats(cfg, epoch_time, stats, device)
-                stats["epoch"] = epoch + 1
+                epoch_time = float(epoch_time.cpu().numpy()) if cfg.distributed and not cfg.validate_on_master \
+                    else epoch_time
+                stats.update({"epoch_time": epoch_time, "epoch": epoch + 1})
                 helper.compute_meta_stats_and_print("val", stats)
                 if helper.val_stats[-1]["f1"] > best_f1:
                     best_f1 = helper.val_stats[-1]["f1"]
                     helper.save_model_and_opt(epoch, ckpt_path, best_model=True,
-                                              model=(model.module.state_dict() if cfg.multi_gpu else
+                                              model=(model.module.state_dict() if cfg.distributed else
                                                      model.state_dict()),
                                               optimizer=optimizer.state_dict())
                     helper.save_stats(ckpt_path)
@@ -195,7 +201,7 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
 
         if master and (epoch + 1) % cfg.save_every == 0:
             helper.save_model_and_opt(epoch, ckpt_path, best_model=False,
-                                      model=(model.module.state_dict() if cfg.multi_gpu else
+                                      model=(model.module.state_dict() if cfg.distributed else
                                              model.state_dict()),
                                       optimizer=optimizer.state_dict())
             helper.save_stats(ckpt_path)
@@ -210,7 +216,8 @@ def main(cfg):
     helper = MISTrainingHelper(cfg)
 
     # Set-up device
-    device, device_str, pin_memory, master, device_id = get_device(multi_gpu=cfg.multi_gpu, init_method=cfg.init_method,
+    device, device_str, pin_memory, master, device_id = get_device(distributed=cfg.distributed,
+                                                                   init_method=cfg.init_method,
                                                                    dist_backend=cfg.dist_backend)
     print("Device :", device)
 
@@ -247,8 +254,7 @@ def main(cfg):
         start_epoch = int(ckpt["epoch"])
 
     model.to(device)
-    if cfg.multi_gpu:
-        model = DDP(model, device_ids=[device_id])
+    model = DDP(model, device_ids=[device_id]) if cfg.distributed else model
 
     # Initialize dataloaders
     print("N worker dataloader: ", cfg.n_worker_dataloader)
@@ -258,18 +264,18 @@ def main(cfg):
     train_sampler, train_dataloader = None, None
 
     val_dataset = helper.get_val_dataset(cfg, train_dataset)
-    val_sampler = None
-    if cfg.multi_gpu and not cfg.validate_on_master:
-        val_sampler = DistributedSampler(val_dataset, shuffle=False)
+    val_sampler = DistributedSampler(val_dataset, shuffle=False) if cfg.distributed and not cfg.validate_on_master \
+        else None
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=cfg.batch_size,
                                 sampler=val_sampler,
                                 shuffle=False,
                                 num_workers=cfg.n_worker_dataloader,
                                 pin_memory=pin_memory)
+    print_validation_machine(master, val_sampler, device_str, cfg.distributed)
 
-    training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
-                  val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path)
+    training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader,
+                  val_dataset, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path)
 
 
 if __name__ == "__main__":

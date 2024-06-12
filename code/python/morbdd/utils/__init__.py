@@ -1267,13 +1267,14 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
                        rank=global_rank)
     print("Process group ready!")
     print("From Rank: {}, ==> Making model...".format(global_rank))
+    print()
 
     return global_rank, device_id
 
 
-def get_device(multi_gpu=False, init_method=None, dist_backend=None):
+def get_device(distributed=False, init_method=None, dist_backend=None):
     device_str, pin_memory, master, device_id = "cpu", False, True, 0
-    if multi_gpu:
+    if distributed:
         rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
         device_str = f"cuda:{device_id}"
         pin_memory = True
@@ -1499,3 +1500,14 @@ def get_nn_model_name(cfg):
         return get_nn_model_name_knapsack()
     else:
         raise ValueError("Invalid problem!")
+
+
+def dict2cpu(stats):
+    cpu_stats = {}
+    for k, v in stats.items():
+        if v is not None:
+            cpu_stats[k] = v.cpu().numpy()
+        else:
+            cpu_stats[k] = None
+
+    return cpu_stats

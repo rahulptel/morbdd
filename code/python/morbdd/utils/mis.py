@@ -55,7 +55,7 @@ class MISTrainingHelper(TrainingHelper):
     @staticmethod
     def get_train_sampler_and_dataloader(cfg, dataset, sampler, dataloader, pin_memory=False):
         if (cfg.dataset.train.frac_per_epoch == 1 and dataloader is None) or (cfg.dataset.train.frac_per_epoch < 1):
-            sampler = DistributedSampler(dataset, shuffle=True) if cfg.multi_gpu else None
+            sampler = DistributedSampler(dataset, shuffle=True) if cfg.distributed else None
             dataloader = DataLoader(dataset,
                                     batch_size=cfg.batch_size,
                                     sampler=sampler,

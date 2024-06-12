@@ -455,7 +455,6 @@ class ParetoStatePredictorMIS(nn.Module):
     def forward(self, n_feat, e_feat, pos_feat, lids, vids, states):
         # Embed
         n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), pos_feat.float())
-        print(n_emb.shape, e_emb.shape)
         # Encode: B' x n_vars x d_emb
         n_emb = self.node_encoder(n_emb, e_emb)
         # pad 0 to n_emb so that -1 results in zero vec

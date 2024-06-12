@@ -15,7 +15,7 @@ prob:
 size:
 
 # Distributed training
-multi_gpu: false
+distributed: false
 env: local
 dist_backend: nccl
 init_method: tcp://127.0.0.1:3456
