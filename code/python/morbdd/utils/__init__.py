@@ -1,16 +1,17 @@
+import hashlib
 import io
 import json
+import os
 import random
 import zipfile
 from operator import itemgetter
+
 import numpy as np
 import torch
+from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
 from morbdd import resource_path
-import hashlib
-from torch.distributed import init_process_group
-import os
 
 ZERO_ARC = -1
 ONE_ARC = 1
@@ -1269,22 +1270,22 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
     print("From Rank: {}, ==> Making model...".format(global_rank))
     print()
 
-    return global_rank, device_id
+    return world_size, global_rank, device_id
 
 
-def get_device(distributed=False, init_method=None, dist_backend=None):
-    device_str, pin_memory, master, device_id = "cpu", False, True, 0
+def setup_device(distributed=False, init_method=None, dist_backend=None):
+    world_size, rank, master, device_id, device_str, pin_memory = 1, 0, True, 0, "cpu", False
+
     if distributed:
-        rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        world_size, rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        master = rank == 0
         device_str = f"cuda:{device_id}"
         pin_memory = True
-        master = rank == 0
     elif torch.cuda.is_available():
         device_str = "cuda"
         pin_memory = True
-    device = torch.device(device_str)
 
-    return device, device_str, pin_memory, master, device_id
+    return world_size, rank, master, device_id, device_str, pin_memory
 
 
 def get_size(cfg):

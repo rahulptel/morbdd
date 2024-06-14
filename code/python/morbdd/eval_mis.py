@@ -6,12 +6,13 @@ from torch.utils.data import DataLoader
 from morbdd import ResourcePaths as path
 from morbdd.model import ParetoStatePredictorMIS
 from morbdd.train_mis import MISTrainingHelper
-from morbdd.utils import get_device
+from morbdd.utils import setup_device
 from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
 from morbdd.utils.mis import get_instance_data
 from morbdd.utils.mis import get_size
 from morbdd.train_mis import validate
+from morbdd.utils import dict2cpu
 
 
 def load_model(cfg, model_path):
@@ -148,28 +149,32 @@ def compute_pareto_frontier_on_pareto_bdd(cfg, env, pareto_states, inst_data, or
     return env
 
 
-def learning_eval(cfg, model, device, helper, pin_memory=False, multi_gpu=False):
+def learning_eval(cfg, model, device, helper, pin_memory=False, distributed=False):
     print("Evaluating learning metrics on validation set")
+    print("pin_memory - {}, distributed - {}".format(pin_memory, distributed))
     val_dataset = helper.get_dataset("val", cfg.dataset.val.from_pid, cfg.dataset.val.to_pid)
     val_dataloader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=False,
                                 num_workers=cfg.n_worker_dataloader)
-
-    stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, multi_gpu=multi_gpu)
+    stats = validate(val_dataloader, model, device, helper, pin_memory=pin_memory, master=True, distributed=distributed,
+                     validate_on_master=True)
+    stats = dict2cpu(stats) if "cpu" not in str(device) else stats
     meta_stats = helper.compute_meta_stats(stats)
-    helper.print_stats("val", meta_stats)
+
+    print(meta_stats)
+    # helper.print_stats("val", meta_stats)
 
 
-def downstream_eval(cfg, model, device, helper, pin_memory=False, multi_gpu=False):
-    from_pid, to_pid = cfg.dataset[cfg.eval.split].from_pid, cfg.dataset[cfg.eval.split].to_pid
-    for pid in range(from_pid, to_pid):
-        obj, adj, pos, dataset = fetch_inst_data(cfg.prob.name, cfg.size, cfg.eval.split, pid,
-                                                 path.bdd / f"{cfg.prob.name}/{cfg.prob.size}.zip")
-        obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
-
-        preds = get_preds(model, obj, adj, pos, dataset)
-        pspl = get_pareto_states_per_layer(cfg.pron.n_vars, dataset[:, 0].tolist(), preds.tolist())
-        get_stats_per_layer(pspl, preds)
-        apx_frontier, apx_stats = get_approx_pareto_frontier(preds)
+# def downstream_eval(cfg, model, device, helper, pin_memory=False, distributed=False):
+#     from_pid, to_pid = cfg.dataset[cfg.eval.split].from_pid, cfg.dataset[cfg.eval.split].to_pid
+#     for pid in range(from_pid, to_pid):
+#         obj, adj, pos, dataset = fetch_inst_data(cfg.prob.name, cfg.size, cfg.eval.split, pid,
+#                                                  path.bdd / f"{cfg.prob.name}/{cfg.prob.size}.zip")
+#         obj, adj, pos, dataset = obj.to(device), adj.to(device), pos.to(device), dataset.to(device)
+#
+#         preds = get_preds(model, obj, adj, pos, dataset)
+#         pspl = get_pareto_states_per_layer(cfg.pron.n_vars, dataset[:, 0].tolist(), preds.tolist())
+#         get_stats_per_layer(pspl, preds)
+#         apx_frontier, apx_stats = get_approx_pareto_frontier(preds)
 
 
 @hydra.main(config_path="configs", config_name="train_mis.yaml", version_base="1.2")
@@ -178,7 +183,7 @@ def main(cfg):
     helper = MISTrainingHelper(cfg)
 
     # Set-up device
-    device, device_str, pin_memory, master, device_id = get_device(multi_gpu=False)
+    device, device_str, pin_memory, master, device_id = get_device(distributed=False)
     print("Device :", device)
 
     # Load model for eval
@@ -190,9 +195,9 @@ def main(cfg):
 
     if cfg.eval.task == "learning":
         assert cfg.eval.split != "test"
-        learning_eval(cfg, model, device, helper, pin_memory=pin_memory, multi_gpu=False)
-    if cfg.eval.task == "downstream":
-        downstream_eval(cfg, model, device, helper, pin_memory=pin_memory, multi_gpu=False)
+        learning_eval(cfg, model, device, helper, pin_memory=pin_memory, distributed=False)
+    # if cfg.eval.task == "downstream":
+    #     downstream_eval(cfg, model, device, helper, pin_memory=pin_memory, distributed=False)
 
 
 if __name__ == "__main__":

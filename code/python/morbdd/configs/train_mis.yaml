@@ -33,6 +33,7 @@ save_every: 1
 n_worker_dataloader: 1
 # Checkpoint directory with timestamp
 with_timestamp: false
+wandb_log: false
 
 # Dataset config
 dataset:
