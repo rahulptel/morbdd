@@ -475,11 +475,13 @@ class ParetoStatePredictorMIS(nn.Module):
         # Layer-variable embedding
         # B x d_emb
         # lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in zip(pids_index, vids.int())])
-        lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in enumerate(vids.int())])
+        # lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in enumerate(vids.int())])
+        lv_emb = n_emb[torch.arange(vids.shape[0]), vids.int()]
 
         # State embedding
-        state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
+        # state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
         # state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
+        state_emb = torch.einsum("ijk,ij->ik", [n_emb, states])
 
         # for ibatch, states in enumerate(indices):
         #     state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
