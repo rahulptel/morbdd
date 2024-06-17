@@ -8,6 +8,7 @@ from operator import itemgetter
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
@@ -1512,3 +1513,17 @@ def dict2cpu(stats):
             cpu_stats[k] = None
 
     return cpu_stats
+
+
+def all_reduce(tensor, agg):
+    if agg == "sum":
+        dist.all_reduce(tensor, dist.ReduceOp.SUM)
+    elif agg == "avg":
+        dist.all_reduce(tensor, dist.ReduceOp.AVG)
+
+
+def tensor2np(x):
+    if isinstance(x, torch.Tensor):
+        return x.cpu().numpy()
+    else:
+        return x
