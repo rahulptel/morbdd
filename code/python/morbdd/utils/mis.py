@@ -52,33 +52,6 @@ class MISTrainingHelper(TrainingHelper):
 
         return train_dataset
 
-    @staticmethod
-    def get_train_sampler_and_dataloader(cfg, dataset, sampler, dataloader, pin_memory=False):
-        if (cfg.dataset.train.frac_per_epoch == 1 and dataloader is None) or (cfg.dataset.train.frac_per_epoch < 1):
-            sampler = DistributedSampler(dataset, shuffle=True) if cfg.distributed else None
-            dataloader = DataLoader(dataset,
-                                    batch_size=cfg.batch_size,
-                                    sampler=sampler,
-                                    shuffle=False,
-                                    num_workers=cfg.n_worker_dataloader,
-                                    pin_memory=pin_memory)
-
-        return sampler, dataloader
-
-    def get_val_dataset(self, cfg, train_dataset):
-        if cfg.dataset.validate_on == "train":
-            print("Validation on train set! Use only for debugging purposes")
-            indices = list(range(len(train_dataset)))
-            random.shuffle(indices)
-            indices = indices[:int(len(train_dataset) * cfg.dataset.validate_on_frac)]
-            val_dataset = Subset(train_dataset, indices)
-        else:
-            val_dataset = self.get_dataset("val",
-                                           cfg.dataset.val.from_pid,
-                                           cfg.dataset.val.to_pid)
-
-        return val_dataset
-
     def get_checkpoint_path(self):
         exp = self.get_exp_name()
         ckpt_path = path.resource / "checkpoint" / exp
