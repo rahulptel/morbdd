@@ -114,7 +114,7 @@ class TrainingHelper:
     #         torch.save(model_obj, model_path)
 
     @staticmethod
-    def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
+    def save_model_and_opt(epoch, iter_num, save_path, best_model=False, model=None, optimizer=None):
         # print(epoch)
         # print("Is best: {}".format(best_model))
         if best_model:
@@ -123,7 +123,7 @@ class TrainingHelper:
             model_path = save_path / "model.pt"
         # print("Saving model to: {}".format(model_path))
 
-        model_obj = {"epoch": epoch + 1, "model": model, "optimizer": optimizer}
+        model_obj = {"epoch": epoch, "iter": iter_num, "model": model, "optimizer": optimizer}
         torch.save(model_obj, model_path)
 
     def save_stats(self, save_path):

@@ -70,7 +70,7 @@ wandb:
   # wandb project name
   project: morbdd
   # Track the gradient of the model parameters
-  track_grad: false
+  track_grad: 100
 # Checkpoint directory with timestamp
 with_timestamp: false
 
