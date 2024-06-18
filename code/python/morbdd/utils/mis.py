@@ -115,22 +115,22 @@ class MISTrainingHelper(TrainingHelper):
 
     def get_dataset_str(self):
         dstr = "-"
+        if self.cfg.dataset.version != 1:
+            dstr += str(self.cfg.dataset.version) + "-"
         if not self.cfg.validate_on_master:
             dstr += "nvm"
 
-        dstr = "-t"
+        dstr += "t"
         if self.cfg.dataset.train.from_pid != 0:
             dstr += f"-f-{self.cfg.dataset.train.from_pid}"
         if self.cfg.dataset.train.to_pid != 1000:
             dstr += f"-t-{self.cfg.dataset.train.to_pid}"
-        if self.cfg.dataset.validate_on == "val":
-            dstr += f"-v"
-            if self.cfg.dataset.val.from_pid != 1000:
-                dstr += f"-f-{self.cfg.dataset.val.from_pid}"
-            if self.cfg.dataset.val.to_pid != 1100:
-                dstr += f"-t-{self.cfg.dataset.val.to_pid}"
-        else:
-            dstr += "-t"
+
+        dstr += f"-v"
+        if self.cfg.dataset.val.from_pid != 1000:
+            dstr += f"-f-{self.cfg.dataset.val.from_pid}"
+        if self.cfg.dataset.val.to_pid != 1100:
+            dstr += f"-t-{self.cfg.dataset.val.to_pid}"
 
         if dstr == "-":
             dstr = ""

@@ -1,3 +1,4 @@
+import random
 import time
 
 import hydra
@@ -123,17 +124,17 @@ def save(helper, ckpt_path, epoch, iter_num, model, optimizer, is_best):
     helper.save_stats(ckpt_path)
 
 
-def log_to_wandb(helper):
-    if len(helper.train_stats):
-        pass
-
-    if len(helper.val_stats):
-        pass
+# def log_to_wandb(mode, split, helper):
+#     if split == "train" and len(helper.train_stats):
+#         wandb.log(helper.train_stats)
+#
+#     if split == "val" and len(helper.val_stats):
+#         pass
 
 
 @torch.no_grad()
 def validate(dataloader, model, loss_fn, device, helper, pin_memory=True, master=False, distributed=False, world_size=1,
-             validate_on_master=True):
+             validate_on_master=True, wandb_log=False):
     if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
         model.eval()
 
@@ -159,89 +160,239 @@ def validate(dataloader, model, loss_fn, device, helper, pin_memory=True, master
 
         model.train()
 
+        if wandb_log:
+            wandb.log({
+                "val/loss": helper.val_stats[-1]["loss"],
+                "val/f1": helper.val_stats[-1]["f1"],
+                "val/recall": helper.val_stats[-1]["recall"],
+                "val/precision": helper.val_stats[-1]["precision"],
+            }, commit=False)
 
-def train(mode="epoch", dv=1, train_loader=None, model=None, optimizer=None, loss_fn="bce", device="cpu", helper=None,
-          clip_grad=1.0, norm_type=2.0, pin_memory=True, world_size=1, master=True, distributed=False, epoch=0,
-          iter_num=0, max_iter=100, val_loader=None, validate_on_master=True, validate_every=100, best_f1=0,
-          ckpt_path=None, wandb_log=False):
-    model.train()
 
-    out = {}
-    data_time, batch_time, losses, result = reset_stats()
+# def train(mode="epoch", dv=1, train_loader=None, model=None, optimizer=None, loss_fn="bce", device="cpu", helper=None,
+#           clip_grad=1.0, norm_type=2.0, pin_memory=True, world_size=1, master=True, distributed=False, epoch=0,
+#           iter_num=0, max_iter=100, val_loader=None, validate_on_master=True, validate_every=100, best_f1=0,
+#           ckpt_path=None, wandb_log=False):
+#     model.train()
+#
+#     out = {}
+#     data_time, batch_time, losses, result = reset_stats()
+#
+#     start_time = time.time()
+#     for batch_id, batch in enumerate(train_loader):
+#         batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
+#         data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+#
+#         loss, batch_result = process_batch(batch, model, loss_fn, version=dv)
+#         # Learn
+#         optimizer.zero_grad(set_to_none=True)
+#         loss.backward()
+#         torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type) if clip_grad > 0 else None
+#         optimizer.step()
+#
+#         result = torch.cat((result, batch_result), dim=1)
+#         losses.update(loss.detach(), batch_result.shape[0])
+#         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+#         start_time = time.time()
+#
+#         iter_num += 1
+#         if mode == "iter" and iter_num % validate_every == 0:
+#             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
+#                      distributed=distributed, world_size=world_size, validate_on_master=validate_on_master)
+#             if master and helper.val_stats[-1]["f1"] > best_f1:
+#                 best_f1 = helper.val_stats[-1]["f1"]
+#                 save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
+#                 print("* Best F1: {}".format(best_f1))
+#
+#         if mode == "iter" and iter_num > max_iter:
+#             break
+#
+#     result = result.T
+#     if distributed:
+#         result = post_process_distributed(losses, data_time, batch_time, result, world_size)
+#     set_out(master, losses, data_time, batch_time, result, out, helper, "train")
+#
+#     return iter_num, best_f1
 
-    start_time = time.time()
-    for batch_id, batch in enumerate(train_loader):
-        batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
-        data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
-        loss, batch_result = process_batch(batch, model, loss_fn, version=dv)
-        # Learn
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type) if clip_grad > 0 else None
-        optimizer.step()
+# def training_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model, optimizer,
+#                   loss_fn, helper, device, pin_memory, ckpt_path, best_f1):
+#     if master:
+#         print("Train samples: {}, Val samples {}".format(len(train_loader.dataset), len(val_loader.dataset)))
+#         print("Train loader: {}, Val loader {}".format(len(train_loader), len(val_loader)))
+#
+#     for epoch in range(start_epoch, end_epoch):
+#         if cfg.distributed:
+#             train_loader.sampler.set_epoch(epoch)
+#
+#         if cfg.train_mode == "epoch" and epoch % cfg.validate_every_epoch == 0:
+#             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
+#                      distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+#             if master:
+#                 if cfg.wandb_log:
+#                     log_to_wandb(helper)
+#
+#                 if helper.val_stats[-1]["f1"] > best_f1:
+#                     best_f1 = helper.val_stats[-1]["f1"]
+#                     save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
+#                     print("* Best F1: {}".format(best_f1))
+#
+#         if master and epoch % cfg.save_every == 0:
+#             save(helper, ckpt_path, epoch, iter_num, model, optimizer, False)
+#
+#         if cfg.train_mode == "iter" and iter_num > cfg.max_iter:
+#             break
+#
+#         # Train
+#         out = train(mode=cfg.train_mode, dv=cfg.dataset.version, train_loader=train_loader, model=model,
+#                     optimizer=optimizer, loss_fn=loss_fn, device=device, helper=helper, clip_grad=cfg.clip_grad,
+#                     norm_type=cfg.norm_type, pin_memory=pin_memory, world_size=world_size, master=master,
+#                     distributed=cfg.distributed, iter_num=iter_num, max_iter=cfg.max_iter, val_loader=val_loader,
+#                     validate_on_master=cfg.validate_on_master, validate_every=cfg.validate_every_iter,
+#                     ckpt_path=ckpt_path, best_f1=best_f1, wandb_log=cfg.wandb.log)
+#         iter_num, best_f1 = out
+#
+#         print() if master else None
 
-        result = torch.cat((result, batch_result), dim=1)
-        losses.update(loss.detach(), batch_result.shape[0])
-        batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+
+def iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model, optimizer, loss_fn, helper, device,
+              pin_memory, ckpt_path, best_f1):
+    if master:
+        print("Train samples: {}, Val samples {}".format(len(train_loader.dataset), len(val_loader.dataset)))
+        print("Train loader: {}, Val loader {}".format(len(train_loader), len(val_loader)))
+
+    if iter_num == 0:
+        validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
+                 distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+        if master and helper.val_stats[-1]["f1"] > best_f1:
+            best_f1 = helper.val_stats[-1]["f1"]
+            save(helper, ckpt_path, -1, iter_num, model, optimizer, True)
+            print("* Best F1: {}".format(best_f1))
+
+    while True:
+        # Shuffle train loader
+        train_loader.sampler.set_epoch(random.randint(0, 100000))
+        out = {}
+        data_time, batch_time, losses, result = reset_stats()
+
         start_time = time.time()
+        for batch_id, batch in enumerate(train_loader):
+            batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
+            data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
-        iter_num += 1
-        if mode == "iter" and iter_num % validate_every == 0:
-            validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-                     distributed=distributed, world_size=world_size, validate_on_master=validate_on_master)
-            if master and helper.val_stats[-1]["f1"] > best_f1:
-                best_f1 = helper.val_stats[-1]["f1"]
-                save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
-                print("* Best F1: {}".format(best_f1))
+            loss, batch_result = process_batch(batch, model, loss_fn, version=cfg.dataset.version)
+            # Learn
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.clip_grad,
+                                           norm_type=cfg.norm_type) if cfg.clip_grad > 0 else None
+            optimizer.step()
 
-        if mode == "iter" and iter_num > max_iter:
-            break
+            result = torch.cat((result, batch_result), dim=1)
+            losses.update(loss.detach(), batch_result.shape[0])
+            batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
 
-    result = result.T
-    if distributed:
-        result = post_process_distributed(losses, data_time, batch_time, result, world_size)
-    set_out(master, losses, data_time, batch_time, result, out, helper, "train")
+            iter_num += 1
+            if iter_num % cfg.validate_every == 0:
+                # Get val stats
+                validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
+                         distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+                if master and helper.val_stats[-1]["f1"] > best_f1:
+                    best_f1 = helper.val_stats[-1]["f1"]
+                    # save(helper, ckpt_path, -1, iter_num, model, optimizer, True)
+                    raw_model = model.module if hasattr(model, "module") else model
+                    helper.save_model_and_opt(-1, iter_num, ckpt_path, best_model=True, model=raw_model.state_dict(),
+                                              optimizer=optimizer.state_dict())
+                    print("* Best F1: {}".format(best_f1))
 
-    return iter_num, best_f1
+                # Get train stats
+                result = result.T
+                result = post_process_distributed(losses, data_time, batch_time, result, world_size) \
+                    if cfg.distributed else result
+                set_out(master, losses, data_time, batch_time, result, out, helper, "train")
+                save(helper, ckpt_path, -1, iter_num, model, optimizer, False)
+                if cfg.wandb.log:
+                    wandb.log({
+                        "train/loss": helper.train_stats[-1]["loss"],
+                        "train/f1": helper.train_stats[-1]["f1"],
+                        "train/recall": helper.train_stats[-1]["recall"],
+                        "train/precision": helper.train_stats[-1]["precision"],
+                    })
+
+            print() if master else None
+            if iter_num > cfg.max_iter:
+                return
+
+            start_time = time.time()
 
 
-def training_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model, optimizer,
-                  loss_fn, helper, device, pin_memory, ckpt_path, best_f1):
+def epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model, optimizer,
+               loss_fn, helper, device, pin_memory, ckpt_path, best_f1):
+    def train(dv=1, clip_grad=1.0, norm_type=2.0, distributed=False, wandb_log=False):
+        model.train()
+
+        out = {}
+        data_time, batch_time, losses, result = reset_stats()
+
+        start_time = time.time()
+        for batch_id, batch in enumerate(train_loader):
+            batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
+            data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+
+            loss, batch_result = process_batch(batch, model, loss_fn, version=dv)
+            # Learn
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad,
+                                           norm_type=norm_type) if clip_grad > 0 else None
+            optimizer.step()
+
+            result = torch.cat((result, batch_result), dim=1)
+            losses.update(loss.detach(), batch_result.shape[0])
+            batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+            start_time = time.time()
+
+        result = result.T
+        result = post_process_distributed(losses, data_time, batch_time, result, world_size) if distributed else result
+        set_out(master, losses, data_time, batch_time, result, out, helper, "train")
+
+        if wandb_log:
+            wandb.log({
+                "train/loss": helper.train_stats[-1]["loss"],
+                "train/f1": helper.train_stats[-1]["f1"],
+                "train/recall": helper.train_stats[-1]["recall"],
+                "train/precision": helper.train_stats[-1]["precision"],
+            })
+
     if master:
         print("Train samples: {}, Val samples {}".format(len(train_loader.dataset), len(val_loader.dataset)))
         print("Train loader: {}, Val loader {}".format(len(train_loader), len(val_loader)))
 
     for epoch in range(start_epoch, end_epoch):
-        if cfg.distributed:
-            train_loader.sampler.set_epoch(epoch)
+        train_loader.sampler.set_epoch(epoch) if cfg.distributed else None
 
-        if cfg.train_mode == "epoch" and epoch % cfg.validate_every_epoch == 0:
+        if epoch % cfg.validate_every_epoch == 0:
             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
                      distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
             if master:
                 if cfg.wandb_log:
-                    log_to_wandb(helper)
+                    # log_to_wandb(helper)
+                    pass
 
                 if helper.val_stats[-1]["f1"] > best_f1:
                     best_f1 = helper.val_stats[-1]["f1"]
-                    save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
+                    # save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
+                    raw_model = model.module if hasattr(model, "module") else model
+                    helper.save_model_and_opt(-1, iter_num, ckpt_path, best_model=True, model=raw_model.state_dict(),
+                                              optimizer=optimizer.state_dict())
                     print("* Best F1: {}".format(best_f1))
 
         if master and epoch % cfg.save_every == 0:
             save(helper, ckpt_path, epoch, iter_num, model, optimizer, False)
 
-        if cfg.train_mode == "iter" and iter_num > cfg.max_iter:
-            break
-
         # Train
-        out = train(mode=cfg.train_mode, dv=cfg.dataset.version, train_loader=train_loader, model=model,
-                    optimizer=optimizer, loss_fn=loss_fn, device=device, helper=helper, clip_grad=cfg.clip_grad,
-                    norm_type=cfg.norm_type, pin_memory=pin_memory, world_size=world_size, master=master,
-                    distributed=cfg.distributed, iter_num=iter_num, max_iter=cfg.max_iter, val_loader=val_loader,
-                    validate_on_master=cfg.validate_on_master, validate_every=cfg.validate_every_iter,
-                    ckpt_path=ckpt_path, best_f1=best_f1, wandb_log=cfg.wandb.log)
-        iter_num, best_f1 = out
+        train(dv=cfg.dataset.version, clip_grad=cfg.clip_grad, norm_type=cfg.norm_type, distributed=cfg.distributed,
+              wandb_log=cfg.wandb.log)
 
         print() if master else None
 
@@ -299,14 +450,13 @@ def main(cfg):
     if ckpt is not None:
         model.load_state_dict(ckpt["state_dict"])
         optimizer.load_state_dict(ckpt["opt_dict"])
+        start_epoch = int(ckpt["epoch"])
+        iter_num = int(ckpt["iter"])
+
         stats = torch.load(ckpt_path / "stats.pt", map_location="cpu")
         for v in stats["val"]:
             if v["f1"] < best_f1:
                 best_f1 = v["f1"]
-        start_epoch = int(ckpt["epoch"])
-        iter_num = int(ckpt["iter"])
-    if cfg.train_mode == "iter":
-        end_epoch = int(len(train_loader) / cfg.max_iter) + 1
 
     print_validation_machine(master, val_loader.sampler, device_str, cfg.distributed)
 
@@ -320,8 +470,12 @@ def main(cfg):
         if cfg.wandb.track_grad > 0:
             wandb.watch(model, log_freq=cfg.wandb.track_grad)
 
-    training_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model, optimizer,
-                  loss_fn, helper, device, pin_memory, ckpt_path, best_f1)
+    if cfg.train_mode == "epoch":
+        epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model,
+                   optimizer, loss_fn, helper, device, pin_memory, ckpt_path, best_f1)
+    elif cfg.train_mode == "iter":
+        iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model, optimizer, loss_fn, helper,
+                  device, pin_memory, ckpt_path, best_f1)
 
 
 if __name__ == "__main__":
