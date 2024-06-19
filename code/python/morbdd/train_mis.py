@@ -57,13 +57,14 @@ def print_validation_machine(master, val_sampler, device_str, distributed):
 
 @torch.no_grad()
 def validate(dataloader, model, device, helper, pin_memory=True, master=False, distributed=False,
-             validate_on_master=True):
+             validate_on_master=True, world_size=4):
     epoch_stats = None
     if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
         data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
         losses = Meter('Loss')
         tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
         n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
+        result = torch.empty((6, 0))
 
         model.eval()
         start_time = time.time()
@@ -80,7 +81,8 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, d
             loss = F.cross_entropy(logits.reshape(-1, 2), labels.reshape(-1))
 
             # Compute stats
-            preds = torch.argmax(F.softmax(logits, dim=-1), dim=-1)
+            scores = F.softmax(logits, dim=-1)
+            preds = torch.argmax(scores, dim=-1)
             _tp, _tn, _fp, _fn, _n_pos, _n_neg = helper.compute_batch_stats(labels, preds.detach())
             losses.update(loss.detach(), labels.shape[0])
             tp.update(_tp)
@@ -89,22 +91,35 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, d
             fn.update(_fn)
             n_pos.update(_n_pos)
             n_neg.update(_n_neg)
+
+            result = torch.cat((result,
+                                torch.stack((labels, lids, logits[:, 0], logits[:, 1], scores[:, 1], preds))), dim=1)
             batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+
             start_time = time.time()
 
         if distributed and not validate_on_master:
             reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+            result_lst = [result for _ in range(world_size)]
+            dist.gather(result, gather_list=result_lst, dst=0)
+            result = torch.cat(result_lst)
+
         epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+        epoch_stats["lgt0"] = torch.histogram(result[:, 2], 10)
+        epoch_stats["lgt1"] = torch.histogram(result[:, 3], 10)
+        epoch_stats["score0"] = torch.histogram(result[result[:, 0] == 0][:, -2], 10)
+        epoch_stats["score1"] = torch.histogram(result[result[:, 0] == 1][:, -2], 10)
 
     return epoch_stats
 
 
 def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type=2.0, pin_memory=True,
-          distributed=False):
+          distributed=False, world_size=4):
     data_time, batch_time = Meter('DataTime'), Meter('BatchTime')
     losses = Meter('Loss')
     tp, fp, tn, fn = Meter('TP'), Meter('FP'), Meter('TN'), Meter('FN')
     n_pos, n_neg = Meter('n_pos'), Meter('n_neg')
+    result = torch.empty((6, 0))
 
     model.train()
     start_time = time.time()
@@ -128,7 +143,9 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         optimizer.step()
 
         # Compute stats
-        preds = torch.argmax(F.softmax(logits.detach(), dim=-1), dim=-1)
+        logits = logits.detach()
+        scores = F.softmax(logits.detach(), dim=-1)
+        preds = torch.argmax(scores, dim=-1)
         _tp, _tn, _fp, _fn, _n_pos, _n_neg = helper.compute_batch_stats(labels, preds.detach())
 
         losses.update(loss.detach(), labels.shape[0])
@@ -139,10 +156,24 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         n_pos.update(_n_pos)
         n_neg.update(_n_neg)
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+
+        result = torch.cat((result,
+                            torch.stack((labels, lids, logits[:, 0], logits[:, 1], scores[:, 1], preds))), dim=1)
+
         start_time = time.time()
 
-    reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time) if distributed else None
+    result = result.T
+    if distributed:
+        reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+        result_lst = [result for _ in range(world_size)]
+        dist.gather(result, gather_list=result_lst, dst=0)
+        result = torch.cat(result_lst)
+
     epoch_stats = stats2dict(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time)
+    epoch_stats["lgt0"] = torch.histogram(result[:, 2], 10)
+    epoch_stats["lgt1"] = torch.histogram(result[:, 3], 10)
+    epoch_stats["score0"] = torch.histogram(result[result[:, 0] == 0][:, -2], 10)
+    epoch_stats["score1"] = torch.histogram(result[result[:, 0] == 1][:, -2], 10)
 
     return epoch_stats
 
