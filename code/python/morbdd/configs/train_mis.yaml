@@ -27,6 +27,9 @@ logging: 2
 # Epochs after which to validate the model
 validate_every: 1
 validate_on_master: true
+validate_on_split:
+  - val
+  - train
 # Epochs after which to save the model
 save_every: 1
 # Set this to a positive number when using GPU

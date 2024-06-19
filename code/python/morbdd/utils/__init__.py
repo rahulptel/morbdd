@@ -58,9 +58,10 @@ class TrainingHelper:
         return tp, tn, fp, fn, pos, neg
 
     @staticmethod
-    def compute_meta_stats(stats):
-        loss, tp, tn, fp, fn, n_pos, n_neg = (stats["loss"], stats["tp"], stats["tn"], stats["fp"], stats["fn"],
-                                              stats["n_pos"], stats["n_neg"])
+    def compute_meta_stats(stats, prefix=""):
+        loss, tp, tn, fp, fn, n_pos, n_neg = (stats[prefix + "loss"], stats[prefix + "tp"], stats[prefix + "tn"],
+                                              stats[prefix + "fp"], stats[prefix + "fn"], stats[prefix + "n_pos"],
+                                              stats[prefix + "n_neg"])
 
         loss = loss / (n_pos + n_neg)
         acc = ((tp + tn) / (tp + fp + tn + fn))
@@ -69,11 +70,12 @@ class TrainingHelper:
         recall = tp / (tp + fn + 1e-10)
         specificity = tn / (tn + fp + 1e-10)
 
-        stats.update({
-            "loss": loss, "acc": acc, "f1": f1, "precision": precision, "recall": recall, "specificity": specificity
-        })
+        meta_stats = {
+            prefix + "loss": loss, prefix + "acc": acc, prefix + "f1": f1, prefix + "precision": precision,
+            prefix + "recall": recall, prefix + "specificity": specificity
+        }
 
-        return stats
+        return meta_stats
 
     @staticmethod
     def print_batch_stats(epoch, batch_id, stats):
@@ -91,15 +93,19 @@ class TrainingHelper:
                                                stats["items"]))
 
     @staticmethod
-    def print_stats(split, stats):
+    def print_stats(split, stats, prefix=""):
         print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
         print_str += "Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
         # ept, bt, dt = -1, -1, -1
         # if split == "train":
-        ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
+        ept = stats["epoch_time"]
+        epoch = stats["epoch"]
 
-        print(print_str.format(stats["epoch"], split, stats["f1"], stats["acc"], stats["loss"], stats["recall"],
-                               stats["precision"], stats["specificity"], ept, bt, dt))
+        bt, dt = stats[prefix + "batch_time"], stats[prefix + "data_time"]
+
+        print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
+                               stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
+                               stats[prefix + "specificity"], ept, bt, dt))
 
     # def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
     #     print("Saving model={}".format(best_model))
@@ -133,8 +139,18 @@ class TrainingHelper:
     def compute_meta_stats_and_print(self, split, stats):
         stats_lst = getattr(self, split + "_stats")
         meta_stats = self.compute_meta_stats(stats)
-        stats_lst.append(meta_stats)
+        stats.update(meta_stats)
+        val_on_train = False
+        for key in stats:
+            if "tr_" in key:
+                meta_stats = self.compute_meta_stats(stats, prefix="tr_")
+                stats.update(meta_stats)
+                val_on_train = True
+                break
+        stats_lst.append(stats)
         self.print_stats(split, stats_lst[-1])
+        if val_on_train:
+            self.print_stats(split, stats_lst[-1], prefix="tr_")
 
 
 class KnapsackBDDDataset(Dataset):
