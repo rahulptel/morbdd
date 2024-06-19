@@ -481,7 +481,7 @@ class ParetoStatePredictorMIS(nn.Module):
         # State embedding
         # state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
         # state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
-        state_emb = torch.einsum("ijk,ij->ik", [n_emb, states])
+        state_emb = torch.einsum("ijk,ij->ik", [n_emb, states.float()])
 
         # for ibatch, states in enumerate(indices):
         #     state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)

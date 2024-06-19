@@ -2,6 +2,7 @@ import random
 import time
 
 import hydra
+import numpy as np
 import omegaconf
 import torch
 import torch.distributed as dist
@@ -69,7 +70,8 @@ def process_batch(batch, model, loss_fn, version=1):
         loss = loss_fn(logits, labels)
 
         # Get predictions
-        scores = F.softmax(logits.detach(), dim=-1)
+        logits = logits.detach()
+        scores = F.softmax(logits, dim=-1)
         preds = torch.argmax(scores, dim=-1)
         result = torch.stack((labels, lids, logits[:, 0], logits[:, 1], scores[:, 1], preds))
 
@@ -95,7 +97,11 @@ def get_result_stats(result):
         "roc_score": roc_auc_score(result[:, 0], result[:, -2]),
         "roc_fpr": roc_fpr,
         "roc_tpr": roc_tpr,
-        "roc_thresholds": roc_thresholds
+        "roc_thresholds": roc_thresholds,
+        "lgt0": np.histogram(result[:, 2], bins=10),
+        "lgt1": np.histogram(result[:, 3], bins=10),
+        "score0": np.histogram(result[result[:, 0] == 0][:, -2], bins=10),
+        "score1": np.histogram(result[result[:, 0] == 1][:, -2], bins=10)
     }
 
 
@@ -112,7 +118,7 @@ def set_out(master, losses, data_time, batch_time, result, out, helper, split):
     if master:
         # Convert to numpy
         r = list(map(tensor2np, (losses.avg, data_time.avg, batch_time.avg, batch_time.sum, result)))
-        out.update(get_result_stats(result))
+        out.update(get_result_stats(r[-1]))
         out["loss"], out["data_time"], out["batch_time"], out["epoch_time"] = r[0], r[1], r[2], r[3]
         getattr(helper, f"{split}_stats").append(out)
 
@@ -141,6 +147,7 @@ def validate(dataloader, model, loss_fn, device, helper, pin_memory=True, master
         out = {}
         data_time, batch_time, losses, result = reset_stats()
 
+        result = result.to(device)
         start_time = time.time()
         for batch in dataloader:
             batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
@@ -148,7 +155,6 @@ def validate(dataloader, model, loss_fn, device, helper, pin_memory=True, master
 
             loss, batch_result = process_batch(batch, model, loss_fn, version=1)
             result = torch.cat((result, batch_result), dim=1)
-
             losses.update(loss.detach(), batch_result.shape[0])
             batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
             start_time = time.time()
@@ -160,99 +166,13 @@ def validate(dataloader, model, loss_fn, device, helper, pin_memory=True, master
 
         model.train()
 
-        if wandb_log:
+        if master and wandb_log:
             wandb.log({
                 "val/loss": helper.val_stats[-1]["loss"],
                 "val/f1": helper.val_stats[-1]["f1"],
                 "val/recall": helper.val_stats[-1]["recall"],
                 "val/precision": helper.val_stats[-1]["precision"],
             }, commit=False)
-
-
-# def train(mode="epoch", dv=1, train_loader=None, model=None, optimizer=None, loss_fn="bce", device="cpu", helper=None,
-#           clip_grad=1.0, norm_type=2.0, pin_memory=True, world_size=1, master=True, distributed=False, epoch=0,
-#           iter_num=0, max_iter=100, val_loader=None, validate_on_master=True, validate_every=100, best_f1=0,
-#           ckpt_path=None, wandb_log=False):
-#     model.train()
-#
-#     out = {}
-#     data_time, batch_time, losses, result = reset_stats()
-#
-#     start_time = time.time()
-#     for batch_id, batch in enumerate(train_loader):
-#         batch = [item.to(device, non_blocking=True) for item in batch] if pin_memory else batch
-#         data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-#
-#         loss, batch_result = process_batch(batch, model, loss_fn, version=dv)
-#         # Learn
-#         optimizer.zero_grad(set_to_none=True)
-#         loss.backward()
-#         torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type) if clip_grad > 0 else None
-#         optimizer.step()
-#
-#         result = torch.cat((result, batch_result), dim=1)
-#         losses.update(loss.detach(), batch_result.shape[0])
-#         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-#         start_time = time.time()
-#
-#         iter_num += 1
-#         if mode == "iter" and iter_num % validate_every == 0:
-#             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-#                      distributed=distributed, world_size=world_size, validate_on_master=validate_on_master)
-#             if master and helper.val_stats[-1]["f1"] > best_f1:
-#                 best_f1 = helper.val_stats[-1]["f1"]
-#                 save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
-#                 print("* Best F1: {}".format(best_f1))
-#
-#         if mode == "iter" and iter_num > max_iter:
-#             break
-#
-#     result = result.T
-#     if distributed:
-#         result = post_process_distributed(losses, data_time, batch_time, result, world_size)
-#     set_out(master, losses, data_time, batch_time, result, out, helper, "train")
-#
-#     return iter_num, best_f1
-
-
-# def training_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model, optimizer,
-#                   loss_fn, helper, device, pin_memory, ckpt_path, best_f1):
-#     if master:
-#         print("Train samples: {}, Val samples {}".format(len(train_loader.dataset), len(val_loader.dataset)))
-#         print("Train loader: {}, Val loader {}".format(len(train_loader), len(val_loader)))
-#
-#     for epoch in range(start_epoch, end_epoch):
-#         if cfg.distributed:
-#             train_loader.sampler.set_epoch(epoch)
-#
-#         if cfg.train_mode == "epoch" and epoch % cfg.validate_every_epoch == 0:
-#             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-#                      distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
-#             if master:
-#                 if cfg.wandb_log:
-#                     log_to_wandb(helper)
-#
-#                 if helper.val_stats[-1]["f1"] > best_f1:
-#                     best_f1 = helper.val_stats[-1]["f1"]
-#                     save(helper, ckpt_path, epoch, iter_num, model, optimizer, True)
-#                     print("* Best F1: {}".format(best_f1))
-#
-#         if master and epoch % cfg.save_every == 0:
-#             save(helper, ckpt_path, epoch, iter_num, model, optimizer, False)
-#
-#         if cfg.train_mode == "iter" and iter_num > cfg.max_iter:
-#             break
-#
-#         # Train
-#         out = train(mode=cfg.train_mode, dv=cfg.dataset.version, train_loader=train_loader, model=model,
-#                     optimizer=optimizer, loss_fn=loss_fn, device=device, helper=helper, clip_grad=cfg.clip_grad,
-#                     norm_type=cfg.norm_type, pin_memory=pin_memory, world_size=world_size, master=master,
-#                     distributed=cfg.distributed, iter_num=iter_num, max_iter=cfg.max_iter, val_loader=val_loader,
-#                     validate_on_master=cfg.validate_on_master, validate_every=cfg.validate_every_iter,
-#                     ckpt_path=ckpt_path, best_f1=best_f1, wandb_log=cfg.wandb.log)
-#         iter_num, best_f1 = out
-#
-#         print() if master else None
 
 
 def iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model, optimizer, loss_fn, helper, device,
@@ -263,7 +183,8 @@ def iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model
 
     if iter_num == 0:
         validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-                 distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+                 distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master,
+                 wandb_log=cfg.wandb.log)
         if master and helper.val_stats[-1]["f1"] > best_f1:
             best_f1 = helper.val_stats[-1]["f1"]
             save(helper, ckpt_path, -1, iter_num, model, optimizer, True)
@@ -296,7 +217,8 @@ def iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model
             if iter_num % cfg.validate_every == 0:
                 # Get val stats
                 validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-                         distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+                         distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master,
+                         wandb_log=cfg.wandb.log)
                 if master and helper.val_stats[-1]["f1"] > best_f1:
                     best_f1 = helper.val_stats[-1]["f1"]
                     # save(helper, ckpt_path, -1, iter_num, model, optimizer, True)
@@ -311,7 +233,7 @@ def iter_loop(cfg, world_size, master, iter_num, train_loader, val_loader, model
                     if cfg.distributed else result
                 set_out(master, losses, data_time, batch_time, result, out, helper, "train")
                 save(helper, ckpt_path, -1, iter_num, model, optimizer, False)
-                if cfg.wandb.log:
+                if master and cfg.wandb.log:
                     wandb.log({
                         "train/loss": helper.train_stats[-1]["loss"],
                         "train/f1": helper.train_stats[-1]["f1"],
@@ -333,6 +255,7 @@ def epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_
 
         out = {}
         data_time, batch_time, losses, result = reset_stats()
+        result = result.to(device)
 
         start_time = time.time()
         for batch_id, batch in enumerate(train_loader):
@@ -341,7 +264,7 @@ def epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_
 
             loss, batch_result = process_batch(batch, model, loss_fn, version=dv)
             # Learn
-            optimizer.zero_grad(set_to_none=True)
+            optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad,
                                            norm_type=norm_type) if clip_grad > 0 else None
@@ -356,7 +279,7 @@ def epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_
         result = post_process_distributed(losses, data_time, batch_time, result, world_size) if distributed else result
         set_out(master, losses, data_time, batch_time, result, out, helper, "train")
 
-        if wandb_log:
+        if master and wandb_log:
             wandb.log({
                 "train/loss": helper.train_stats[-1]["loss"],
                 "train/f1": helper.train_stats[-1]["f1"],
@@ -367,17 +290,17 @@ def epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_
     if master:
         print("Train samples: {}, Val samples {}".format(len(train_loader.dataset), len(val_loader.dataset)))
         print("Train loader: {}, Val loader {}".format(len(train_loader), len(val_loader)))
+        if cfg.wandb.log:
+            wandb.watch(model.token_emb.linear1, log_freq=1, log='all')
 
     for epoch in range(start_epoch, end_epoch):
         train_loader.sampler.set_epoch(epoch) if cfg.distributed else None
 
         if epoch % cfg.validate_every_epoch == 0:
             validate(val_loader, model, loss_fn, device, helper, pin_memory=pin_memory, master=master,
-                     distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master)
+                     distributed=cfg.distributed, world_size=world_size, validate_on_master=cfg.validate_on_master,
+                     wandb_log=cfg.wandb.log)
             if master:
-                if cfg.wandb_log:
-                    # log_to_wandb(helper)
-                    pass
 
                 if helper.val_stats[-1]["f1"] > best_f1:
                     best_f1 = helper.val_stats[-1]["f1"]
@@ -458,17 +381,16 @@ def main(cfg):
             if v["f1"] < best_f1:
                 best_f1 = v["f1"]
 
-    print_validation_machine(master, val_loader.sampler, device_str, cfg.distributed)
+    print_validation_machine(master, None, device_str, cfg.distributed)
 
     # Setup wandb
     if cfg.wandb.log and master:
         wandb.config = omegaconf.OmegaConf.to_container(
             cfg, resolve=True, throw_on_missing=True
         )
-        wandb.init(project=cfg.wandb.project, name=str(ckpt_path))
+        wandb.init(project=cfg.wandb.project, name=ckpt_path.stem)
 
-        if cfg.wandb.track_grad > 0:
-            wandb.watch(model, log_freq=cfg.wandb.track_grad)
+        # if cfg.wandb.track_grad > 0:
 
     if cfg.train_mode == "epoch":
         epoch_loop(cfg, world_size, master, start_epoch, end_epoch, iter_num, train_loader, val_loader, model,
