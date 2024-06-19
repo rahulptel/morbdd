@@ -183,9 +183,9 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
                 dataloader = val_dataloader if split == "val" else train_dataloader
                 new_stats = validate(dataloader, model, device, helper, pin_memory=pin_memory, master=master,
                                      distributed=cfg.distributed, validate_on_master=cfg.validate_on_master)
-                if split == "train":
-                    new_stats = {f'tr_' + k: v for k, v in new_stats.items()}
-                stats.update(new_stats)
+                if new_stats is not None:
+                    new_stats = {f'tr_' + k: v for k, v in new_stats.items()} if split == "train" else new_stats
+                    stats.update(new_stats)
 
             epoch_time = time.time() - start_time
             epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed and not cfg.validate_on_master \
