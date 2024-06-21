@@ -98,10 +98,9 @@ class TrainingHelper:
         print_str += "Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
         # ept, bt, dt = -1, -1, -1
         # if split == "train":
-        ept = stats["epoch_time"]
-        epoch = stats["epoch"]
 
-        bt, dt = stats[prefix + "batch_time"], stats[prefix + "data_time"]
+        epoch = stats["epoch"]
+        ept, bt, dt = stats[prefix + "batch_time"], stats[prefix + "data_time"], stats[prefix + "epoch_time"]
 
         print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
                                stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
@@ -136,21 +135,12 @@ class TrainingHelper:
         stats_obj = {"train": self.train_stats, "val": self.val_stats}
         torch.save(stats_obj, stats_path)
 
-    def compute_meta_stats_and_print(self, split, stats):
-        stats_lst = getattr(self, split + "_stats")
-        meta_stats = self.compute_meta_stats(stats)
+    def compute_meta_stats_and_print(self, split, stats, prefix=""):
+        meta_stats = self.compute_meta_stats(stats, prefix=prefix)
         stats.update(meta_stats)
-        val_on_train = False
-        for key in stats:
-            if "tr_" in key:
-                meta_stats = self.compute_meta_stats(stats, prefix="tr_")
-                stats.update(meta_stats)
-                val_on_train = True
-                break
-        stats_lst.append(stats)
-        self.print_stats(split, stats_lst[-1])
-        if val_on_train:
-            self.print_stats(split, stats_lst[-1], prefix="tr_")
+        self.print_stats(split, stats, prefix=prefix)
+
+        return stats
 
 
 class KnapsackBDDDataset(Dataset):
@@ -1285,13 +1275,13 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
     print("From Rank: {}, ==> Making model...".format(global_rank))
     print()
 
-    return global_rank, device_id
+    return world_size, global_rank, device_id
 
 
 def get_device(distributed=False, init_method=None, dist_backend=None):
-    device_str, pin_memory, master, device_id = "cpu", False, True, 0
+    device_str, pin_memory, master, device_id, world_size = "cpu", False, True, 0, 1
     if distributed:
-        rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        world_size, rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
         device_str = f"cuda:{device_id}"
         pin_memory = True
         master = rank == 0
@@ -1300,7 +1290,7 @@ def get_device(distributed=False, init_method=None, dist_backend=None):
         pin_memory = True
     device = torch.device(device_str)
 
-    return device, device_str, pin_memory, master, device_id
+    return device, device_str, pin_memory, master, device_id, world_size
 
 
 def get_size(cfg):
