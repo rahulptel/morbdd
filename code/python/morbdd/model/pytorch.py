@@ -85,22 +85,25 @@ class TokenEmbedGraph(nn.Module):
         self.encoder_type = encoder_type
         self.n_edge_type = n_edge_type
         self.top_k = top_k
-        self.dropout = nn.Dropout(dropout)
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
+        self.dropout1 = nn.Dropout(dropout)
+
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
+        self.dropout2 = nn.Dropout(dropout)
 
         if self.top_k:
             self.pos_encoder = nn.Linear(top_k * 2, d_emb)
 
         if self.encoder_type == "transformer":
             self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
+            self.dropout3 = nn.Dropout(dropout)
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
-        n = F.relu(self.dropout(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
+        n = self.dropout1(F.relu(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
         # Sum aggregate objectives
         n = n.sum(2)  # B x n_vars x 2 * d_emb
-        n_enc = F.relu(self.dropout(self.linear2(n)))  # B x n_vars x d_emb
+        n_enc = self.dropout2(F.relu(self.linear2(n)))  # B x n_vars x d_emb
 
         # Update node encoding with positional encoding based on SVD
         if self.top_k:
@@ -109,7 +112,7 @@ class TokenEmbedGraph(nn.Module):
 
         e_enc = e
         if self.encoder_type == "transformer":
-            e_enc = self.dropout(self.edge_encoder(e))  # B x n_vars x n_vars x d_emb
+            e_enc = self.dropout3(self.edge_encoder(e))  # B x n_vars x n_vars x d_emb
 
         return n_enc, e_enc
 
@@ -293,26 +296,30 @@ class GTEncoderLayer(nn.Module):
                                                   n_heads=n_heads,
                                                   bias_mha=bias_mha,
                                                   is_last_block=is_last_block)
-        self.dropout_mha = nn.Dropout(dropout_mha)
+        self.dropout_mha_n = nn.Dropout(dropout_mha)
         # FF
         self.ln_n2 = nn.LayerNorm(d_emb)
         self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
-        self.dropout_mlp = nn.Dropout(dropout_mlp)
+        self.dropout_mlp_n = nn.Dropout(dropout_mlp)
+
         if not is_last_block:
+            self.dropout_mha_e = nn.Dropout(dropout_mha)
             self.ln_e2 = nn.LayerNorm(d_emb)
             self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
+            self.dropout_mlp_e = nn.Dropout(dropout_mlp)
 
     def forward(self, n, e=None):
         n, e = self.ln_n1(n), self.ln_e1(e)
         n_, e_ = self.mha(n, e)
-        n = n + self.dropout_mha(n_)
+        n = n + self.dropout_mha_n(n_)
 
         n = self.ln_n2(n)
-        n = n + self.dropout_mlp(self.mlp_node(n))
+        n = n + self.dropout_mlp_n(self.mlp_node(n))
+
         if not self.is_last_block:
-            e = e + self.dropout_mha(e_)
+            e = e + self.dropout_mha_e(e_)
             e = self.ln_e2(e)
-            e = e + self.dropout_mlp(self.mlp_edge(e))
+            e = e + self.dropout_mlp_e(self.mlp_edge(e))
 
         return n, e
 
