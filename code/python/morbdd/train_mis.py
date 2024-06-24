@@ -58,7 +58,7 @@ def print_validation_machine(master, val_sampler, device_str, distributed):
 
 
 def get_stats(losses, data_time, batch_time, result):
-    result = result.cpu().numpy()
+    # result = result.cpu().numpy()
 
     l0c, l0b = np.histogram(result[:, 2], 10)
     l1c, l1b = np.histogram(result[:, 3], 10)
@@ -116,40 +116,55 @@ def aggregate_distributed_stats(losses=None, data_time=None, batch_time=None, re
     return result
 
 
-def process_batch(batch, model, loss_fn, version=1, epoch=0, batch_id=0, max_batches=1, writer=None, log=False,
-                  split="train"):
+def process_batch(batch, model, loss_fn, version=1, curr_iter=0, writer=None, log=False,
+                  split="train", distributed=False):
     objs, adjs, pos, _, lids, vids, states, labels = batch
     objs = objs / 100
-    curr_iter = (epoch * max_batches) + batch_id
 
+    model_ = model.module if distributed else model
     if version == 1:
         # Get logits and compute loss
         # logits = model(objs, adjs, pos, lids, vids, states)
         # ----------------------------------------------------------------------
-        n_emb, e_emb = model.token_emb(objs, adjs.int(), pos.float())
+        n_emb, e_emb = model_.token_emb(objs, adjs.int(), pos.float())
         if log and writer is not None:
             writer.add_histogram("token_emb/n/" + split, n_emb, curr_iter)
             writer.add_histogram("token_emb/e/" + split, e_emb, curr_iter)
 
-        n_emb = model.node_encoder(n_emb, e_emb)
+        n_emb = model_.node_encoder(n_emb, e_emb)
+        if log and writer is not None:
+            writer.add_histogram("node_emb/" + split, n_emb, curr_iter)
+
         # Instance embedding
         # B x d_emb
-        inst_emb = model.graph_encoder(n_emb.sum(1))
+        inst_emb = model_.graph_encoder(n_emb.sum(1))
+        if log and writer is not None:
+            writer.add_histogram("inst_emb/" + split, inst_emb, curr_iter)
+
         # Layer-index embedding
         # B x d_emb
-        li_emb = model.layer_index_encoder(lids.reshape(-1, 1).float())
+        li_emb = model_.layer_index_encoder(lids.reshape(-1, 1).float())
+        if log and writer is not None:
+            writer.add_histogram("lindex_emb/" + split, li_emb, curr_iter)
+
         # Layer-variable embedding
         # B x d_emb
         # lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in zip(pids_index, vids.int())])
         lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in enumerate(vids.int())])
+        if log and writer is not None:
+            writer.add_histogram("lvar_emb/" + split, lv_emb, curr_iter)
+
         # State embedding
         state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
         # state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
         # state_emb = torch.stack(state_emb)
-        state_emb = model.aggregator(state_emb)
+        state_emb = model_.aggregator(state_emb)
         state_emb = state_emb + inst_emb + li_emb + lv_emb
+        if log and writer is not None:
+            writer.add_histogram("state/" + split, state_emb, curr_iter)
+
         # Pareto-state predictor
-        logits = model.predictor(model.ln(state_emb))
+        logits = model_.predictor(model_.ln(state_emb))
         # ----------------------------------------------------------------------
 
         logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
@@ -165,17 +180,17 @@ def process_batch(batch, model, loss_fn, version=1, epoch=0, batch_id=0, max_bat
 
 
 def get_grad_norm(model, norm=2):
-    total = 0
+    grads = torch.empty(0).to(model.device)
     for p in model.parameters():
         if p.grad is not None:
-            total += p.grad.detach().data.norm(norm=2)
+            grads = torch.cat((grads, p.grad.detach().data.view(-1)))
 
-    return total ** (1 / norm)
+    return torch.norm(grads, p=norm)
 
 
 @torch.no_grad()
 def validate(dataloader, model, device, helper, pin_memory=True, master=False, distributed=False,
-             validate_on_master=True, epoch=None, writer=None, log_every=1e10):
+             validate_on_master=True, epoch=None, writer=None, log_every=1e10, split="val"):
     stats = {}
     result = None
     if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
@@ -189,10 +204,11 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, d
             if pin_memory:
                 batch = [item.to(device, non_blocking=True) for item in batch]
             data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-            log = master and log_every % batch_id == 0
+            log = master and batch_id % log_every == 0
+            curr_iter = (epoch * max_batches) + batch_id
 
-            loss, batch_result = process_batch(batch, model, F.cross_entropy, epoch=epoch, batch_id=batch_id,
-                                               max_batches=max_batches, writer=writer, log=log, split="val")
+            loss, batch_result = process_batch(batch, model, F.cross_entropy, curr_iter=curr_iter, writer=writer,
+                                               log=log, split="val-" + split, distributed=distributed)
 
             result = torch.cat((result, batch_result), dim=1)
             losses.update(loss.detach(), batch_result.shape[0])
@@ -221,21 +237,24 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         if pin_memory:
             batch = [item.to(device, non_blocking=True) for item in batch]
         data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
-        log = master and log_every % batch_id == 0
+        log = master and batch_id % log_every == 0
+        curr_iter = (epoch * max_batches) + batch_id
 
         # Get logits and compute loss
-        loss, batch_result = process_batch(batch, model, F.cross_entropy, epoch=epoch, batch_id=batch_id,
-                                           max_batches=max_batches, writer=writer, log=log, split="train")
+        loss, batch_result = process_batch(batch, model, F.cross_entropy, curr_iter=curr_iter, writer=writer, log=log,
+                                           split="train", distributed=distributed)
         # Learn
         optimizer.zero_grad()
         loss.backward()
         if log:
             norm = get_grad_norm(model)
-            writer.add_scalar("grad_norm", model.parameters())
+            writer.add_scalar("grad_norm", norm, curr_iter)
         if clip_grad > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type)
+            if log:
+                norm = get_grad_norm(model)
+                writer.add_scalar("grad_norm_clipped", norm, curr_iter)
         optimizer.step()
-
         result = torch.cat((result, batch_result), dim=1)
         losses.update(loss.detach(), batch_result.shape[0])
         batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
@@ -253,7 +272,7 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
 
 def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
                   val_sampler, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path, world_size,
-                  writer, log_every):
+                  writer):
     best_f1 = 0
     if master:
         print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
@@ -267,7 +286,7 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
         start_time = time.time()
         stats, result = train(train_dataloader, model, optimizer, device, helper, clip_grad=cfg.clip_grad,
                               norm_type=cfg.norm_type, pin_memory=pin_memory, distributed=cfg.distributed,
-                              master=master, epoch=epoch, writer=writer, log_every=log_every)
+                              master=master, epoch=epoch, writer=writer, log_every=cfg.log_every)
         epoch_time = time.time() - start_time
         epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed else epoch_time
 
@@ -279,8 +298,8 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
             helper.train_stats.append(stats)
             print("Result shape: ", result.shape)
             helper.print_stats("train", stats)
-            print("lgt0: ", stats["lgt0-mean"], stats["lgt0-min"], stats["lgt0-max"])
-            print("lgt1: ", stats["lgt1-mean"], stats["lgt1-min"], stats["lgt1-max"])
+            print("lgt0: ", stats["lgt0-mean"], stats["lgt0-std"], stats["lgt0-min"], stats["lgt0-max"])
+            print("lgt1: ", stats["lgt1-mean"], stats["lgt1-std"], stats["lgt1-min"], stats["lgt1-max"])
 
         # Validate
         if (epoch + 1) % cfg.validate_every == 0:
@@ -290,7 +309,7 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
                 dataloader = val_dataloader if split == "val" else train_dataloader
                 new_stats, result = validate(dataloader, model, device, helper, pin_memory=pin_memory, master=master,
                                              distributed=cfg.distributed, validate_on_master=cfg.validate_on_master,
-                                             epoch=epoch, writer=writer, log_every=log_every)
+                                             epoch=epoch, writer=writer, log_every=cfg.log_every, split=split)
                 epoch_time = time.time() - start_time
                 epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed and not cfg.validate_on_master \
                     else epoch_time
@@ -307,8 +326,10 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
 
                     print("Result shape: ", result.shape)
                     helper.print_stats("val", stats, prefix=prefix)
-                    print("lgt0: ", stats[prefix + "lgt0-mean"], stats[prefix + "lgt0-min"], stats[prefix + "lgt0-max"])
-                    print("lgt1: ", stats[prefix + "lgt1-mean"], stats[prefix + "lgt1-min"], stats[prefix + "lgt1-max"])
+                    print("lgt0: ", stats[prefix + "lgt0-mean"], stats[prefix + "lgt0-std"],
+                          stats[prefix + "lgt0-min"], stats[prefix + "lgt0-max"])
+                    print("lgt1: ", stats[prefix + "lgt1-mean"], stats[prefix + "lgt1-std"],
+                          stats[prefix + "lgt1-min"], stats[prefix + "lgt1-max"])
                     if split == "val" and stats["f1"] > best_f1:
                         best_f1 = stats["f1"]
                         helper.save_model_and_opt(epoch, ckpt_path, best_model=True,
@@ -476,7 +497,7 @@ def main(cfg):
     # debug(cfg, model, train_dataset)
     training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader,
                   val_dataset, val_sampler, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path,
-                  world_size, writer, cfg.log_every)
+                  world_size, writer)
 
 
 if __name__ == "__main__":
