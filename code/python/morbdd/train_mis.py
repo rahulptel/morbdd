@@ -100,6 +100,7 @@ def get_stats(losses, data_time, batch_time, result):
 def aggregate_distributed_stats(losses=None, data_time=None, batch_time=None, result=None, master=True):
     if losses is not None:
         dist.all_reduce(losses.sum, dist.ReduceOp.SUM)
+        losses.count = torch.tensor(losses.count).to(losses.sum.device)
         dist.all_reduce(losses.count, dist.ReduceOp.SUM)
         losses.avg = losses.sum / losses.count
     if data_time is not None:
@@ -176,6 +177,7 @@ def get_grad_norm(model, norm=2):
 def validate(dataloader, model, device, helper, pin_memory=True, master=False, distributed=False,
              validate_on_master=True, epoch=None, writer=None, log_every=1e10):
     stats = {}
+    result = None
     if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
         data_time, batch_time, losses = Meter('DataTime'), Meter('BatchTime'), Meter('Loss')
         result = torch.empty((6, 0)).to(device)
@@ -201,6 +203,7 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, d
         if distributed and not validate_on_master:
             result = aggregate_distributed_stats(losses=losses, data_time=data_time, batch_time=batch_time,
                                                  result=result, master=master)
+        result = result.cpu().numpy()
         stats = get_stats(losses, data_time, batch_time, result)
 
     return stats, result
@@ -242,6 +245,7 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
     if distributed:
         result = aggregate_distributed_stats(losses=losses, data_time=data_time, batch_time=batch_time, result=result,
                                              master=master)
+    result = result.cpu().numpy()
     stats = get_stats(losses, data_time, batch_time, result)
 
     return stats, result
