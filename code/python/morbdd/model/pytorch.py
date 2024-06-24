@@ -309,17 +309,13 @@ class GTEncoderLayer(nn.Module):
             self.dropout_mlp_e = nn.Dropout(dropout_mlp)
 
     def forward(self, n, e=None):
-        n, e = self.ln_n1(n), self.ln_e1(e)
-        n_, e_ = self.mha(n, e)
+        n_, e_ = self.mha(self.ln_n1(n), self.ln_e1(e))
         n = n + self.dropout_mha_n(n_)
 
-        n = self.ln_n2(n)
-        n = n + self.dropout_mlp_n(self.mlp_node(n))
-
+        n = n + self.dropout_mlp_n(self.mlp_node(self.ln_n2(n)))
         if not self.is_last_block:
             e = e + self.dropout_mha_e(e_)
-            e = self.ln_e2(e)
-            e = e + self.dropout_mlp_e(self.mlp_edge(e))
+            e = e + self.dropout_mlp_e(self.mlp_edge(self.ln_e2(e)))
 
         return n, e
 
