@@ -17,6 +17,7 @@ from morbdd.utils import get_device
 from morbdd.utils import set_seed
 from morbdd.utils.mis import MISTrainingHelper
 from morbdd.utils.mis import get_size
+from torch.utils.tensorboard import SummaryWriter
 
 
 def reduce(losses, tp, tn, fp, fn, n_pos, n_neg, data_time, batch_time):
@@ -58,7 +59,12 @@ def print_validation_machine(master, val_sampler, device_str, distributed):
 
 def get_stats(losses, data_time, batch_time, result):
     result = result.cpu().numpy()
-    return {
+
+    l0c, l0b = np.histogram(result[:, 2], 10)
+    l1c, l1b = np.histogram(result[:, 3], 10)
+    s0c, s0b = np.histogram(result[result[:, 0] == 0][:, -2], 10)
+    s1c, s1b = np.histogram(result[result[:, 0] == 0][:, -2], 10)
+    stats = {
         "loss": losses.avg.cpu().numpy(),
         "data_time": data_time.avg.cpu().numpy(),
         "batch_time": batch_time.avg.cpu().numpy(),
@@ -69,12 +75,26 @@ def get_stats(losses, data_time, batch_time, result):
         "acc": np.sum((result[:, 0] == result[:, -1])) / result.shape[0],
         "specificity": (result[result[:, 0] == 0][:, -1] == 0).sum(),
         "lgt0-mean": np.mean(result[:, 2]),
+        "lgt0-std": np.std(result[:, 2]),
+        "lgt0-med": np.median(result[:, 2]),
         "lgt0-min": np.min(result[:, 2]),
         "lgt0-max": np.max(result[:, 2]),
+        "lgt0-count": l0c,
+        "lgt0-bins": l0b,
+        "score0-count": s0c,
+        "score0-bins": s0b,
         "lgt1-mean": np.mean(result[:, 3]),
+        "lgt1-std": np.std(result[:, 3]),
+        "lgt1-med": np.median(result[:, 3]),
         "lgt1-min": np.min(result[:, 3]),
-        "lgt1-max": np.max(result[:, 3])
+        "lgt1-max": np.max(result[:, 3]),
+        "lgt1-count": l1c,
+        "lgt1-bins": l1b,
+        "score1-count": s1c,
+        "score1-bins": s1b
     }
+
+    return stats
 
 
 def aggregate_distributed_stats(losses=None, data_time=None, batch_time=None, result=None, master=True):
@@ -95,13 +115,42 @@ def aggregate_distributed_stats(losses=None, data_time=None, batch_time=None, re
     return result
 
 
-def process_batch(batch, model, loss_fn, version=1):
+def process_batch(batch, model, loss_fn, version=1, epoch=0, batch_id=0, max_batches=1, writer=None, log=False,
+                  split="train"):
     objs, adjs, pos, _, lids, vids, states, labels = batch
     objs = objs / 100
+    curr_iter = (epoch * max_batches) + batch_id
 
     if version == 1:
         # Get logits and compute loss
-        logits = model(objs, adjs, pos, lids, vids, states)
+        # logits = model(objs, adjs, pos, lids, vids, states)
+        # ----------------------------------------------------------------------
+        n_emb, e_emb = model.token_emb(objs, adjs.int(), pos.float())
+        if log and writer is not None:
+            writer.add_histogram("token_emb/n/" + split, n_emb, curr_iter)
+            writer.add_histogram("token_emb/e/" + split, e_emb, curr_iter)
+
+        n_emb = model.node_encoder(n_emb, e_emb)
+        # Instance embedding
+        # B x d_emb
+        inst_emb = model.graph_encoder(n_emb.sum(1))
+        # Layer-index embedding
+        # B x d_emb
+        li_emb = model.layer_index_encoder(lids.reshape(-1, 1).float())
+        # Layer-variable embedding
+        # B x d_emb
+        # lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in zip(pids_index, vids.int())])
+        lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in enumerate(vids.int())])
+        # State embedding
+        state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
+        # state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
+        # state_emb = torch.stack(state_emb)
+        state_emb = model.aggregator(state_emb)
+        state_emb = state_emb + inst_emb + li_emb + lv_emb
+        # Pareto-state predictor
+        logits = model.predictor(model.ln(state_emb))
+        # ----------------------------------------------------------------------
+
         logits, labels = logits.reshape(-1, 2), labels.long().reshape(-1)
         loss = loss_fn(logits, labels)
 
@@ -114,22 +163,34 @@ def process_batch(batch, model, loss_fn, version=1):
         return loss, batch_result
 
 
+def get_grad_norm(model, norm=2):
+    total = 0
+    for p in model.parameters():
+        if p.grad is not None:
+            total += p.grad.detach().data.norm(norm=2)
+
+    return total ** (1 / norm)
+
+
 @torch.no_grad()
 def validate(dataloader, model, device, helper, pin_memory=True, master=False, distributed=False,
-             validate_on_master=True):
+             validate_on_master=True, epoch=None, writer=None, log_every=1e10):
     stats = {}
     if (not distributed) or (distributed and validate_on_master and master) or (distributed and not validate_on_master):
         data_time, batch_time, losses = Meter('DataTime'), Meter('BatchTime'), Meter('Loss')
         result = torch.empty((6, 0)).to(device)
+        max_batches = len(dataloader)
 
         model.eval()
         start_time = time.time()
-        for batch in dataloader:
+        for batch_id, batch in enumerate(dataloader):
             if pin_memory:
                 batch = [item.to(device, non_blocking=True) for item in batch]
             data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+            log = master and log_every % batch_id == 0
 
-            loss, batch_result = process_batch(batch, model, F.cross_entropy)
+            loss, batch_result = process_batch(batch, model, F.cross_entropy, epoch=epoch, batch_id=batch_id,
+                                               max_batches=max_batches, writer=writer, log=log, split="val")
 
             result = torch.cat((result, batch_result), dim=1)
             losses.update(loss.detach(), batch_result.shape[0])
@@ -146,9 +207,10 @@ def validate(dataloader, model, device, helper, pin_memory=True, master=False, d
 
 
 def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type=2.0, pin_memory=True,
-          distributed=False, master=True):
+          distributed=False, master=True, epoch=None, writer=None, log_every=1e10):
     data_time, batch_time, losses = Meter('DataTime'), Meter('BatchTime'), Meter('Loss')
     result = torch.empty((6, 0)).to(device)
+    max_batches = len(dataloader)
 
     model.train()
     start_time = time.time()
@@ -156,12 +218,17 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
         if pin_memory:
             batch = [item.to(device, non_blocking=True) for item in batch]
         data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=device))
+        log = master and log_every % batch_id == 0
 
         # Get logits and compute loss
-        loss, batch_result = process_batch(batch, model, F.cross_entropy)
+        loss, batch_result = process_batch(batch, model, F.cross_entropy, epoch=epoch, batch_id=batch_id,
+                                           max_batches=max_batches, writer=writer, log=log, split="train")
         # Learn
         optimizer.zero_grad()
         loss.backward()
+        if log:
+            norm = get_grad_norm(model)
+            writer.add_scalar("grad_norm", model.parameters())
         if clip_grad > 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip_grad, norm_type=norm_type)
         optimizer.step()
@@ -181,21 +248,22 @@ def train(dataloader, model, optimizer, device, helper, clip_grad=1.0, norm_type
 
 
 def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader, val_dataset,
-                  val_sampler, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path, world_size):
+                  val_sampler, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path, world_size,
+                  writer, log_every):
     best_f1 = 0
+    if master:
+        print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
+        print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
+
     for epoch in range(start_epoch, end_epoch):
-        # Train on the entire dataset or a subset depending on `dataset.train.frac_per_epoch`
         if cfg.distributed:
             train_sampler.set_epoch(epoch)
-        if master:
-            print("Train samples: {}, Val samples {}".format(len(train_dataset), len(val_dataset)))
-            print("Train loader: {}, Val loader {}".format(len(train_dataloader), len(val_dataloader)))
 
         # Train
         start_time = time.time()
         stats, result = train(train_dataloader, model, optimizer, device, helper, clip_grad=cfg.clip_grad,
                               norm_type=cfg.norm_type, pin_memory=pin_memory, distributed=cfg.distributed,
-                              master=master)
+                              master=master, epoch=epoch, writer=writer, log_every=log_every)
         epoch_time = time.time() - start_time
         epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed else epoch_time
 
@@ -203,14 +271,10 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
             # stats = dict2cpu(stats) if "cpu" not in str(device) else stats
             epoch_time = float(epoch_time.cpu().numpy()) if cfg.distributed else epoch_time
             stats.update({"epoch_time": epoch_time, "epoch": epoch + 1})
-            stats["lgt0-count"], stats["lgt0-bins"] = np.histogram(result[:, 2], 10)
-            stats["lgt1-count"], stats["lgt1-bins"] = np.histogram(result[:, 3], 10)
-            stats["score0-count"], stats["score0-bins"] = np.histogram(result[result[:, 0] == 0][:, -2], 10)
-            stats["score1-count"], stats["score1-bins"] = np.histogram(result[result[:, 0] == 1][:, -2], 10)
             # stats = helper.compute_meta_stats_and_print("train", stats)
             helper.train_stats.append(stats)
-            helper.print_stats("train", stats)
             print("Result shape: ", result.shape)
+            helper.print_stats("train", stats)
             print("lgt0: ", stats["lgt0-mean"], stats["lgt0-min"], stats["lgt0-max"])
             print("lgt1: ", stats["lgt1-mean"], stats["lgt1-min"], stats["lgt1-max"])
 
@@ -221,7 +285,8 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
                 start_time = time.time()
                 dataloader = val_dataloader if split == "val" else train_dataloader
                 new_stats, result = validate(dataloader, model, device, helper, pin_memory=pin_memory, master=master,
-                                             distributed=cfg.distributed, validate_on_master=cfg.validate_on_master)
+                                             distributed=cfg.distributed, validate_on_master=cfg.validate_on_master,
+                                             epoch=epoch, writer=writer, log_every=log_every)
                 epoch_time = time.time() - start_time
                 epoch_time = reduce_epoch_time(epoch_time, device) if cfg.distributed and not cfg.validate_on_master \
                     else epoch_time
@@ -231,19 +296,13 @@ def training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_samp
                     epoch_time = float(epoch_time.cpu().numpy()) if cfg.distributed and not cfg.validate_on_master \
                         else epoch_time
                     new_stats.update({"epoch_time": epoch_time})
-                    new_stats["lgt0-count"], new_stats["lgt0-bins"] = np.histogram(result[:, 2], 10)
-                    new_stats["lgt1-count"], new_stats["lgt1-bins"] = np.histogram(result[:, 3], 10)
-                    new_stats["score0-count"], new_stats["score0-bins"] = np.histogram(result[result[:, 0] == 0][:, -2],
-                                                                                       10)
-                    new_stats["score1-count"], new_stats["score1-bins"] = np.histogram(result[result[:, 0] == 1][:, -2],
-                                                                                       10)
 
                     prefix = "tr_" if split == "train" else ""
                     new_stats = {prefix + k: v for k, v in new_stats.items()} if split == "train" else new_stats
                     stats.update(new_stats)
 
-                    helper.print_stats("val", stats, prefix=prefix)
                     print("Result shape: ", result.shape)
+                    helper.print_stats("val", stats, prefix=prefix)
                     print("lgt0: ", stats[prefix + "lgt0-mean"], stats[prefix + "lgt0-min"], stats[prefix + "lgt0-max"])
                     print("lgt1: ", stats[prefix + "lgt1-mean"], stats[prefix + "lgt1-min"], stats[prefix + "lgt1-max"])
                     if split == "val" and stats["f1"] > best_f1:
@@ -368,6 +427,7 @@ def main(cfg):
     # Load model if restarting
     ckpt_path = helper.get_checkpoint_path()
     ckpt_path.mkdir(exist_ok=True, parents=True)
+    writer = SummaryWriter(ckpt_path)
     print("Checkpoint path: {}".format(ckpt_path))
     if cfg.training_from == "last_checkpoint":
         ckpt = torch.load(ckpt_path / "model.pt", map_location="cpu")
@@ -412,7 +472,7 @@ def main(cfg):
     # debug(cfg, model, train_dataset)
     training_loop(cfg, master, start_epoch, end_epoch, train_dataset, train_sampler, train_dataloader,
                   val_dataset, val_sampler, val_dataloader, model, optimizer, helper, device, pin_memory, ckpt_path,
-                  world_size)
+                  world_size, writer, cfg.log_every)
 
 
 if __name__ == "__main__":

@@ -37,6 +37,8 @@ n_worker_dataloader: 1
 # Checkpoint directory with timestamp
 with_timestamp: false
 
+log_every: 100
+
 # Dataset config
 dataset:
   train:
