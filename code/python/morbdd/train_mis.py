@@ -111,7 +111,7 @@ def aggregate_distributed_stats(losses=None, data_time=None, batch_time=None, re
     if result is not None:
         result_lst = [torch.zeros_like(result) for _ in range(dist.get_world_size())] if master else None
         dist.gather(result, gather_list=result_lst, dst=0)
-        result = torch.cat(result_lst) if master else master
+        result = torch.cat(result_lst) if master else result
 
     return result
 
@@ -170,7 +170,7 @@ def process_batch(batch, model, loss_fn, version=1, curr_iter=0, writer=None, lo
 
 
 def get_grad_norm(model, norm=2):
-    grads = torch.empty(0).to(model.device)
+    grads = torch.empty(0).to(next(model.parameters()).device)
     for p in model.parameters():
         if p.grad is not None:
             grads = torch.cat((grads, p.grad.detach().data.view(-1)))
