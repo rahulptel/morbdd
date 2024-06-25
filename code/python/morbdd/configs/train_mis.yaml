@@ -37,7 +37,9 @@ n_worker_dataloader: 1
 # Checkpoint directory with timestamp
 with_timestamp: false
 
-log_every: 100
+# Tensorboard config
+# Number of batches after which to log
+log_every: -1
 
 # Dataset config
 dataset:

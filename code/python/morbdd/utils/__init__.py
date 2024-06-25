@@ -94,17 +94,23 @@ class TrainingHelper:
 
     @staticmethod
     def print_stats(split, stats, prefix=""):
-        print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
-        print_str += "Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
-        # ept, bt, dt = -1, -1, -1
-        # if split == "train":
-
         epoch = stats["epoch"]
-        ept, bt, dt = stats[prefix + "batch_time"], stats[prefix + "data_time"], stats[prefix + "epoch_time"]
+        ept, bt, dt, = stats[prefix + "epoch_time"], stats[prefix + "batch_time"], stats[prefix + "data_time"]
 
+        print_str = ("{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
+                     "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}")
         print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
                                stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
                                stats[prefix + "specificity"], ept, bt, dt))
+
+        print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
+        for i in ["0", "1"]:
+            print(print_str.format("lgt" + i,
+                                   stats[prefix + "lgt" + i + "-mean"],
+                                   stats[prefix + "lgt" + i + "-std"],
+                                   stats[prefix + "lgt" + i + "-min"],
+                                   stats[prefix + "lgt" + i + "-max"]))
+        print("--------------------------")
 
     # def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
     #     print("Saving model={}".format(best_model))

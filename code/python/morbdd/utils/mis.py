@@ -176,7 +176,7 @@ class MISBDDNodeDataset(Dataset):
         self.nodes = self.nodes[perm]
 
         self.top_k = top_k
-        self.obj, self.adj = torch.from_numpy(obj), torch.from_numpy(adj)
+        self.obj, self.adj = torch.from_numpy(obj) / self.norm_const, torch.from_numpy(adj)
         self.append_obj_id()
         self.pos = self.precompute_pos_enc(top_k, self.adj)
 
