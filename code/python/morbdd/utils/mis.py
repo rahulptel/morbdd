@@ -123,9 +123,9 @@ class MISTrainingHelper(TrainingHelper):
         return model_str
 
     def get_opt_str(self):
-        ostr = "-"
+        ostr = ""
         if self.cfg.opt.name != "Adam":
-            ostr += self.cfg.opt.name
+            ostr += "-" + self.cfg.opt.name
         if self.cfg.opt.lr != 1e-3:
             ostr += f"-lr-{self.cfg.opt.lr}"
         if self.cfg.opt.wd != 1e-4:
@@ -135,32 +135,24 @@ class MISTrainingHelper(TrainingHelper):
         if self.cfg.norm_type != 2.0:
             ostr += f"-norm-{self.cfg.norm_type}"
 
-        if ostr == "-":
-            ostr = ""
-
         return ostr
 
     def get_dataset_str(self):
-        dstr = "-"
+        dstr = ""
         if not self.cfg.validate_on_master:
-            dstr += "nvm"
+            dstr += "-nvm"
 
-        dstr = "-t"
+        dstr += "-t"
         if self.cfg.dataset.train.from_pid != 0:
             dstr += f"-f-{self.cfg.dataset.train.from_pid}"
         if self.cfg.dataset.train.to_pid != 1000:
             dstr += f"-t-{self.cfg.dataset.train.to_pid}"
-        if self.cfg.dataset.validate_on == "val":
-            dstr += f"-v"
-            if self.cfg.dataset.val.from_pid != 1000:
-                dstr += f"-f-{self.cfg.dataset.val.from_pid}"
-            if self.cfg.dataset.val.to_pid != 1100:
-                dstr += f"-t-{self.cfg.dataset.val.to_pid}"
-        else:
-            dstr += "-t"
 
-        if dstr == "-":
-            dstr = ""
+        dstr += f"-v"
+        if self.cfg.dataset.val.from_pid != 1000:
+            dstr += f"-f-{self.cfg.dataset.val.from_pid}"
+        if self.cfg.dataset.val.to_pid != 1100:
+            dstr += f"-t-{self.cfg.dataset.val.to_pid}"
 
         return dstr
 
@@ -176,7 +168,7 @@ class MISBDDNodeDataset(Dataset):
         self.nodes = self.nodes[perm]
 
         self.top_k = top_k
-        self.obj, self.adj = torch.from_numpy(obj), torch.from_numpy(adj)
+        self.obj, self.adj = torch.from_numpy(obj) / self.norm_const, torch.from_numpy(adj)
         self.append_obj_id()
         self.pos = self.precompute_pos_enc(top_k, self.adj)
 

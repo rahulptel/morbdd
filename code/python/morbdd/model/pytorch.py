@@ -9,8 +9,7 @@ from torch_geometric.nn import GATConv
 
 
 class MLP(nn.Module):
-    def __init__(self, d_in, d_hid, d_out, bias=True, ln_eps=1e-5, act="relu",
-                 dropout=0.1, normalize=False):
+    def __init__(self, d_in, d_hid, d_out, bias=True, ln_eps=1e-5, act="relu", dropout=0.0, normalize=False):
         super(MLP, self).__init__()
         self.d_in = d_in
         self.d_hid = d_hid
@@ -26,7 +25,8 @@ class MLP(nn.Module):
 
     def forward(self, x):
         x = self.ln(x) if self.normalize else x
-        x = self.act(self.dropout(self.linear1(x)))
+        x = self.act(self.linear1(x))
+        x = self.dropout(x) if self.dropout.p > 0 else x
         x = self.act(self.linear2(x))
 
         return x
@@ -74,35 +74,6 @@ class TokenEmbedKnapsack(nn.Module):
         return n
 
 
-class MISInstanceTokenizer:
-    def __init__(self, top_k=0, max_objs=10, device=None):
-        self.top_k = top_k
-        self.max_objs = max_objs
-        self.device = device
-
-    def tokenize(self, n, e=None):
-        p = None  # position features
-        if self.top_k and e is not None:
-            # Calculate position encoding
-            U, S, Vh = torch.linalg.svd(e)
-            U = U[:, :, :self.top_k]
-            S = (torch.diag_embed(S)[:, :self.top_k, :self.top_k]) ** (1 / 2)
-            Vh = Vh[:, :self.top_k, :]
-
-            L, R = U @ S, S @ Vh
-            R = R.permute(0, 2, 1)
-            p = torch.cat((L, R), dim=-1)  # B x n_vars x (2*top_k)
-
-        B, n_objs, n_vars = n.shape
-        obj_id = torch.arange(1, n_objs + 1) / self.max_objs
-        obj_id = obj_id.repeat((n_vars, 1))
-        obj_id = obj_id.repeat((B, 1, 1)).to(self.device)
-        # B x n_objs x n_vars x 2
-        n = torch.cat((n.transpose(1, 2).unsqueeze(-1), obj_id.unsqueeze(-1)), dim=-1)
-
-        return n, p
-
-
 class TokenEmbedGraph(nn.Module):
     """
     Tokenize graph input to obtain position-aware node embedding and
@@ -114,22 +85,25 @@ class TokenEmbedGraph(nn.Module):
         self.encoder_type = encoder_type
         self.n_edge_type = n_edge_type
         self.top_k = top_k
-        self.dropout = nn.Dropout(dropout)
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
+        self.dropout1 = nn.Dropout(dropout)
+
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
+        self.dropout2 = nn.Dropout(dropout)
 
         if self.top_k:
             self.pos_encoder = nn.Linear(top_k * 2, d_emb)
 
         if self.encoder_type == "transformer":
             self.edge_encoder = nn.Embedding(n_edge_type, d_emb)
+            self.dropout3 = nn.Dropout(dropout)
 
     def forward(self, n, e, p):
         # Calculate node and edge encodings
-        n = F.relu(self.dropout(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
+        n = self.dropout1(F.relu(self.linear1(n)))  # B x n_vars x n_objs x 2 * d_emb
         # Sum aggregate objectives
         n = n.sum(2)  # B x n_vars x 2 * d_emb
-        n_enc = F.relu(self.dropout(self.linear2(n)))  # B x n_vars x d_emb
+        n_enc = self.dropout2(F.relu(self.linear2(n)))  # B x n_vars x d_emb
 
         # Update node encoding with positional encoding based on SVD
         if self.top_k:
@@ -138,7 +112,7 @@ class TokenEmbedGraph(nn.Module):
 
         e_enc = e
         if self.encoder_type == "transformer":
-            e_enc = self.dropout(self.edge_encoder(e))  # B x n_vars x n_vars x d_emb
+            e_enc = self.dropout3(self.edge_encoder(e))  # B x n_vars x n_vars x d_emb
 
         return n_enc, e_enc
 
@@ -290,7 +264,7 @@ class EncoderLayer(nn.Module):
         self.dropout_mha = nn.Dropout(dropout_mha)
         # FF
         self.ln_n2 = nn.LayerNorm(d_emb)
-        self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
+        self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
         self.dropout_mlp = nn.Dropout(dropout_mlp)
 
     def forward(self, n):
@@ -322,26 +296,26 @@ class GTEncoderLayer(nn.Module):
                                                   n_heads=n_heads,
                                                   bias_mha=bias_mha,
                                                   is_last_block=is_last_block)
-        self.dropout_mha = nn.Dropout(dropout_mha)
+        self.dropout_mha_n = nn.Dropout(dropout_mha)
         # FF
         self.ln_n2 = nn.LayerNorm(d_emb)
-        self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
-        self.dropout_mlp = nn.Dropout(dropout_mlp)
+        self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
+        self.dropout_mlp_n = nn.Dropout(dropout_mlp)
+
         if not is_last_block:
+            self.dropout_mha_e = nn.Dropout(dropout_mha)
             self.ln_e2 = nn.LayerNorm(d_emb)
-            self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp)
+            self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
+            self.dropout_mlp_e = nn.Dropout(dropout_mlp)
 
     def forward(self, n, e=None):
-        n, e = self.ln_n1(n), self.ln_e1(e)
-        n_, e_ = self.mha(n, e)
-        n = n + self.dropout_mha(n_)
+        n_, e_ = self.mha(self.ln_n1(n), self.ln_e1(e))
+        n = n + self.dropout_mha_n(n_)
 
-        n = self.ln_n2(n)
-        n = n + self.dropout_mlp(self.mlp_node(n))
+        n = n + self.dropout_mlp_n(self.mlp_node(self.ln_n2(n)))
         if not self.is_last_block:
-            e = e + self.dropout_mha(e_)
-            e = self.ln_e2(e)
-            e = e + self.dropout_mlp(self.mlp_edge(e))
+            e = e + self.dropout_mha_e(e_)
+            e = e + self.dropout_mlp_e(self.mlp_edge(self.ln_e2(e)))
 
         return n, e
 
@@ -412,8 +386,10 @@ class GTEncoder(nn.Module):
                                              for i in range(n_blocks)])
 
     def forward(self, n, e):
+        # print("EncoderBlock: ", n[0][0])
         for block in self.encoder_blocks:
             n, e = block(n, e)
+            # print("EncoderBlock: ", n[0][0])
 
         return n
 
@@ -436,8 +412,8 @@ class ParetoStatePredictorMIS(nn.Module):
         self.encoder_type = encoder_type
         self.token_emb = TokenEmbedGraph(encoder_type, n_node_feat, n_edge_type=n_edge_type, d_emb=d_emb, top_k=top_k,
                                          dropout=dropout)
-        self.set_node_encoder(n_node_feat=n_node_feat, d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads,
-                              dropout_token=dropout_token, bias_mha=bias_mha, dropout=dropout, bias_mlp=bias_mlp,
+        self.set_node_encoder(d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads, dropout_token=dropout_token,
+                              bias_mha=bias_mha, dropout=dropout, bias_mlp=bias_mlp,
                               h2i_ratio=h2i_ratio)
         assert self.node_encoder is not None
 
@@ -455,45 +431,27 @@ class ParetoStatePredictorMIS(nn.Module):
     def forward(self, n_feat, e_feat, pos_feat, lids, vids, states):
         # Embed
         n_emb, e_emb = self.token_emb(n_feat, e_feat.int(), pos_feat.float())
-        # Encode: B' x n_vars x d_emb
+        # Encode: B x n_vars x d_emb
         n_emb = self.node_encoder(n_emb, e_emb)
-        # pad 0 to n_emb so that -1 results in zero vec
-        # B_prime, _, d_emb = n_emb.shape
-        # # B' x (n_vars + 1) x d_emb
-        # n_emb = torch.cat((n_emb, torch.zeros((B_prime, 1, d_emb)).to(self.device)), dim=1)
-
         # Instance embedding
         # B x d_emb
         inst_emb = self.graph_encoder(n_emb.sum(1))
-        # B x d_emb
-        # inst_emb = torch.stack([inst_emb[pid] for pid in pids_index])
-
         # Layer-index embedding
         # B x d_emb
         li_emb = self.layer_index_encoder(lids.reshape(-1, 1).float())
-
         # Layer-variable embedding
         # B x d_emb
-        # lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in zip(pids_index, vids.int())])
-        lv_emb = torch.stack([n_emb[pid, vid] for pid, vid in enumerate(vids.int())])
-
+        lv_emb = n_emb[torch.arange(vids.shape[0]), vids.int()]
         # State embedding
-        state_emb = torch.stack([n_emb[pid, state].sum(0) for pid, state in enumerate(states.bool())])
-        # state_emb = torch.stack([n_emb[pid][state].sum(0) for pid, state in zip(pids_index, indices)])
-
-        # for ibatch, states in enumerate(indices):
-        #     state_emb.append(torch.stack([n_feat[ibatch][state].sum(0)
-        #                                   for state in states]))
-        # state_emb = torch.stack(state_emb)
+        state_emb = torch.einsum("ijk,ij->ik", [n_emb, states.float()])
         state_emb = self.aggregator(state_emb)
         state_emb = state_emb + inst_emb + li_emb + lv_emb
-
         # Pareto-state predictor
         logits = self.predictor(self.ln(state_emb))
 
         return logits
 
-    def set_node_encoder(self, n_node_feat=2, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2, dropout_token=0.0,
+    def set_node_encoder(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2, dropout_token=0.0,
                          bias_mha=False, bias_mlp=False, h2i_ratio=2):
         if self.encoder_type == "transformer":
             print("Using Graph Transformer")

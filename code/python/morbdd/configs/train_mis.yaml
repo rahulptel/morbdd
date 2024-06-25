@@ -11,58 +11,55 @@ prob:
   n_vars: 100
   attach: 4
   seed: 7
-
 size:
 
-# Distributed training
-distributed: false
-env: local
-dist_backend: nccl
-init_method: tcp://127.0.0.1:3456
-
-# Training config
-# scratch | last_checkpoint
-training_from: scratch
-logging: 2
-# Epochs after which to validate the model
-validate_every: 1
-validate_on_master: true
-# Epochs after which to save the model
-save_every: 1
-# Set this to a positive number when using GPU
-n_worker_dataloader: 1
-# Checkpoint directory with timestamp
-with_timestamp: false
+# Raw data config used to generate the dataset
+raw_data:
+  # Save parents of nodes in the dataset
+  with_parent: false
 
 # Dataset config
 dataset:
+  version: 1
   train:
     from_pid: 0
     to_pid: 10
-    # Fraction of samples to use per training epoch in range (0, 1]
-    frac_per_epoch: 1
   val:
     from_pid: 1000
     to_pid: 1010
   test:
     from_pid: 1100
     to_pid: 1200
-  # Dataset used for validation
-  # val | train
-  # When set to train, we will randomly subsample 10% of training dataset
-  # for validation. This is used as a sanity check.
-  validate_on: val
-  # Fraction of the training dataset used for validation
-  # This will only be used when validate_on == train
-  validate_on_frac: 0.1
-  # Save parents of nodes in the dataset
-  with_parent: false
   # Number of negative samples per one positive sample
   neg_to_pos_ratio: 1
-  layer_weight: exponential
+
+# Distributed training
+distributed: false
+dist_backend: nccl
+init_method: tcp://127.0.0.1:3456
+
+# Training config
+# scratch | last_checkpoint
+training_from: scratch
+epochs: 3
+# Epochs after which to validate the model
+validate_every: 1
+validate_on_master: true
+validate_on_split:
+  - val
+# Epochs after which to save the model
+save_every: 1
+# Set this to a positive number when using GPU
+n_worker_dataloader: 1
+# Checkpoint directory with timestamp
+with_timestamp: false
+# Tensorboard config
+# Number of batches after which to log
+# Logging when set to less than zero
+log_every: -1
+
 
 # Optimization config
-epochs: 3
 batch_size: 100
 opt:
   name: Adam

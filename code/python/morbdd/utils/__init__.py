@@ -58,9 +58,10 @@ class TrainingHelper:
         return tp, tn, fp, fn, pos, neg
 
     @staticmethod
-    def compute_meta_stats(stats):
-        loss, tp, tn, fp, fn, n_pos, n_neg = (stats["loss"], stats["tp"], stats["tn"], stats["fp"], stats["fn"],
-                                              stats["n_pos"], stats["n_neg"])
+    def compute_meta_stats(stats, prefix=""):
+        loss, tp, tn, fp, fn, n_pos, n_neg = (stats[prefix + "loss"], stats[prefix + "tp"], stats[prefix + "tn"],
+                                              stats[prefix + "fp"], stats[prefix + "fn"], stats[prefix + "n_pos"],
+                                              stats[prefix + "n_neg"])
 
         loss = loss / (n_pos + n_neg)
         acc = ((tp + tn) / (tp + fp + tn + fn))
@@ -69,11 +70,12 @@ class TrainingHelper:
         recall = tp / (tp + fn + 1e-10)
         specificity = tn / (tn + fp + 1e-10)
 
-        stats.update({
-            "loss": loss, "acc": acc, "f1": f1, "precision": precision, "recall": recall, "specificity": specificity
-        })
+        meta_stats = {
+            prefix + "loss": loss, prefix + "acc": acc, prefix + "f1": f1, prefix + "precision": precision,
+            prefix + "recall": recall, prefix + "specificity": specificity
+        }
 
-        return stats
+        return meta_stats
 
     @staticmethod
     def print_batch_stats(epoch, batch_id, stats):
@@ -91,15 +93,24 @@ class TrainingHelper:
                                                stats["items"]))
 
     @staticmethod
-    def print_stats(split, stats):
-        print_str = "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, Specificity: {:.4f}, "
-        print_str += "Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
-        # ept, bt, dt = -1, -1, -1
-        # if split == "train":
-        ept, bt, dt = stats["epoch_time"], stats["batch_time"], stats["data_time"]
+    def print_stats(split, stats, prefix=""):
+        epoch = stats["epoch"]
+        ept, bt, dt, = stats[prefix + "epoch_time"], stats[prefix + "batch_time"], stats[prefix + "data_time"]
 
-        print(print_str.format(stats["epoch"], split, stats["f1"], stats["acc"], stats["loss"], stats["recall"],
-                               stats["precision"], stats["specificity"], ept, bt, dt))
+        print_str = ("{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
+                     "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}")
+        print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
+                               stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
+                               stats[prefix + "specificity"], ept, bt, dt))
+
+        print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
+        for i in ["0", "1"]:
+            print(print_str.format("lgt" + i,
+                                   stats[prefix + "lgt" + i + "-mean"],
+                                   stats[prefix + "lgt" + i + "-std"],
+                                   stats[prefix + "lgt" + i + "-min"],
+                                   stats[prefix + "lgt" + i + "-max"]))
+        print("--------------------------")
 
     # def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
     #     print("Saving model={}".format(best_model))
@@ -130,11 +141,12 @@ class TrainingHelper:
         stats_obj = {"train": self.train_stats, "val": self.val_stats}
         torch.save(stats_obj, stats_path)
 
-    def compute_meta_stats_and_print(self, split, stats):
-        stats_lst = getattr(self, split + "_stats")
-        meta_stats = self.compute_meta_stats(stats)
-        stats_lst.append(meta_stats)
-        self.print_stats(split, stats_lst[-1])
+    def compute_meta_stats_and_print(self, split, stats, prefix=""):
+        meta_stats = self.compute_meta_stats(stats, prefix=prefix)
+        stats.update(meta_stats)
+        self.print_stats(split, stats, prefix=prefix)
+
+        return stats
 
 
 class KnapsackBDDDataset(Dataset):
@@ -1269,13 +1281,13 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
     print("From Rank: {}, ==> Making model...".format(global_rank))
     print()
 
-    return global_rank, device_id
+    return world_size, global_rank, device_id
 
 
 def get_device(distributed=False, init_method=None, dist_backend=None):
-    device_str, pin_memory, master, device_id = "cpu", False, True, 0
+    device_str, pin_memory, master, device_id, world_size = "cpu", False, True, 0, 1
     if distributed:
-        rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        world_size, rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
         device_str = f"cuda:{device_id}"
         pin_memory = True
         master = rank == 0
@@ -1284,7 +1296,7 @@ def get_device(distributed=False, init_method=None, dist_backend=None):
         pin_memory = True
     device = torch.device(device_str)
 
-    return device, device_str, pin_memory, master, device_id
+    return device, device_str, pin_memory, master, device_id, world_size
 
 
 def get_size(cfg):
