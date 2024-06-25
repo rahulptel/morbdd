@@ -105,9 +105,13 @@ class MISTrainingHelper(TrainingHelper):
             if self.cfg.n_heads != 8:
                 model_str += f"-h-{self.cfg.n_heads}"
             if self.cfg.dropout_token != 0.0:
-                model_str += f"-dptk-{self.cfg.dropout_token}"
-            if self.cfg.dropout != 0.2:
-                model_str += f"-dp-{self.cfg.dropout}"
+                model_str += f"-dpt-{self.cfg.dropout_token}"
+            if self.cfg.dropout_attn != 0.1:
+                model_str += f"-dpa-{self.cfg.dropout_attn}"
+            if self.cfg.dropout_proj != 0.1:
+                model_str += f"-dpp-{self.cfg.dropout_proj}"
+            if self.cfg.dropout_mlp != 0.1:
+                model_str += f"-dpm-{self.cfg.dropout_mlp}"
             if self.cfg.bias_mha:
                 model_str += f"-ba-{self.cfg.bias_mha}"
             if self.cfg.bias_mha:

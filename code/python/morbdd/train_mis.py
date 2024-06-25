@@ -426,7 +426,9 @@ def main(cfg):
                                     n_blocks=cfg.n_blocks,
                                     n_heads=cfg.n_heads,
                                     dropout_token=cfg.dropout_token,
-                                    dropout=cfg.dropout,
+                                    dropout_attn=cfg.dropout_attn,
+                                    dropout_proj=cfg.dropout_proj,
+                                    dropout_mlp=cfg.dropout_mlp,
                                     bias_mha=cfg.bias_mha,
                                     bias_mlp=cfg.bias_mlp,
                                     h2i_ratio=cfg.h2i_ratio)

@@ -179,17 +179,24 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
                  d_emb=64,
                  n_heads=8,
                  bias_mha=False,
-                 is_last_block=False):
+                 is_last_block=False,
+                 dropout_attn=0.1,
+                 dropout_proj=0.1):
         super(MultiHeadSelfAttentionWithEdge, self).__init__()
+        assert d_emb % n_heads == 0
+
         self.d_emb = d_emb
         self.d_k = d_emb // n_heads
         self.n_heads = n_heads
         self.is_last_block = is_last_block
+        self.drop_attn = nn.Dropout(dropout_attn)
+        self.drop_proj_n = nn.Dropout(dropout_proj)
 
         # Node Q, K, V params
-        self.W_q = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
-        self.W_k = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
-        self.W_v = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        # self.W_q = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        # self.W_k = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        # self.W_v = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
+        self.W_qkv = nn.Linear(d_emb, 3 * d_emb, bias=bias_mha)
         self.O_n = nn.Linear(n_heads * self.d_k, d_emb, bias=bias_mha)
 
         # Edge bias and gating parameters
@@ -197,7 +204,11 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
         self.W_e = nn.Linear(d_emb, n_heads, bias=bias_mha)
 
         # Output mapping params
-        self.O_e = None if is_last_block else nn.Linear(n_heads, d_emb, bias=bias_mha)
+        if is_last_block:
+            self.O_e = None
+        else:
+            self.O_e = nn.Linear(n_heads, d_emb, bias=bias_mha)
+            self.drop_proj_e = nn.Dropout(dropout_proj)
 
     def forward(self, n, e):
         """
@@ -208,16 +219,11 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
         B = n.shape[0]
 
         # Compute QKV and reshape
-        # batch_size x n_nodes x (n_heads * d_k)
-        Q, K, V = self.W_q(n), self.W_k(n), self.W_v(n)
-        # batch_size x n_nodes x n_heads x d_k
-        Q = Q.view(B, -1, self.n_heads, self.d_k)
-        K = K.view(B, -1, self.n_heads, self.d_k)
-        V = V.view(B, -1, self.n_heads, self.d_k)
+        # 3 x batch_size x n_heads x n_nodes x d_k
+        QKV = self.W_qkv(n).reshape(B, -1, 3, self.n_heads, self.d_k).permute(2, 0, 3, 1, 4)
+
         # batch_size x n_heads x n_nodes x d_k
-        Q = Q.transpose(1, 2)
-        K = K.transpose(1, 2)
-        V = V.transpose(1, 2)
+        Q, K, V = QKV[0], QKV[1], QKV[2]
 
         # Compute edge bias and gate
         # batch_size x n_nodes x n_nodes x n_heads
@@ -229,19 +235,19 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
 
         # Compute implicit attention
         # batch_size x n_heads x n_nodes x n_nodes
-        _A = torch.einsum('ijkl,ijlm->ijkm', [Q, K.transpose(-2, -1)])
-        _A = _A * ((self.d_k) ** (-0.5))
-        _A = torch.clamp(_A, -5, 5)
+        _A_raw = torch.einsum('ijkl,ijlm->ijkm', [Q, K.transpose(-2, -1)])
+        _A_raw = _A_raw * (self.d_k ** (-0.5))
+        _A_raw = torch.clamp(_A_raw, -5, 5)
         # Add explicit edge bias
-        _E = _A + E
+        _E = _A_raw + E
         _A = F.softmax(_E, dim=-1)
         # Apply explicit edge gating to V
         # batch_size x n_heads x n_nodes x d_k
-        _V = _A @ V
+        _V = self.drop_attn(_A) @ V
         _V = torch.einsum('ijkl,ijk->ijkl', [_V, dynamic_centrality])
 
-        n = self.O_n(_V.transpose(1, 2).reshape(B, -1, self.d_emb))
-        e = None if self.O_e is None else self.O_e(_E.permute(0, 2, 3, 1))
+        n = self.drop_proj_n(self.O_n(_V.transpose(1, 2))).reshape(B, -1, self.d_emb)
+        e = None if self.O_e is None else self.drop_proj_e(self.O_e(_E.permute(0, 2, 3, 1)))
 
         return n, e
 
@@ -268,11 +274,8 @@ class EncoderLayer(nn.Module):
         self.dropout_mlp = nn.Dropout(dropout_mlp)
 
     def forward(self, n):
-        n = self.ln_n1(n)
-        n = n + self.dropout_mha(self.mha(n))
-
-        n = self.ln_n2(n)
-        n = n + self.dropout_mlp(self.mlp_node(n))
+        n = n + self.dropout_mha(self.mha(self.ln_n1(n)))
+        n = n + self.dropout_mlp(self.mlp_node(self.ln_n2(n)))
 
         return n
 
@@ -282,7 +285,8 @@ class GTEncoderLayer(nn.Module):
                  d_emb=64,
                  n_heads=8,
                  bias_mha=False,
-                 dropout_mha=0.2,
+                 dropout_attn=0.1,
+                 dropout_proj=0.1,
                  bias_mlp=False,
                  dropout_mlp=0.2,
                  h2i_ratio=2,
@@ -295,33 +299,37 @@ class GTEncoderLayer(nn.Module):
         self.mha = MultiHeadSelfAttentionWithEdge(d_emb=d_emb,
                                                   n_heads=n_heads,
                                                   bias_mha=bias_mha,
-                                                  is_last_block=is_last_block)
-        self.dropout_mha_n = nn.Dropout(dropout_mha)
+                                                  is_last_block=is_last_block,
+                                                  dropout_attn=dropout_attn,
+                                                  dropout_proj=dropout_proj)
+        # self.dropout_mha_n = nn.Dropout(dropout_mha)
         # FF
         self.ln_n2 = nn.LayerNorm(d_emb)
         self.mlp_node = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
         self.dropout_mlp_n = nn.Dropout(dropout_mlp)
 
         if not is_last_block:
-            self.dropout_mha_e = nn.Dropout(dropout_mha)
+            # self.dropout_mha_e = nn.Dropout(dropout_mha)
             self.ln_e2 = nn.LayerNorm(d_emb)
             self.mlp_edge = MLP(d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0)
             self.dropout_mlp_e = nn.Dropout(dropout_mlp)
 
     def forward(self, n, e=None):
         n_, e_ = self.mha(self.ln_n1(n), self.ln_e1(e))
-        n = n + self.dropout_mha_n(n_)
+        # n = n + self.dropout_mha_n(n_)
+        n += n_
 
         n = n + self.dropout_mlp_n(self.mlp_node(self.ln_n2(n)))
         if not self.is_last_block:
-            e = e + self.dropout_mha_e(e_)
+            # e = e + self.dropout_mha_e(e_)
+            e += e_
             e = e + self.dropout_mlp_e(self.mlp_edge(self.ln_e2(e)))
 
         return n, e
 
 
 class GATEncoder(nn.Module):
-    def __init__(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2):
+    def __init__(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.1):
         super(GATEncoder, self).__init__()
         d_k = d_emb // n_heads
         self.conv_list = nn.ModuleList([GATConv(d_emb, d_k, heads=n_heads, dropout=dropout)
@@ -370,15 +378,17 @@ class GTEncoder(nn.Module):
                  n_blocks=2,
                  n_heads=8,
                  bias_mha=False,
-                 dropout_mha=0.2,
+                 dropout_attn=0.1,
+                 dropout_proj=0.1,
                  bias_mlp=False,
-                 dropout_mlp=0.2,
+                 dropout_mlp=0.1,
                  h2i_ratio=2):
         super(GTEncoder, self).__init__()
         self.encoder_blocks = nn.ModuleList([GTEncoderLayer(d_emb=d_emb,
                                                             n_heads=n_heads,
                                                             bias_mha=bias_mha,
-                                                            dropout_mha=dropout_mha,
+                                                            dropout_attn=dropout_attn,
+                                                            dropout_proj=dropout_proj,
                                                             bias_mlp=bias_mlp,
                                                             dropout_mlp=dropout_mlp,
                                                             h2i_ratio=h2i_ratio,
@@ -403,27 +413,29 @@ class ParetoStatePredictorMIS(nn.Module):
                  top_k=5,
                  n_blocks=2,
                  n_heads=8,
-                 dropout_token=0.2,
-                 dropout=0.2,
+                 dropout_token=0.0,
+                 dropout_attn=0.1,
+                 dropout_proj=0.1,
+                 dropout_mlp=0.1,
                  bias_mha=False,
                  bias_mlp=False,
                  h2i_ratio=2):
         super(ParetoStatePredictorMIS, self).__init__()
         self.encoder_type = encoder_type
         self.token_emb = TokenEmbedGraph(encoder_type, n_node_feat, n_edge_type=n_edge_type, d_emb=d_emb, top_k=top_k,
-                                         dropout=dropout)
-        self.set_node_encoder(d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads, dropout_token=dropout_token,
-                              bias_mha=bias_mha, dropout=dropout, bias_mlp=bias_mlp,
+                                         dropout=dropout_token)
+        self.set_node_encoder(d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads, dropout_attn=dropout_attn,
+                              dropout_proj=dropout_proj, bias_mha=bias_mha, dropout_mlp=dropout_mlp, bias_mlp=bias_mlp,
                               h2i_ratio=h2i_ratio)
         assert self.node_encoder is not None
 
         # Graph context
-        self.graph_encoder = MLP(d_emb, d_emb, d_emb, dropout=dropout)
+        self.graph_encoder = MLP(d_emb, d_emb, d_emb, dropout=dropout_mlp)
         # Layer index context
-        self.layer_index_encoder = MLP(1, d_emb, d_emb, dropout=dropout)
+        self.layer_index_encoder = MLP(1, d_emb, d_emb, dropout=dropout_mlp)
         # self.layer_index_encoder = nn.Embedding(100, d_emb)
         # State
-        self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb, dropout=dropout)
+        self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb, dropout=dropout_mlp)
 
         self.ln = nn.LayerNorm(d_emb)
         self.predictor = nn.Linear(d_emb, 2)
@@ -451,7 +463,7 @@ class ParetoStatePredictorMIS(nn.Module):
 
         return logits
 
-    def set_node_encoder(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2, dropout_token=0.0,
+    def set_node_encoder(self, d_emb=64, n_blocks=2, n_heads=8, dropout_mlp=0.1, dropout_attn=0.1, dropout_proj=0.1,
                          bias_mha=False, bias_mlp=False, h2i_ratio=2):
         if self.encoder_type == "transformer":
             print("Using Graph Transformer")
@@ -459,16 +471,17 @@ class ParetoStatePredictorMIS(nn.Module):
                                           n_blocks=n_blocks,
                                           n_heads=n_heads,
                                           bias_mha=bias_mha,
-                                          dropout_mha=dropout,
+                                          dropout_attn=dropout_attn,
+                                          dropout_proj=dropout_proj,
                                           bias_mlp=bias_mlp,
-                                          dropout_mlp=dropout,
+                                          dropout_mlp=dropout_mlp,
                                           h2i_ratio=h2i_ratio)
         elif self.encoder_type == "gat":
             print("Using GAT Encoder")
             self.node_encoder = GATEncoder(d_emb=d_emb,
                                            n_blocks=n_blocks,
                                            n_heads=n_heads,
-                                           dropout=dropout)
+                                           dropout=dropout_mlp)
         else:
             print("Invalid node encoder!")
             self.node_encoder = None
