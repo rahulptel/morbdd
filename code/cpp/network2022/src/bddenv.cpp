@@ -261,6 +261,11 @@ int BDDEnv::initialize_dd_constructor()
         {
             indset_bdd_constructor.order_provided = true;
         }
+        else
+        {
+            indset_bdd_constructor.var_layer[0] = indset_bdd_constructor.choose_next_vertex_min_size_next_layer(indset_bdd_constructor.states[0]);
+        }
+
         // indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
@@ -290,6 +295,25 @@ int BDDEnv::initialize_dd_constructor()
     timers.end_timer(compilation_time);
 
     return 0;
+}
+
+void BDDEnv::set_var_layer(int l)
+{
+    int vertex;
+    if (problem_type == 2)
+    {
+        if (order.size())
+        {
+            vertex = l;
+        }
+        else
+        {
+            indset_bdd_constructor.choose_next_vertex_min_size_next_layer(
+                indset_bdd_constructor.states[indset_bdd_constructor.iter]);
+        }
+        indset_bdd_constructor.var_layer[l] = vertex;
+    }
+    int vertex;
 }
 
 void BDDEnv::calculate_bdd_topology_stats(bool is_non_reduced)

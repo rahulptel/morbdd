@@ -31,15 +31,7 @@ bool IndepSetBDDConstructor::generate_next_layer()
 	{
 		states[next].clear();
 		// select next vertex
-		if (order_provided)
-		{
-			vertex = l - 1;
-		}
-		else
-		{
-			vertex = choose_next_vertex_min_size_next_layer(states[iter]);
-		}
-		var_layer[l - 1] = vertex;
+		vertex = var_layer[l - 1];
 
 		// set weights for one arc
 		one_weights = new ObjType[NOBJS];
@@ -127,6 +119,7 @@ void IndepSetBDDConstructor::generate()
 	bool is_done;
 	do
 	{
+		set_var_layer();
 		is_done = generate_next_layer();
 	} while (!is_done);
 }

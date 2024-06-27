@@ -117,6 +117,12 @@ public:
 
 	bool order_provided;
 
+	int iter, next;
+	// State maps
+	StateNodeMap states[2];
+	// Choose next vertex in min-in-state strategy
+	int choose_next_vertex_min_size_next_layer(StateNodeMap &states);
+
 private:
 	// Objectives
 	vector<vector<int>> objs;
@@ -124,8 +130,7 @@ private:
 	int num_objs;
 	// Marker of the end of a state (for iteration purposes)
 	int state_end;
-	// State maps
-	StateNodeMap states[2];
+
 	// Active vertices (for variable ordering)
 	vector<int> active_vertices;
 	// Auxiliary
@@ -133,11 +138,8 @@ private:
 	// Used for min-in-state variable ordering
 	// int *in_state_counter;
 
-	// Choose next vertex in min-in-state strategy
-	int choose_next_vertex_min_size_next_layer(StateNodeMap &states);
-
 	// void compute_states(BDD *bdd);
-	int iter, next;
+
 	int vertex;
 	// weights for zero arc
 	ObjType *zero_weights, *one_weights;
