@@ -52,7 +52,7 @@ bool IndepSetBDDConstructor::generate_next_layer()
 
 		BOOST_FOREACH (StateNodeMap::value_type i, states[iter])
 		{
-			State &state = *(i.first);
+			State state = *(i.first);
 			Node *node = i.second;
 			bool was_set = state[vertex];
 
@@ -62,10 +62,11 @@ bool IndepSetBDDConstructor::generate_next_layer()
 			if (it == states[next].end())
 			{
 				Node *new_node = bdd->add_node(l);
-				State *new_state = alloc.request();
-				(*new_state) = state;
-				states[next][new_state] = new_node;
+				// State *new_state = alloc.request();
+				// (*new_state) = state;
+				// states[next][new_state] = new_node;
 				new_node->setpack_state = state;
+				states[next][&new_node->setpack_state] = new_node;
 
 				node->add_out_arc(new_node, 0);
 				node->set_arc_weights(0, zero_weights);
@@ -84,10 +85,11 @@ bool IndepSetBDDConstructor::generate_next_layer()
 				if (it == states[next].end())
 				{
 					Node *new_node = bdd->add_node(l);
-					State *new_state = alloc.request();
-					(*new_state) = state;
-					states[next][new_state] = new_node;
+					// State *new_state = alloc.request();
+					// (*new_state) = state;
 					new_node->setpack_state = state;
+					states[next][&new_node->setpack_state] = new_node;
+
 					node->add_out_arc(new_node, 1);
 					node->set_arc_weights(1, one_weights);
 				}
@@ -99,7 +101,7 @@ bool IndepSetBDDConstructor::generate_next_layer()
 			}
 
 			// deallocate node state
-			alloc.deallocate(i.first);
+			// alloc.deallocate(i.first);
 		}
 
 		// invert iter and next

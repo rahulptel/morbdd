@@ -453,6 +453,7 @@ void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
         }
     }
     bdd->layers[layer] = restricted_layer;
+    bdd->fix_indices(layer);
 }
 
 void BDDEnv::restrict(vector<vector<int>> states_to_remove)

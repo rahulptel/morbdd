@@ -101,6 +101,9 @@ struct BDD
 	// Ensure node indices are consistent
 	void fix_indices();
 
+	// Ensure node indices are consistent
+	void fix_indices(int l);
+
 	// Get BDD width
 	size_t get_width();
 
@@ -318,6 +321,18 @@ inline void BDD::fix_indices()
 		{
 			layers[l][i]->index = i;
 		}
+	}
+}
+
+//
+// Ensure node indices are consistent
+//
+inline void BDD::fix_indices(int l)
+{
+	assert(l < num_layers);
+	for (int i = 0; i < layers[l].size(); ++i)
+	{
+		layers[l][i]->index = i;
 	}
 }
 
