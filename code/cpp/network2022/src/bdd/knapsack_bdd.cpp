@@ -9,17 +9,6 @@
 //
 bool KnapsackBDDConstructor::generate_next_layer()
 {
-	// If the last layer is approximated update the states[iter]
-	// We insert nodes in layer l+1. Hence, l is the last layer.
-	if (states[iter].size() > bdd->layers[l].size())
-	{
-		states[iter].clear();
-		for (int k = 0; k < bdd->layers[l].size(); ++k)
-		{
-
-			states[iter][bdd->layers[l][k]->weight] = bdd->layers[l][k];
-		}
-	}
 
 	if (l < inst->n_vars)
 	{
@@ -268,6 +257,21 @@ void KnapsackBDDConstructor::update_node_weights(BDD *bdd)
 			{
 				(*it)->min_weight = min((*it)->min_weight, (*it_prev)->min_weight + inst->coeffs[0][l - 1]);
 			}
+		}
+	}
+}
+
+void KnapsackBDDConstructor::fix_state_map()
+{
+	// If the last layer is approximated update the states[iter]
+	// We insert nodes in layer l+1. Hence, l is the last layer.
+	if (states[iter].size() > bdd->layers[l].size())
+	{
+		states[iter].clear();
+		for (int k = 0; k < bdd->layers[l].size(); ++k)
+		{
+
+			states[iter][bdd->layers[l][k]->weight] = bdd->layers[l][k];
 		}
 	}
 }

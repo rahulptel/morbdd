@@ -257,10 +257,6 @@ int BDDEnv::initialize_dd_constructor()
         // generate independent set BDD
         indset_bdd_constructor = IndepSetBDDConstructor(inst_indepset, inst_indepset->obj_coeffs);
 
-        if (order.size())
-        {
-            indset_bdd_constructor.order_provided = true;
-        }
         // indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
@@ -290,6 +286,14 @@ int BDDEnv::initialize_dd_constructor()
     timers.end_timer(compilation_time);
 
     return 0;
+}
+
+void BDDEnv::set_var_layer(int v)
+{
+    if (problem_type == 2)
+    {
+        indset_bdd_constructor.set_var_layer(v);
+    }
 }
 
 void BDDEnv::calculate_bdd_topology_stats(bool is_non_reduced)
@@ -454,6 +458,15 @@ void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
     }
     bdd->layers[layer] = restricted_layer;
     bdd->fix_indices(layer);
+
+    if (problem_type == 1)
+    {
+        kp_bdd_constructor.fix_state_map();
+    }
+    else if (problem_type == 2)
+    {
+        indset_bdd_constructor.fix_state_map();
+    }
 }
 
 void BDDEnv::restrict(vector<vector<int>> states_to_remove)

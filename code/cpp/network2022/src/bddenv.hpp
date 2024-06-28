@@ -120,6 +120,8 @@ public:
 
     int initialize_dd_constructor();
 
+    void set_var_layer(int l);
+
     int generate_dd();
 
     int generate_next_layer();
