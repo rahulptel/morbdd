@@ -257,15 +257,6 @@ int BDDEnv::initialize_dd_constructor()
         // generate independent set BDD
         indset_bdd_constructor = IndepSetBDDConstructor(inst_indepset, inst_indepset->obj_coeffs);
 
-        if (order.size())
-        {
-            indset_bdd_constructor.order_provided = true;
-        }
-        else
-        {
-            indset_bdd_constructor.var_layer[0] = indset_bdd_constructor.choose_next_vertex_min_size_next_layer(indset_bdd_constructor.states[0]);
-        }
-
         // indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
@@ -297,23 +288,12 @@ int BDDEnv::initialize_dd_constructor()
     return 0;
 }
 
-void BDDEnv::set_var_layer(int l)
+void BDDEnv::set_var_layer(int v)
 {
-    int vertex;
     if (problem_type == 2)
     {
-        if (order.size())
-        {
-            vertex = l;
-        }
-        else
-        {
-            indset_bdd_constructor.choose_next_vertex_min_size_next_layer(
-                indset_bdd_constructor.states[indset_bdd_constructor.iter]);
-        }
-        indset_bdd_constructor.var_layer[l] = vertex;
+        indset_bdd_constructor.set_var_layer(v);
     }
-    int vertex;
 }
 
 void BDDEnv::calculate_bdd_topology_stats(bool is_non_reduced)
@@ -478,6 +458,15 @@ void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
     }
     bdd->layers[layer] = restricted_layer;
     bdd->fix_indices(layer);
+
+    if (problem_type == 1)
+    {
+        kp_bdd_constructor.fix_state_map();
+    }
+    else if (problem_type == 2)
+    {
+        indset_bdd_constructor.fix_state_map();
+    }
 }
 
 void BDDEnv::restrict(vector<vector<int>> states_to_remove)

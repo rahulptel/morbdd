@@ -16,15 +16,6 @@ using namespace boost;
 //
 bool IndepSetBDDConstructor::generate_next_layer()
 {
-	// If the last layer is approximated update the states[iter]
-	if (states[iter].size() > bdd->layers[l - 1].size())
-	{
-		states[iter].clear();
-		for (int k = 0; k < bdd->layers[l - 1].size(); ++k)
-		{
-			states[iter][&bdd->layers[l - 1][k]->setpack_state] = bdd->layers[l - 1][k];
-		}
-	}
 
 	// cout << "\nCreating IndepSet BDD..." << endl;
 	if (l < inst->graph->n_vertices + 1)
@@ -119,7 +110,39 @@ void IndepSetBDDConstructor::generate()
 	bool is_done;
 	do
 	{
-		set_var_layer();
+		set_var_layer(-1);
 		is_done = generate_next_layer();
 	} while (!is_done);
+}
+
+void IndepSetBDDConstructor::fix_state_map()
+{
+	// If the last layer is approximated update the states[iter]
+	if (states[iter].size() > bdd->layers[l - 1].size())
+	{
+		states[iter].clear();
+		for (int k = 0; k < bdd->layers[l - 1].size(); ++k)
+		{
+			states[iter][&bdd->layers[l - 1][k]->setpack_state] = bdd->layers[l - 1][k];
+		}
+	}
+}
+
+void IndepSetBDDConstructor::set_var_layer(int v)
+{
+	// Use dynamically provided vertex to build next layer
+	if (v > -1)
+	{
+		var_layer[l - 1] = v;
+	}
+	// Use statically provided vertex during reset
+	else if (order_provided)
+	{
+		var_layer[l - 1] = l - 1;
+	}
+	// Select vertex dynamically based on min-state heuristic
+	else
+	{
+		var_layer[l - 1] = choose_next_vertex_min_size_next_layer(states[iter]);
+	}
 }

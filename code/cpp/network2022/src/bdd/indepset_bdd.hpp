@@ -97,6 +97,8 @@ public:
 	void generate();
 
 	bool generate_next_layer();
+	void fix_state_map();
+	void set_var_layer(int v);
 
 	// Destructor
 	// ~IndepSetBDDConstructor()
@@ -178,6 +180,7 @@ inline IndepSetBDDConstructor::IndepSetBDDConstructor(IndepSetInst *_inst,
 	{
 		// in_state_counter[v] = 1;
 		active_vertices[v] = v;
+		var_layer[v] = -1;
 	}
 
 	// initialize allocator
