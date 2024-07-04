@@ -229,13 +229,6 @@ def compute_dd_size(dd):
     return s
 
 
-def compute_size_ratio(orig_dd, restricted_dd):
-    orig_size = compute_dd_size(orig_dd)
-    rest_size = compute_dd_size(restricted_dd)
-
-    return rest_size / orig_size
-
-
 def load_orig_dd(cfg):
     size = cfg.size + ".zip"
     archive_bdds = path.bdd / cfg.prob.name / size
@@ -328,7 +321,9 @@ def main(cfg):
 
     orig_dd = load_orig_dd(cfg)
     restricted_dd = env.get_dd()
-    size_ratio = compute_size_ratio(orig_dd, restricted_dd)
+    orig_size = compute_dd_size(orig_dd)
+    rest_size = compute_dd_size(restricted_dd)
+    size_ratio = rest_size / orig_size
 
     true_pf = load_pf(cfg)
     try:
@@ -336,19 +331,21 @@ def main(cfg):
     except:
         pred_pf = None
 
-    cardinality = -1
+    cardinality_raw, cardinality = -1, -1
     if true_pf is not None and pred_pf is not None:
-        cardinality = compute_cardinality(true_pf=true_pf, pred_pf=pred_pf)
-        cardinality /= len(true_pf)
+        cardinality_raw = compute_cardinality(true_pf=true_pf, pred_pf=pred_pf)
+        cardinality = cardinality_raw / len(true_pf)
 
     run_path = get_run_path(cfg, helper.get_checkpoint_path().stem)
     run_path.mkdir(parents=True, exist_ok=True)
 
     total_time = data_preprocess_time + node_emb_time + inst_emb_time + build_time + pareto_time
     df = pd.DataFrame([[cfg.size, cfg.deploy.split, cfg.deploy.pid, total_time, size_ratio, cardinality,
-                        data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time]],
-                      columns=["size", "split", "pid", "total_time", "size", "cardinality", "data_preprocess_time",
-                               "node_emb_time", "inst_emb_time", "build_time", "pareto_time"])
+                        rest_size, orig_size, cardinality_raw, data_preprocess_time, node_emb_time, inst_emb_time,
+                        build_time, pareto_time]],
+                      columns=["size", "split", "pid", "total_time", "size", "cardinality", "rest_size", "orig_size",
+                               "cardinality_raw", "data_preprocess_time", "node_emb_time", "inst_emb_time",
+                               "build_time", "pareto_time"])
     print(df)
 
     pid = str(cfg.deploy.pid) + ".csv"
