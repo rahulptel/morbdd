@@ -420,52 +420,60 @@ int BDDEnv::generate_next_layer()
     return 0;
 }
 
-void BDDEnv::approximate_layer(int layer, int approx_type, int method, vector<int> states_to_process)
+int BDDEnv::approximate_layer(int layer, int approx_type, int method, vector<int> states_to_process)
 {
     if (approx_type == 1)
     {
-        restrict_layer(layer, method, states_to_process);
+        return restrict_layer(layer, method, states_to_process);
     }
     else if (approx_type == 2)
     {
-        relax_layer(layer, method, states_to_process);
+        return relax_layer(layer, method, states_to_process);
     }
 }
 
-void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
+int BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
 {
-    vector<int>::iterator it1;
-    vector<Node *> restricted_layer;
-    restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
-
-    if (method == 1 && states_to_remove.size())
+    if (states_to_remove.size() >= bdd->layers[layer].size())
     {
-        for (int i = 0; i < bdd->layers[layer].size(); ++i)
+        return -1;
+    }
+    if (states_to_remove.size())
+    {
+        vector<int>::iterator it1;
+        vector<Node *> restricted_layer;
+        restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
+
+        if (method == 1)
         {
-            it1 = find(states_to_remove.begin(),
-                       states_to_remove.end(),
-                       i);
-            if (it1 != states_to_remove.end())
+            for (int i = 0; i < bdd->layers[layer].size(); ++i)
             {
-                bdd->remove_node_ref_prev(bdd->layers[layer][i]);
-                states_to_remove.erase(it1);
-            }
-            else
-            {
-                restricted_layer.push_back(bdd->layers[layer][i]);
+                it1 = find(states_to_remove.begin(),
+                           states_to_remove.end(),
+                           i);
+                if (it1 != states_to_remove.end())
+                {
+                    bdd->remove_node_ref_prev(bdd->layers[layer][i]);
+                    states_to_remove.erase(it1);
+                }
+                else
+                {
+                    restricted_layer.push_back(bdd->layers[layer][i]);
+                }
             }
         }
-    }
-    bdd->layers[layer] = restricted_layer;
-    bdd->fix_indices(layer);
+        bdd->layers[layer] = restricted_layer;
+        bdd->fix_indices(layer);
 
-    if (problem_type == 1)
-    {
-        kp_bdd_constructor.fix_state_map();
-    }
-    else if (problem_type == 2)
-    {
-        indset_bdd_constructor.fix_state_map();
+        if (problem_type == 1)
+        {
+            kp_bdd_constructor.fix_state_map();
+        }
+        else if (problem_type == 2)
+        {
+            indset_bdd_constructor.fix_state_map();
+        }
+        return 0;
     }
 }
 
@@ -494,7 +502,10 @@ void BDDEnv::restrict(vector<vector<int>> states_to_remove)
     }
 }
 
-void BDDEnv::relax_layer(int layer, int method, vector<int> states) {}
+int BDDEnv::relax_layer(int layer, int method, vector<int> states)
+{
+    return 0;
+}
 
 int BDDEnv::reduce_dd()
 {

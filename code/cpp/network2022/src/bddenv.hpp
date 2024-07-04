@@ -126,10 +126,10 @@ public:
 
     int generate_next_layer();
 
-    void approximate_layer(int layer,
-                           int approx_type = 1,
-                           int method = 1,
-                           vector<int> states_to_process = {});
+    int approximate_layer(int layer,
+                          int approx_type = 1,
+                          int method = 1,
+                          vector<int> states_to_process = {});
 
     void calculate_bdd_topology_stats(bool is_non_reduced);
 
@@ -156,9 +156,9 @@ private:
 
     void clean_memory();
 
-    void restrict_layer(int layer, int method, vector<int> states_to_remove);
+    int restrict_layer(int layer, int method, vector<int> states_to_remove);
 
-    void relax_layer(int layer, int method, vector<int> states_to_merge);
+    int relax_layer(int layer, int method, vector<int> states_to_merge);
 
     ParetoFrontier *pareto_frontier;
     // ----------------------------------------------------------------
