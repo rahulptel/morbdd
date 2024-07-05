@@ -1,2 +1,1 @@
-from .pytorch import ParetoStatePredictorMIS
-from .pytorch import ParetoStatePredictorKnapsack
+from model_factory import get_model
