@@ -11,7 +11,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data import DistributedSampler
 
-from morbdd.model import ParetoStatePredictorMIS
+from morbdd.model import get_model
 from morbdd.utils import Meter
 from morbdd.utils import get_device
 from morbdd.utils import set_seed
@@ -418,18 +418,7 @@ def main(cfg):
     print("Device :", device)
 
     # Initialize model, optimizer and epoch
-    model = ParetoStatePredictorMIS(encoder_type=cfg.encoder_type,
-                                    n_node_feat=cfg.n_node_feat,
-                                    n_edge_type=cfg.n_edge_type,
-                                    d_emb=cfg.d_emb,
-                                    top_k=cfg.top_k,
-                                    n_blocks=cfg.n_blocks,
-                                    n_heads=cfg.n_heads,
-                                    dropout_token=cfg.dropout_token,
-                                    dropout=cfg.dropout,
-                                    bias_mha=cfg.bias_mha,
-                                    bias_mlp=cfg.bias_mlp,
-                                    h2i_ratio=cfg.h2i_ratio)
+    model = get_model(cfg)
     opt_cls = getattr(optim, cfg.opt.name)
     optimizer = opt_cls(model.parameters(), lr=cfg.opt.lr, weight_decay=cfg.opt.wd)
     start_epoch, end_epoch, best_f1 = 0, cfg.epochs, 0
