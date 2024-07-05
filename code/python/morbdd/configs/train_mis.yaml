@@ -71,6 +71,7 @@ agg: sum            # cat | sum
 
 # Model config
 # transformer | gat
+model_version: 3
 encoder_type: transformer
 n_node_feat: 2
 n_edge_type: 2

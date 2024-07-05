@@ -95,7 +95,7 @@ class MISTrainingHelper(TrainingHelper):
     def get_model_str(self):
         model_str = ""
         if self.cfg.encoder_type == "transformer":
-            model_str += "tf"
+            model_str += f"tf-{self.cfg.model_version}-"
             if self.cfg.d_emb != 64:
                 model_str += f"-emb-{self.cfg.d_emb}"
             if self.cfg.top_k != 5:

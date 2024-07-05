@@ -424,8 +424,6 @@ class ParetoStatePredictorMIS(nn.Module):
         # self.layer_index_encoder = nn.Embedding(100, d_emb)
         # State
         self.aggregator = MLP(d_emb, h2i_ratio * d_emb, d_emb, dropout=dropout)
-
-        self.ln = nn.LayerNorm(d_emb)
         self.predictor = nn.Linear(d_emb, 2)
 
     def forward(self, n_feat, e_feat, pos_feat, lids, vids, states):
@@ -447,7 +445,7 @@ class ParetoStatePredictorMIS(nn.Module):
         state_emb = self.aggregator(state_emb)
         state_emb = state_emb + inst_emb + li_emb + lv_emb
         # Pareto-state predictor
-        logits = self.predictor(self.ln(state_emb))
+        logits = self.predictor(state_emb)
 
         return logits
 
