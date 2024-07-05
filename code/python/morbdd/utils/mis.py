@@ -95,7 +95,7 @@ class MISTrainingHelper(TrainingHelper):
     def get_model_str(self):
         model_str = ""
         if self.cfg.encoder_type == "transformer":
-            model_str += "tf"
+            model_str += "tf-v" + str(self.cfg.model_version) + "-"
             if self.cfg.d_emb != 64:
                 model_str += f"-emb-{self.cfg.d_emb}"
             if self.cfg.top_k != 5:
@@ -106,8 +106,16 @@ class MISTrainingHelper(TrainingHelper):
                 model_str += f"-h-{self.cfg.n_heads}"
             if self.cfg.dropout_token != 0.0:
                 model_str += f"-dptk-{self.cfg.dropout_token}"
-            if self.cfg.dropout != 0.2:
-                model_str += f"-dp-{self.cfg.dropout}"
+            if self.cfg.model_version == 3:
+                if self.cfg.dropout_attn != 0.2:
+                    model_str += f"-dpa-{self.cfg.dropout_attn}"
+                if self.cfg.dropout_proj != 0.2:
+                    model_str += f"-dpp-{self.cfg.dropout_proj}"
+                if self.cfg.dropout_mlp != 0.2:
+                    model_str += f"-dpm-{self.cfg.dropout_mlp}"
+            else:
+                if self.cfg.dropout != 0.2:
+                    model_str += f"-dp-{self.cfg.dropout}"
             if self.cfg.bias_mha:
                 model_str += f"-ba-{self.cfg.bias_mha}"
             if self.cfg.bias_mha:
