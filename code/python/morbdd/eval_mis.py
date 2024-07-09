@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from morbdd import ResourcePaths as path
-from morbdd.model import ParetoStatePredictorMIS
+from morbdd.model import get_model
 from morbdd.train_mis import MISTrainingHelper
 from morbdd.utils import get_device
 from morbdd.utils import get_instance_data
@@ -12,25 +12,6 @@ from morbdd.utils import read_from_zip
 from morbdd.utils.mis import get_instance_data
 from morbdd.utils.mis import get_size
 from morbdd.train_mis import validate
-
-
-def load_model(cfg, model_path):
-    best_model = torch.load(path.resource / "checkpoint" / model_path, map_location="cpu")
-    model = ParetoStatePredictorMIS(encoder_type="transformer",
-                                    n_node_feat=cfg.n_node_feat,
-                                    n_edge_type=cfg.n_edge_type,
-                                    d_emb=cfg.d_emb,
-                                    top_k=cfg.top_k,
-                                    n_blocks=cfg.n_blocks,
-                                    n_heads=cfg.n_heads,
-                                    dropout_token=cfg.dropout_token,
-                                    bias_mha=cfg.bias_mha,
-                                    dropout=cfg.dropout,
-                                    bias_mlp=cfg.bias_mlp,
-                                    h2i_ratio=cfg.h2i_ratio)
-    model.load_state_dict(best_model["model"])
-
-    return model
 
 
 def get_stats_per_layer(pspl, preds):
@@ -184,7 +165,7 @@ def main(cfg):
     # Load model for eval
     ckpt_path = helper.get_checkpoint_path()
     print("Checkpoint path: {}".format(ckpt_path))
-    model = load_model(cfg, ckpt_path / "best_model.pt")
+    model = get_model(cfg, model_path=ckpt_path / "best_model.pt")
     model.to(device)
     model.eval()
 
