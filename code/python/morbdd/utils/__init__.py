@@ -11,9 +11,107 @@ from morbdd import resource_path
 import hashlib
 from torch.distributed import init_process_group
 import os
+from morbdd import ResourcePaths as path
 
 ZERO_ARC = -1
 ONE_ARC = 1
+
+
+class LayerNodeSelector:
+    def __init__(self, strategy, width=-1, threshold=0.5):
+        self.strategy = strategy
+        self.width = width
+        self.threshold = threshold
+
+    def __call__(self, lid, scores):
+
+        idx_score = [(i, s) for i, s in enumerate(scores)]
+        selection = [0] * len(scores)
+        selected_idx, removed_idx = None, None
+        if self.strategy == "width":
+            if self.width >= len(scores):
+                selected_nodes, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
+            else:
+                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                selected_idx = [i[0] for i in idx_score[:self.width]]
+                for i in idx_score[:self.width]:
+                    selection[i[0]] = 1
+
+        elif self.strategy == "threshold":
+            selected_idx = []
+            for i in idx_score:
+                if i[1] > self.threshold:
+                    selection[i[0]] = 1
+                    selected_idx.append(i[0])
+
+        removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
+        return selection, selected_idx, removed_idx
+
+
+class LayerStitcher:
+    def __init__(self, strategy="select_all"):
+        self.strategy = strategy
+
+    def __call__(self, scores):
+        if self.strategy == "select_all":
+            return []
+
+
+def load_orig_dd(cfg):
+    size = cfg.size + ".zip"
+    archive_bdds = path.bdd / cfg.prob.name / size
+    file = f"{cfg.size}/{cfg.deploy.split}/{cfg.deploy.pid}.json"
+    orig_dd = read_from_zip(archive_bdds, file, format="json")
+
+    return orig_dd
+
+
+def compute_dd_size(dd, check_select=False):
+    s = 0
+    if check_select is False:
+        for l in dd:
+            s += len(l)
+    else:
+        for l in dd:
+            for n in l:
+                if n.select:
+                    s += 1
+    return s
+
+
+def load_pf(cfg):
+    pid = str(cfg.deploy.pid) + ".json"
+    sol_path = path.sol / cfg.prob.name / cfg.size / cfg.deploy.split / pid
+    if sol_path.exists():
+        print(sol_path)
+        with open(sol_path, "r") as fp:
+            sol = json.load(fp)
+            return sol["z"]
+
+    print("Sol path not found!")
+
+
+def compute_cardinality(true_pf=None, pred_pf=None):
+    z, z_pred = np.array(true_pf), np.array(pred_pf)
+    assert z.shape[1] == z_pred.shape[1]
+
+    if z_pred.shape[0] == 0:
+        return 0
+    else:
+        # Defining a data type
+        rows, cols = z.shape
+        dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
+                'formats': cols * [z.dtype]}
+
+        rows, cols = z_pred.shape
+        dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                     'formats': cols * [z_pred.dtype]}
+
+        # Finding intersection
+        found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
+
+        return found_ndps.shape[0]
 
 
 class Meter(object):
