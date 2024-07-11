@@ -3,6 +3,8 @@ import numpy as np
 from morbdd import ResourcePaths as path
 from .dm import DataManager
 from morbdd.utils.kp import get_instance_path
+import multiprocessing as mp
+from morbdd.utils.kp import get_instance_data
 
 
 class KnapsackDataManager(DataManager):
@@ -15,7 +17,7 @@ class KnapsackDataManager(DataManager):
             for split in ["train", "val", "test"]:
                 for pid in range(start, end):
                     inst_path = get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid, name=self.cfg.name)
-                    inst_data = self.generate_instance(rng, n_vars, n_objs, max_obj_coeff=self.cfg.max_obj_coeff)
+                    inst_data = self.generate_instance(rng, n_vars, n_objs)
                     self.save_instance(inst_path, inst_data)
 
                 if split == "train":
@@ -67,7 +69,8 @@ class KnapsackDataManager(DataManager):
 
         inst_path.open("w").write(text)
 
-    def get_pareto_state_score_per_layer(self, weight, x):
+    def get_pareto_state_score(self, data, x, order=None):
+        weight = data["cons_coeffs"][0]
         pareto_state_scores = []
         for i in range(1, x.shape[1]):
             x_partial = x[:, :i].reshape(-1, i)
@@ -79,17 +82,12 @@ class KnapsackDataManager(DataManager):
 
         return pareto_state_scores
 
+    @staticmethod
+    def preprocess_inst(env):
+        env.preprocess_inst()
+
     def generate_dataset(self):
         pass
 
-    def save_order(self):
-        pass
-
-    def save_dd(self):
-        pass
-
-    def save_solution(self):
-        pass
-
-    def save_dm_stats(self):
-        pass
+    def get_instance_data(self, size, split, pid):
+        return get_instance_data(size, split, pid)

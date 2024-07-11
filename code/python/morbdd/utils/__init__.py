@@ -11,9 +11,20 @@ from morbdd import resource_path
 import hashlib
 from torch.distributed import init_process_group
 import os
+from morbdd import ResourcePaths as path
+import sys
 
 ZERO_ARC = -1
 ONE_ARC = 1
+
+sys.path.append(path.resource / "bin")
+
+
+def get_env(n_objs=3):
+    libbddenv = __import__("libbddenvv2o" + str(n_objs))
+    env = libbddenv.BDDEnv()
+
+    return env
 
 
 class Meter(object):
