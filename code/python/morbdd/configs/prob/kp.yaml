@@ -1,0 +1,7 @@
+name: knapsack
+n_objs: 3
+n_vars: 80
+size: ${prob.n_objs}_${prob.n_vars}
+state_norm_const: 1000
+layer_norm_const: 100
+order: MinWt
