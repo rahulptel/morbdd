@@ -113,8 +113,30 @@ class DataManager(ABC):
                 r.get()
 
     @abstractmethod
-    def generate_dataset(self):
+    def generate_dataset_worker(self, rank):
         pass
+
+    def generate_dataset(self):
+        if self.cfg.n_processes == 1:
+            self.generate_dataset_worker(0)
+        else:
+            pool = mp.Pool(processes=self.cfg.n_processes)
+            results = []
+
+            for rank in range(self.cfg.n_processes):
+                results.append(pool.apply_async(self.generate_dataset_worker,
+                                                args=(rank,)))
+
+            for r in results:
+                r.get()
+
+        dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        M = None
+        for p in dataset_path.rglob("*.npy"):
+            mat = np.load(p)
+            M = np.concatenate((M, mat), axis=0) if M is not None else mat
+
+        np.save(dataset_path.parent / f"{self.cfg.split}.npy", M)
 
     @abstractmethod
     def get_instance_data(self, size, split, pid):
