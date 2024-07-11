@@ -25,20 +25,26 @@ class KnapsackDataManager(DataManager):
                     start = self.cfg.n_train + self.cfg.n_val
                     end = start + self.cfg.n_test
 
-    def generate_instance(self, rng, n_vars, n_objs, max_obj_coeff=1000):
+    def generate_instance(self, rng, n_vars, n_objs):
         data = {"value": [], "weight": [], "capacity": 0}
 
         # Cost
-        data["weight"] = rng.randint(1, max_obj_coeff + 1, n_vars)
+        data["weight"] = rng.randint(1, self.cfg.max_obj_coeff + 1, n_vars)
 
         # Value
-        for _ in range(n_objs):
-            _objective = []
-            for i in range(n_vars):
-                lb = max(1, data["weight"][i] - (max_obj_coeff / 10))
-                ub = data["weight"][i] + (max_obj_coeff / 10)
-                _objective.append(rng.randint(lb, ub))
-            data["value"].append(_objective)
+        if self.cfg.inst_type == "uncorr":
+            for _ in range(n_objs):
+                _objective = []
+                for i in range(n_vars):
+                    data["value"].append(rng.randint(1, self.cfg.max_obj_coeff + 1, n_vars))
+        else:
+            for _ in range(n_objs):
+                _objective = []
+                for i in range(n_vars):
+                    lb = max(1, data["weight"][i] - (self.cfg.max_obj_coeff / 10))
+                    ub = data["weight"][i] + (self.cfg.max_obj_coeff / 10)
+                    _objective.append(rng.randint(lb, ub))
+                data["value"].append(_objective)
 
         # Capacity
         data["capacity"] = np.ceil(0.5 * (np.sum(data["weight"])))

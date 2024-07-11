@@ -2,6 +2,10 @@ name: knapsack
 n_objs: 3
 n_vars: 80
 size: ${prob.n_objs}_${prob.n_vars}
+max_obj_coeff: 1000
+# uncorr: uncorrelated
+# corr: correlated
+inst_type: uncorr
 state_norm_const: 1000
 layer_norm_const: 100
 order: MinWt
