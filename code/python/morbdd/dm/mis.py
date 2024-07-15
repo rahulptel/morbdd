@@ -3,6 +3,7 @@ import numpy as np
 from morbdd.utils.mis import get_instance_data
 from morbdd import ResourcePaths as path
 from morbdd.utils import read_from_zip
+import random
 
 
 class MISDataManager(DataManager):
@@ -20,9 +21,6 @@ class MISDataManager(DataManager):
             dat += " ".join(list(map(str, coeffs))) + "\n"
 
         inst_path.write_text(dat)
-
-    def get_pareto_state_score_per_layer(self, *args):
-        pass
 
     def get_dynamic_order(self, env):
         if self.cfg.prob.order_type == "min_state":
@@ -72,37 +70,6 @@ class MISDataManager(DataManager):
             pareto_state_scores.append((pareto_states, pareto_counts))
 
         return pareto_state_scores
-
-    def generate_dataset_worker(self, rank):
-        archive_bdds = path.bdd / f"{self.cfg.prob.name}/{self.cfg.size}.zip"
-        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
-            # Read instance data
-            data = get_instance_data(self.cfg.prob.name, self.cfg.size, self.cfg.split, pid)
-            file = f"{self.cfg.size}/{self.cfg.split}/{pid}.json"
-            bdd = read_from_zip(archive_bdds, file, format="json")
-            # Read order
-            order = path.order.joinpath(f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}/{pid}.dat").read_text()
-            order = np.array(list(map(int, order.strip().split())))
-            # Get node data
-            # obj_coeffs = torch.from_numpy(np.array(data["obj_coeffs"]))
-            # adj = torch.from_numpy(np.array(data["adj_list"]))
-            # X, Y = get_node_data(cfg, order, bdd)
-            dataset = self.get_node_data(order, bdd)
-            dataset = np.concatenate((np.array([pid] * dataset.shape[0]).reshape(-1, 1),
-                                      dataset), axis=1)
-            print(dataset.shape)
-            # X, Y, order = torch.from_numpy(X), torch.from_numpy(Y), torch.from_numpy(order)
-
-            dataset = dataset.astype(np.ushort)
-
-            # Save data
-            file_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}"
-            # prefix = f"{cfg.layer_weight}-{cfg.neg_to_pos_ratio}"
-            # file_path /= f"{prefix}-parent" if cfg.with_parent else f"{prefix}-no-parent"
-            file_path.mkdir(exist_ok=True, parents=True)
-            # obj = {"x": X, "y": Y, "order": order, "obj_coeffs": obj_coeffs, "adj": adj}
-            # torch.save(obj, file_path / f"{pid}.pt")
-            np.save(file_path / f"{pid}.npy", dataset)
 
     def get_node_data(cfg, order, bdd):
         data_lst = []

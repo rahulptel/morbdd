@@ -12,6 +12,7 @@ from morbdd.utils import get_env
 from morbdd.utils import get_static_order
 from morbdd.utils import handle_timeout
 import numpy as np
+from morbdd.utils import read_from_zip
 
 
 class DataManager(ABC):
@@ -19,15 +20,15 @@ class DataManager(ABC):
         self.cfg = cfg
 
     @abstractmethod
-    def generate_instances(self):
-        pass
-
-    @abstractmethod
     def generate_instance(self, *args, **kwargs):
         pass
 
     @abstractmethod
     def save_instance(self, inst_path, data):
+        pass
+
+    @abstractmethod
+    def generate_instances(self):
         pass
 
     def generate_raw_data_worker(self, rank):
@@ -113,8 +114,35 @@ class DataManager(ABC):
                 r.get()
 
     @abstractmethod
-    def generate_dataset_worker(self, rank):
+    def get_bdd_node_dataset(self):
         pass
+
+    def generate_dataset_worker(self, rank):
+        archive_bdds = path.bdd / f"{self.cfg.prob.name}/{self.cfg.size}.zip"
+        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
+            # Read instance data
+            data = self.get_instance_data(self.cfg.size, self.cfg.split, pid)
+            file = f"{self.cfg.size}/{self.cfg.split}/{pid}.json"
+            bdd = read_from_zip(archive_bdds, file, format="json")
+            # Read order
+            order = path.order.joinpath(
+                f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}/{pid}.dat").read_text()
+            order = np.array(list(map(int, order.strip().split())))
+            # Get node data
+            dataset = self.get_node_data(order, bdd)
+            dataset = np.concatenate((np.array([pid] * dataset.shape[0]).reshape(-1, 1),
+                                      dataset), axis=1)
+            print(dataset.shape)
+            dataset = dataset.astype(np.ushort)
+
+            # Save data
+            file_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}"
+            # prefix = f"{cfg.layer_weight}-{cfg.neg_to_pos_ratio}"
+            # file_path /= f"{prefix}-parent" if cfg.with_parent else f"{prefix}-no-parent"
+            file_path.mkdir(exist_ok=True, parents=True)
+            # obj = {"x": X, "y": Y, "order": order, "obj_coeffs": obj_coeffs, "adj": adj}
+            # torch.save(obj, file_path / f"{pid}.pt")
+            np.save(file_path / f"{pid}.npy", dataset)
 
     def generate_dataset(self):
         if self.cfg.n_processes == 1:

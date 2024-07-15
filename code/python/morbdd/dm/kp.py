@@ -5,6 +5,7 @@ from .dm import DataManager
 from morbdd.utils.kp import get_instance_path
 import multiprocessing as mp
 from morbdd.utils.kp import get_instance_data
+from morbdd.utils import read_from_zip
 
 
 class KnapsackDataManager(DataManager):
@@ -86,7 +87,7 @@ class KnapsackDataManager(DataManager):
     def preprocess_inst(env):
         env.preprocess_inst()
 
-    def generate_dataset(self):
+    def get_node_data(self, order, bdd):
         pass
 
     def get_instance_data(self, size, split, pid):
