@@ -1,34 +1,18 @@
+import random
+
 import numpy as np
 
-from morbdd import ResourcePaths as path
-from .dm import DataManager
-from morbdd.utils.kp import get_instance_path
-import multiprocessing as mp
+from morbdd.featurizer.knapsack import KnapsackFeaturizer
+from morbdd.utils import FeaturizerConfig
+from morbdd.utils.kp import get_bdd_node_features
+from morbdd.utils.kp import get_dataset_path
 from morbdd.utils.kp import get_instance_data
-from morbdd.utils import read_from_zip
+from morbdd.utils.kp import get_instance_path
+from .dm import DataManager
 
 
 class KnapsackDataManager(DataManager):
-    def generate_instances(self):
-        rng = np.random.RandomState(self.cfg.seed)
-
-        for s in self.cfg.size:
-            n_objs, n_vars = map(int, s.split("_"))
-            start, end = 0, self.cfg.n_train
-            for split in ["train", "val", "test"]:
-                for pid in range(start, end):
-                    inst_path = get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid, name=self.cfg.name)
-                    inst_data = self.generate_instance(rng, n_vars, n_objs)
-                    self.save_instance(inst_path, inst_data)
-
-                if split == "train":
-                    start = self.cfg.n_train
-                    end = start + self.cfg.n_val
-                elif split == "val":
-                    start = self.cfg.n_train + self.cfg.n_val
-                    end = start + self.cfg.n_test
-
-    def generate_instance(self, rng, n_vars, n_objs):
+    def _generate_instance(self, rng, n_vars, n_objs):
         data = {"value": [], "weight": [], "capacity": 0}
 
         # Cost
@@ -54,7 +38,7 @@ class KnapsackDataManager(DataManager):
 
         return data
 
-    def save_instance(self, inst_path, data):
+    def _save_instance(self, inst_path, data):
         inst_path.parent.mkdir(parents=True, exist_ok=True)
 
         n_vars = len(list(data["weight"]))
@@ -70,7 +54,14 @@ class KnapsackDataManager(DataManager):
 
         inst_path.open("w").write(text)
 
-    def get_pareto_state_score(self, data, x, order=None):
+    def _get_instance_data(self, size, split, pid):
+        return get_instance_data(size, split, pid)
+
+    @staticmethod
+    def _preprocess_inst(env):
+        env.preprocess_inst()
+
+    def _get_pareto_state_scores(self, data, x, order=None):
         weight = data["cons_coeffs"][0]
         pareto_state_scores = []
         for i in range(1, x.shape[1]):
@@ -83,12 +74,122 @@ class KnapsackDataManager(DataManager):
 
         return pareto_state_scores
 
-    @staticmethod
-    def preprocess_inst(env):
-        env.preprocess_inst()
+    def _get_bdd_node_dataset_tf(self, pid, inst_data, order, bdd, rng):
+        features_lst, labels_lst, weights_lst = [], [], []
+        for lidx, layer in enumerate(bdd):
+            # _features_lst, _labels_lst, _weights_lst = [], [], []
+            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
 
-    def get_node_data(self, order, bdd):
-        pass
+            # Subsample negative samples
+            num_pos_samples = len(pos_ids)
+            if self.cfg.neg_to_pos_ratio < 1:
+                num_neg_samples = len(neg_ids)
+            else:
+                num_neg_samples = int(self.cfg.neg_pos_ratio * num_pos_samples)
+                num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
+                rng.shuffle(neg_ids)
+            neg_ids = neg_ids[:num_neg_samples]
 
-    def get_instance_data(self, size, split, pid):
-        return get_instance_data(size, split, pid)
+            prev_layer = bdd[lidx - 1] if self.cfg.with_parent and lidx > 0 else None
+            node_ids = pos_ids[:]
+            node_ids.extend(neg_ids)
+            for i, node_id in enumerate(node_ids):
+                node = layer[node_id]
+                _node_feat = get_bdd_node_features(lidx, node, prev_layer, inst_data["capacity"],
+                                                   layer_norm_const=self.cfg.prob.layer_norm_const,
+                                                   state_norm_const=self.cfg.prob.state_norm_const,
+                                                   with_parent=self.cfg.with_parent)
+
+                features_lst.append(np.concatenate((_node_feat, [order[lidx], node["score"]])))
+
+        return np.array(features_lst)
+
+    def _get_bdd_node_dataset_xgboost(self, inst_data, order, bdd, rng):
+        # Extract instance and variable features
+        featurizer = KnapsackFeaturizer(FeaturizerConfig(norm_const=self.cfg.prob.state_norm_const,
+                                                         raw=False,
+                                                         context=True))
+        features = featurizer.get(inst_data)
+        # Instance features
+        inst_features = features["inst"][0]
+        # Variable features. Reordered features based on ordering
+        var_features = features["var"][order]
+        num_var_features = features["var"].shape[1]
+
+        features_lst, labels_lst, weights_lst = [], [], []
+        for lidx, layer in enumerate(bdd):
+            # _features_lst, _labels_lst, _weights_lst = [], [], []
+            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
+
+            # Subsample negative samples
+            num_pos_samples = len(pos_ids)
+            if self.cfg.neg_to_pos_ratio < 1:
+                num_neg_samples = len(neg_ids)
+            else:
+                num_neg_samples = int(self.cfg.neg_pos_ratio * num_pos_samples)
+                num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
+                rng.shuffle(neg_ids)
+            neg_ids = neg_ids[:num_neg_samples]
+
+            _var_feat = var_features[lidx]
+            _parent_var_feat = None
+            if self.cfg.with_parent:
+                # Variable features: Parent and current layer
+                _parent_var_feat = -1 * np.ones(num_var_features) if lidx == 0 else var_features[lidx - 1]
+
+            prev_layer = bdd[lidx - 1] if self.cfg.with_parent and lidx > 0 else None
+            node_ids = pos_ids[:]
+            node_ids.extend(neg_ids)
+            for i, node_id in enumerate(node_ids):
+                node = layer[node_id]
+                _node_feat = get_bdd_node_features(lidx, node, prev_layer, inst_data["capacity"],
+                                                   layer_norm_const=self.cfg.prob.layer_norm_const,
+                                                   state_norm_const=self.cfg.prob.state_norm_const,
+                                                   with_parent=self.cfg.with_parent)
+                if self.cfg.with_parent:
+                    features_lst.append(np.concatenate((inst_features,
+                                                        _parent_var_feat,
+                                                        _var_feat,
+                                                        _node_feat,
+                                                        node["score"])))
+                else:
+                    features_lst.append(np.concatenate((inst_features,
+                                                        _var_feat,
+                                                        _node_feat,
+                                                        node["score"])))
+
+        return np.array(features_lst)
+
+    def _get_bdd_node_dataset(self, pid, data, order, bdd):
+        rng = random.Random(self.cfg.seed_dataset)
+        dataset = None
+        if self.cfg.for_model == "tf":
+            dataset = self._get_bdd_node_dataset_tf(pid, data, order, bdd, rng)
+        elif self.cfg.for_model == "xgboost":
+            dataset = self._get_bdd_node_dataset_xgboost(data, order, bdd, rng)
+
+        if dataset is not None:
+            dataset_path = get_dataset_path(self.cfg)
+            dataset_path.mkdir(exist_ok=True, parents=True)
+            np.save(dataset_path / f"{pid}.npy", dataset)
+
+    def generate_instances(self):
+        rng = np.random.RandomState(self.cfg.seed)
+
+        for s in self.cfg.size:
+            n_objs, n_vars = map(int, s.split("_"))
+            start, end = 0, self.cfg.n_train
+            for split in ["train", "val", "test"]:
+                for pid in range(start, end):
+                    inst_path = get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid, name=self.cfg.name)
+                    inst_data = self._generate_instance(rng, n_vars, n_objs)
+                    self._save_instance(inst_path, inst_data)
+
+                if split == "train":
+                    start = self.cfg.n_train
+                    end = start + self.cfg.n_val
+                elif split == "val":
+                    start = self.cfg.n_train + self.cfg.n_val
+                    end = start + self.cfg.n_test
