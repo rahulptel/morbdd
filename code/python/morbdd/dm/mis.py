@@ -4,13 +4,71 @@ from morbdd.utils.mis import get_instance_data
 from morbdd import ResourcePaths as path
 from morbdd.utils import read_from_zip
 import random
+from morbdd.utils.mis import get_instance_path
 
 
 class MISDataManager(DataManager):
-    def generate_instance(self):
-        pass
+    def _get_instance_path(self, seed, n_objs, n_vars, split, pid):
+        if self.cfg.prob.inst_type == "stidsen":
+            return get_instance_path(seed, n_objs, n_vars, split, pid, attach=None, name=self.cfg.prob.name,
+                                     prefix=self.cfg.prob.prefix)
+        elif self.cfg.prob.inst_type == "ba":
+            return get_instance_path(seed, n_objs, n_vars, split, pid, attach=self.cfg.prob.attach,
+                                     name=self.cfg.prob.name, prefix=self.cfg.prob.prefix)
 
-    def save_instance(self, inst_path, data):
+    def _generate_instance_ba(self, rng, n_vars, n_objs):
+        import networkx as nx
+
+        data = {'n_vars': n_vars,
+                'n_objs': n_objs,
+                'attach': self.cfg.prob.attach,
+                'obj_coeffs': [],
+                'edges': []}
+
+        # Value
+        for _ in range(n_objs):
+            data['obj_coeffs'].append(rng.randint(self.cfg.prob.obj_lb, self.cfg.prob.obj_ub, n_vars))
+
+        graph = nx.barabasi_albert_graph(n_vars, self.cfg.attach, seed=np.random)
+        data['edges'] = np.array(nx.edges(graph), dtype=int)
+
+        return data
+
+    def _generate_instance_stidsen(self, rng, n_vars, n_objs):
+        data = {'n_vars': n_vars, 'n_objs': n_objs, 'n_cons': int(n_vars / 5), 'obj_coeffs': [], 'cons_coeffs': []}
+        items = list(range(1, self.cfg.prob.n_vars + 1))
+
+        # Value
+        for _ in range(self.cfg.prob.n_objs):
+            data['obj_coeffs'].append(
+                list(rng.randint(self.cfg.prob.obj_lb, self.cfg.prob.obj_ub + 1, self.cfg.prob.n_vars)))
+
+        # Constraints
+        for _ in range(data['n_cons']):
+            vars_in_con = rng.randint(2, (2 * self.cfg.prob.vars_per_con) + 1)
+            data['cons_coeffs'].append(list(rng.choice(items, vars_in_con, replace=False)))
+
+        # Ensure no variable is missed
+        var_count = []
+        for con in data['cons_coeffs']:
+            var_count.extend(con)
+        missing_vars = list(set(range(1, self.cfg.prob.n_vars + 1)).difference(set(var_count)))
+        for v in missing_vars:
+            cons_id = rng.randint(data['n_cons'])
+            data['cons_coeffs'][cons_id].append(v)
+
+        return data
+
+    def _save_ba(self, inst_path, data):
+        # inst_path = Path(str(inst_path) + ".npz")
+        np.savez(inst_path,
+                 n_vars=data['n_vars'],
+                 n_objs=data['n_objs'],
+                 attach=data['attach'],
+                 obj_coeffs=data['obj_coeffs'],
+                 edges=data['edges'])
+
+    def _save_stidsen(self, inst_path, data):
         dat = f"{data['n_vars']} {data['n_cons']}\n"
         dat += f"{len(data['obj_coeffs'])}\n"
         for coeffs in data['obj_coeffs']:
@@ -20,7 +78,23 @@ class MISDataManager(DataManager):
             dat += f"{len(coeffs)}\n"
             dat += " ".join(list(map(str, coeffs))) + "\n"
 
+        # inst_path = Path(str(inst_path) + ".dat")
         inst_path.write_text(dat)
+
+    def _generate_instance(self, rng, n_vars, n_objs):
+        data = None
+        if self.cfg.prob.inst_type == "stidsen":
+            data = self._generate_instance_stidsen(rng, n_vars, n_objs)
+        elif self.cfg.prob.inst_type == "ba":
+            data = self._generate_instance_ba(rng, n_vars, n_objs)
+
+        return data
+
+    def _save_instance(self, inst_path, data):
+        if self.cfg.prob.inst_type == "stidsen":
+            self._save_stidsen(inst_path, data)
+        elif self.cfg.prob.inst_type == "ba":
+            self._save_ba(inst_path, data)
 
     def get_dynamic_order(self, env):
         if self.cfg.prob.order_type == "min_state":
@@ -170,3 +244,12 @@ class MISDataManager(DataManager):
 
     def get_instance_data(self, size, split, pid):
         return get_instance_data(size, split, pid)
+
+    def generate_instances(self):
+        pass
+
+    def generate_bdd_data(self):
+        pass
+
+    def generate_dataset(self):
+        pass

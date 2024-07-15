@@ -20,6 +20,10 @@ class DataManager(ABC):
         self.cfg = cfg
 
     @abstractmethod
+    def _get_instance_path(self, *args):
+        pass
+
+    @abstractmethod
     def _generate_instance(self, *args, **kwargs):
         pass
 
@@ -197,9 +201,24 @@ class DataManager(ABC):
     def _generate_dataset_dmatrix(self, rank):
         pass
 
-    @abstractmethod
     def generate_instances(self):
-        pass
+        rng = np.random.RandomState(self.cfg.seed)
+
+        for s in self.cfg.size:
+            n_objs, n_vars = map(int, s.split("_"))
+            start, end = 0, self.cfg.n_train
+            for split in ["train", "val", "test"]:
+                for pid in range(start, end):
+                    inst_path = self._get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid)
+                    inst_data = self._generate_instance(rng, n_vars, n_objs)
+                    self._save_instance(inst_path, inst_data)
+
+                if split == "train":
+                    start = self.cfg.n_train
+                    end = start + self.cfg.n_val
+                elif split == "val":
+                    start = self.cfg.n_train + self.cfg.n_val
+                    end = start + self.cfg.n_tests
 
     def generate_bdd_data(self):
         if self.cfg.n_processes == 1:
@@ -215,7 +234,6 @@ class DataManager(ABC):
                 r.get()
 
     def generate_dataset(self):
-
         if self.cfg.n_processes == 1:
             self._generate_dataset_worker(0)
         else:
@@ -228,10 +246,10 @@ class DataManager(ABC):
             for r in results:
                 r.get()
 
-        dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
-        M = None
-        for p in dataset_path.rglob("*.npy"):
-            mat = np.load(p)
-            M = np.concatenate((M, mat), axis=0) if M is not None else mat
-
-        np.save(dataset_path.parent / f"{self.cfg.split}.npy", M)
+        # dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        # M = None
+        # for p in dataset_path.rglob("*.npy"):
+        #     mat = np.load(p)
+        #     M = np.concatenate((M, mat), axis=0) if M is not None else mat
+        #
+        # np.save(dataset_path.parent / f"{self.cfg.split}.npy", M)

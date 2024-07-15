@@ -12,6 +12,9 @@ from .dm import DataManager
 
 
 class KnapsackDataManager(DataManager):
+    def _get_instance_path(self, seed, n_objs, n_vars, split, pid):
+        return get_instance_path(seed, n_objs, n_vars, split, pid, name=self.cfg.prob.name, prefix=self.cfg.prob.prefix)
+
     def _generate_instance(self, rng, n_vars, n_objs):
         data = {"value": [], "weight": [], "capacity": 0}
 
@@ -174,22 +177,3 @@ class KnapsackDataManager(DataManager):
             dataset_path = get_dataset_path(self.cfg)
             dataset_path.mkdir(exist_ok=True, parents=True)
             np.save(dataset_path / f"{pid}.npy", dataset)
-
-    def generate_instances(self):
-        rng = np.random.RandomState(self.cfg.seed)
-
-        for s in self.cfg.size:
-            n_objs, n_vars = map(int, s.split("_"))
-            start, end = 0, self.cfg.n_train
-            for split in ["train", "val", "test"]:
-                for pid in range(start, end):
-                    inst_path = get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid, name=self.cfg.name)
-                    inst_data = self._generate_instance(rng, n_vars, n_objs)
-                    self._save_instance(inst_path, inst_data)
-
-                if split == "train":
-                    start = self.cfg.n_train
-                    end = start + self.cfg.n_val
-                elif split == "val":
-                    start = self.cfg.n_train + self.cfg.n_val
-                    end = start + self.cfg.n_test

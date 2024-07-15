@@ -5,6 +5,7 @@ inst_type: stidsen
 n_objs: 3
 n_vars: 100
 size: ${prob.n_objs}-${prob.n_vars}
+attach: 4
 
 order: MinState
 # Average number of variables per constraint

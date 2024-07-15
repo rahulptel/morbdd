@@ -3,8 +3,8 @@ from morbdd.utils import read_from_zip
 import numpy as np
 
 
-def get_instance_path(seed, n_objs, n_vars, split, pid, name="knapsack"):
-    return path.inst / f'{name}/{n_objs}_{n_vars}/{split}/kp_{seed}_{n_objs}_{n_vars}_{pid}.dat'
+def get_instance_path(seed, n_objs, n_vars, split, pid, name="knapsack", prefix="kp"):
+    return path.inst / f'{name}/{n_objs}_{n_vars}/{split}/{prefix}_{seed}_{n_objs}_{n_vars}_{pid}.dat'
 
 
 def read_instance(archive, inst):
