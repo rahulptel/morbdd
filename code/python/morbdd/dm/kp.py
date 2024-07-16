@@ -8,6 +8,7 @@ from morbdd.utils.kp import get_bdd_node_features
 from morbdd.utils.kp import get_dataset_path
 from morbdd.utils.kp import get_instance_data
 from morbdd.utils.kp import get_instance_path
+from morbdd.utils.kp import get_static_order
 from .dm import DataManager
 
 
@@ -54,8 +55,21 @@ class KnapsackDataManager(DataManager):
 
         inst_path.open("w").write(text)
 
-    def _get_instance_data(self, size, split, pid):
-        return get_instance_data(size, split, pid)
+    def _get_instance_data(self, pid):
+        return get_instance_data(self.cfg.prob.name, self.cfg.prob.prefix, self.cfg.seed, self.cfg.prob.size,
+                                 self.cfg.split, pid)
+
+    @staticmethod
+    def _set_inst(env, data):
+        env.set_inst(data['n_vars'],
+                     data['n_cons'],
+                     data['n_objs'],
+                     data['value'],
+                     [data['weight']],
+                     [data['capacity']])
+
+    def _get_static_order(self, data):
+        return get_static_order(self.cfg.prob.order_type, data)
 
     @staticmethod
     def _preprocess_inst(env):

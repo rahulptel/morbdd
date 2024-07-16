@@ -1,23 +1,22 @@
+import hashlib
 import io
 import json
+import os
 import random
+import sys
 import zipfile
 from operator import itemgetter
+
 import numpy as np
 import torch
+from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
-from morbdd import resource_path
-import hashlib
-from torch.distributed import init_process_group
-import os
 from morbdd import ResourcePaths as path
-import sys
+from morbdd import resource_path
 
 ZERO_ARC = -1
 ONE_ARC = 1
-
-sys.path.append(path.resource / "bin")
 
 
 def zipdir(path, ziph):
@@ -30,6 +29,7 @@ def zipdir(path, ziph):
 
 
 def get_env(n_objs=3):
+    sys.path.append(path.resource / "bin")
     libbddenv = __import__("libbddenvv2o" + str(n_objs))
     env = libbddenv.BDDEnv()
 

@@ -35,7 +35,7 @@ class DataManager(ABC):
         pass
 
     @abstractmethod
-    def _get_instance_data(self, size, split, pid):
+    def _get_instance_data(self, *args):
         pass
 
     @staticmethod
@@ -49,6 +49,10 @@ class DataManager(ABC):
 
     @staticmethod
     def _preprocess_inst(env):
+        pass
+
+    @abstractmethod
+    def _get_static_order(self, *args):
         pass
 
     @abstractmethod
@@ -112,18 +116,18 @@ class DataManager(ABC):
         df.to_csv(file_path.parent / f"dm_stats_{pid}.csv", index=False)
 
     def _generate_bdd_data_worker(self, rank):
-        env = get_env(n_objs=self.cfg.prob.n_vars)
+        env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
         for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
             print(f"{rank}/1/10: Fetching instance data and order...")
-            data = self._get_instance_data(self.cfg.size, self.cfg.split, pid)
-            order = get_static_order(self.cfg.prob.name, self.cfg.prob.order_type, data)
+            data = self._get_instance_data(pid)
+            order = self._get_static_order(data)
 
             print(f"{rank}/2/10: Resetting env...")
             env.reset(self.cfg.prob.problem_type,
                       self.cfg.prob.preprocess,
-                      self.cfg.prob.method,
+                      self.cfg.prob.pf_enum_method,
                       self.cfg.prob.maximization,
                       self.cfg.prob.dominance,
                       self.cfg.prob.bdd_type,
@@ -175,10 +179,10 @@ class DataManager(ABC):
 
             print(f"{rank}/10/10: Saving data...")
             # Save order
-            self._save_order(pid, dynamic_order)
-            self._save_dd(pid, dd)
-            self._save_solution(pid, frontier, dynamic_order)
-            self._save_dm_stats(pid, frontier, env, time_fetch, time_compile, time_pareto)
+            # self._save_order(pid, dynamic_order)
+            # self._save_dd(pid, dd)
+            # self._save_solution(pid, frontier, dynamic_order)
+            # self._save_dm_stats(pid, frontier, env, time_fetch, time_compile, time_pareto)
 
     @abstractmethod
     def _get_bdd_node_dataset(self, *args):

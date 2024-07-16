@@ -1,6 +1,5 @@
 name: knapsack
 prefix: kp
-
 # uncorr: uncorrelated
 # corr: correlated
 inst_type: uncorr
@@ -8,7 +7,7 @@ n_objs: 3
 n_vars: 80
 size: ${prob.n_objs}_${prob.n_vars}
 
-order: MinWt
+order_type: MinWt
 # Range from which to sample the objective coefficients
 obj_lb: 1
 obj_ub: 1000
@@ -20,11 +19,8 @@ layer_norm_const: 100
 
 #########################################
 # BDD Manager Params
+#########################################
 # 1: knapsack
-# 2: Setpack/indepset
-# 3: Setcover (not working)
-# 4: Max Cardinality
-# 5: TSP
 problem_type: 1
 # 0: Do nothing
 # 1: Minimize bandwidth

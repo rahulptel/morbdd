@@ -1,6 +1,9 @@
+from operator import itemgetter
+
+import numpy as np
+
 from morbdd import ResourcePaths as path
 from morbdd.utils import read_from_zip
-import numpy as np
 
 
 def get_instance_path(seed, n_objs, n_vars, split, pid, name="knapsack", prefix="kp"):
@@ -22,14 +25,29 @@ def read_instance(archive, inst):
     return data
 
 
-def get_instance_data(size, split, pid):
-    prefix = "kp"
-    archive = path.inst / f"knapsack/{size}.zip"
-    suffix = "dat"
-    inst = f'{size}/{split}/{prefix}_{size}_{pid}.{suffix}'
+def get_instance_data(name, prefix, seed, size, split, pid, suffix=".dat"):
+    archive = path.inst / f"{name}/{size}.zip"
+    inst = f'{size}/{split}/{prefix}_{seed}_{size}_{pid}{suffix}'
     data = read_instance(archive, inst)
 
     return data
+
+
+def get_static_order(order_type, data):
+    if order_type == 'MinWt':
+        idx_weight = [(i, w) for i, w in enumerate(data['weight'])]
+        idx_weight.sort(key=itemgetter(1))
+
+        return np.array([i[0] for i in idx_weight])
+    elif order_type == 'MaxRatio':
+        min_profit = np.min(data['value'], 0)
+        profit_by_weight = [v / w for v, w in zip(min_profit, data['weight'])]
+        idx_profit_by_weight = [(i, f) for i, f in enumerate(profit_by_weight)]
+        idx_profit_by_weight.sort(key=itemgetter(1), reverse=True)
+
+        return np.array([i[0] for i in idx_profit_by_weight])
+    elif order_type == 'Lex':
+        return np.arange(data['n_vars'])
 
 
 def get_dataset_path(cfg):
