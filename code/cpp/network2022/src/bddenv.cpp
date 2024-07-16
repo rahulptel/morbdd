@@ -215,7 +215,8 @@ int BDDEnv::preprocess_inst()
     {
         if (order.size())
         {
-            inst_kp->reorder_coefficients();
+            // inst_kp->reorder_coefficients();
+            inst_kp->reset_order(order);
         }
     }
     else if (problem_type == 2)

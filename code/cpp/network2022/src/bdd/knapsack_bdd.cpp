@@ -100,16 +100,13 @@ bool KnapsackBDDConstructor::generate_next_layer()
 		iter = !iter;
 		++l;
 
+		// cout << "\n\tupdating incoming arcs..." << endl;
+		bdd->update_incoming_arcsets();
+
 		if (l < inst->n_vars)
 		{
 			return false;
 		}
-
-		// cout << "\n\tupdating incoming arcs..." << endl;
-		bdd->update_incoming_arcsets();
-
-		// Fix indices
-		bdd->fix_indices();
 	}
 
 	// Non-last layer
@@ -128,7 +125,7 @@ void KnapsackBDDConstructor::generate_exact()
 		is_done = generate_next_layer();
 	} while (!is_done);
 
-	// for (l = 0; l < inst->n_vars; ++l)
+		// for (l = 0; l < inst->n_vars; ++l)
 	// {
 	// 	// cout << "\tLayer " << l << " - number of nodes: " << states[next].size() << endl;
 
@@ -219,10 +216,10 @@ void KnapsackBDDConstructor::generate_exact()
 	// 	iter = !iter;
 	// }
 	// cout << "\n\tupdating incoming arcs..." << endl;
-	// bdd->update_incoming_arcsets();
+	bdd->update_incoming_arcsets();
 
-	// // Fix indices
-	// bdd->fix_indices();
+	// Fix indices
+	bdd->fix_indices();
 
 	// // cout << "\tdone" << endl;
 	// // return bdd;

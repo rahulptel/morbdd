@@ -163,3 +163,36 @@ void KnapsackInstance::reorder_coefficients()
     // cout << endl;
     // exit(1);
 }
+
+//
+// Reorder variables based on constraint coefficients
+//
+void KnapsackInstance::reset_order(vector<int> new_order)
+{
+
+    // Rearrange arrays
+    vector<vector<int>> new_coeffs = coeffs;
+    for (int c = 0; c < n_cons; ++c)
+    {
+        for (int i = 0; i < n_vars; ++i)
+        {
+            new_coeffs[c][i] = coeffs[c][new_order[i]];
+        }
+    }
+    coeffs = new_coeffs;
+    vector<vector<int>> new_obj_coeffs = obj_coeffs;
+    for (int i = 0; i < n_vars; ++i)
+    {
+        for (int o = 0; o < NOBJS; ++o)
+        {
+            new_obj_coeffs[i][o] = obj_coeffs[new_order[i]][o];
+        }
+    }
+    obj_coeffs = new_obj_coeffs;
+
+    // for (int i = 0; i < n_vars; ++i) {
+    //     cout << map[i] << " ";
+    // }
+    // cout << endl;
+    // exit(1);
+}
