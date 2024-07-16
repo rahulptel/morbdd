@@ -20,6 +20,15 @@ ONE_ARC = 1
 sys.path.append(path.resource / "bin")
 
 
+def zipdir(path, ziph):
+    # Iterate over all the files in the directory
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            # Create the relative path to maintain the folder structure
+            ziph.write(os.path.join(root, file),
+                       os.path.relpath(os.path.join(root, file), os.path.join(path, '..')))
+
+
 def get_env(n_objs=3):
     libbddenv = __import__("libbddenvv2o" + str(n_objs))
     env = libbddenv.BDDEnv()

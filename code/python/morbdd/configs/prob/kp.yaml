@@ -13,8 +13,8 @@ order: MinWt
 obj_lb: 1
 obj_ub: 1000
 # Range from which to sample the constraint coefficients
-cons_lb: 1
-cons_ub: 1000
+cons_lb: ${prob.obj_lb}
+cons_ub: ${prob.obj_ub}
 state_norm_const: 1000
 layer_norm_const: 100
 

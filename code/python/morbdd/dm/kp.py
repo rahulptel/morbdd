@@ -19,20 +19,17 @@ class KnapsackDataManager(DataManager):
         data = {"value": [], "weight": [], "capacity": 0}
 
         # Cost
-        data["weight"] = rng.randint(1, self.cfg.max_obj_coeff + 1, n_vars)
-
+        data["weight"] = rng.randint(self.cfg.prob.cons_lb, self.cfg.prob.cons_ub + 1, n_vars)
         # Value
-        if self.cfg.inst_type == "uncorr":
+        if self.cfg.prob.inst_type == "uncorr":
             for _ in range(n_objs):
-                _objective = []
-                for i in range(n_vars):
-                    data["value"].append(rng.randint(1, self.cfg.max_obj_coeff + 1, n_vars))
+                data["value"].append(rng.randint(self.cfg.prob.obj_lb, self.cfg.prob.obj_ub + 1, n_vars))
         else:
             for _ in range(n_objs):
                 _objective = []
                 for i in range(n_vars):
-                    lb = max(1, data["weight"][i] - (self.cfg.max_obj_coeff / 10))
-                    ub = data["weight"][i] + (self.cfg.max_obj_coeff / 10)
+                    lb = max(self.cfg.prob.obj_lb, data["weight"][i] - (self.cfg.prob.obj_ub / 10))
+                    ub = data["weight"][i] + (self.cfg.prob.obj_ub / 10)
                     _objective.append(rng.randint(lb, ub))
                 data["value"].append(_objective)
 

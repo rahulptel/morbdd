@@ -13,6 +13,9 @@ from morbdd.utils import get_env
 from morbdd.utils import get_static_order
 from morbdd.utils import handle_timeout
 from morbdd.utils import read_from_zip
+from morbdd.utils import zipdir
+import zipfile
+import shutil
 
 
 class DataManager(ABC):
@@ -204,8 +207,8 @@ class DataManager(ABC):
     def generate_instances(self):
         rng = np.random.RandomState(self.cfg.seed)
 
-        for s in self.cfg.size:
-            n_objs, n_vars = map(int, s.split("_"))
+        for s in self.cfg.sizes:
+            n_objs, n_vars = map(int, s.split("-"))
             start, end = 0, self.cfg.n_train
             for split in ["train", "val", "test"]:
                 for pid in range(start, end):
@@ -218,7 +221,11 @@ class DataManager(ABC):
                     end = start + self.cfg.n_val
                 elif split == "val":
                     start = self.cfg.n_train + self.cfg.n_val
-                    end = start + self.cfg.n_tests
+                    end = start + self.cfg.n_test
+
+            with zipfile.ZipFile(str(inst_path.parent.parent) + ".zip", "w", zipfile.ZIP_DEFLATED) as zf:
+                zipdir(inst_path.parent.parent, zf)
+            shutil.rmtree(inst_path.parent.parent)
 
     def generate_bdd_data(self):
         if self.cfg.n_processes == 1:
