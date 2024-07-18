@@ -35,5 +35,5 @@ PYBIND11_MODULE(libbddenv, m)
         .def_readwrite("num_comparisons_per_layer", &BDDEnv::num_comparisons_per_layer)
         .def_readwrite("in_degree", &BDDEnv::in_degree)
         .def_readwrite("nnds", &BDDEnv::nnds)
-        .def_readwrite("z_sol", &BDDEnv::z_sol)
+        .def_readwrite("z_sol", &BDDEnv::z_sol);
 }
