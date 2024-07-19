@@ -211,7 +211,22 @@ inline size_t ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjT
             }
             else if (dominates)
             {
-                itCurr = sols.erase(itCurr);
+                if (must_add)
+                {
+                    (*itCurr).x.clear();
+                    (*itCurr).x = (*itParent).x;
+                    (*itCurr).x.push_back(arc_type);
+                    for (int o = 0; o < NOBJS; ++o)
+                    {
+                        (*itCurr).obj[o] = (*itParent).obj[o] + shift[o];
+                    }
+                    must_add = false;
+                    ++itCurr;
+                }
+                else
+                {
+                    itCurr = sols.erase(itCurr);
+                }
             }
             else
             {
@@ -221,6 +236,7 @@ inline size_t ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjT
         // if solution has not been added already, append element to the end
         if (must_add)
         {
+            sols.erase(end);
             Solution new_solution((*itParent).x, (*itParent).obj);
             new_solution.x.push_back(arc_type);
             if (arc_type != 0)
@@ -231,6 +247,7 @@ inline size_t ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, ObjT
                 }
             }
             sols.push_back(new_solution);
+            end = sols.insert(sols.end(), dummy);
         }
     }
     sols.erase(end);
