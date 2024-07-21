@@ -184,19 +184,18 @@ public:
 
 inline void ParetoFrontier::add(Solution &elem)
 {
-    // bool must_add = true;
     bool dominates;
     bool dominated;
-    SolutionList::iterator itParent = sols.begin();
-    while (itParent != sols.end())
+
+    for (SolutionList::iterator it = sols.begin(); it != sols.end();)
     {
         // check status of foreign solution w.r.t. current frontier solution
         dominates = true;
         dominated = true;
         for (int o = 0; o < NOBJS && (dominates || dominated); ++o)
         {
-            dominates &= (elem.obj[o] >= (*itParent).obj[o]);
-            dominated &= (elem.obj[o] <= (*itParent).obj[o]);
+            dominates &= (elem.obj[o] >= (*it).obj[o]);
+            dominated &= (elem.obj[o] <= (*it).obj[o]);
         }
         if (dominated)
         {
@@ -205,18 +204,14 @@ inline void ParetoFrontier::add(Solution &elem)
         }
         else if (dominates)
         {
-            itParent = sols.erase(itParent);
+            it = sols.erase(it);
         }
         else
         {
-            ++itParent;
+            ++it;
         }
     }
-    // add if still necessary
-    // if (must_add)
-    // {
     sols.insert(sols.end(), elem);
-    // }
 }
 
 // //
@@ -436,10 +431,7 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, const 
         }
 
         must_add = true; // if solution must be added to set
-
-        SolutionList::iterator itCurr = sols.begin();
-
-        while (itCurr != end)
+        for (SolutionList::iterator itCurr = sols.begin(); itCurr != end;)
         {
             // check status of foreign solution w.r.t. current frontier solution
             dominates = true;
@@ -457,23 +449,7 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, const 
             }
             else if (dominates)
             {
-                if (must_add)
-                {
-                    // Reuse solution object and update the solution in itCurr
-                    (*itCurr).x.clear();
-                    (*itCurr).x = (*itParent).x;
-                    (*itCurr).x.push_back(arc_type);
-                    for (int o = 0; o < NOBJS; ++o)
-                    {
-                        (*itCurr).obj[o] = aux[o];
-                    }
-                    must_add = false;
-                    ++itCurr;
-                }
-                else
-                {
-                    itCurr = sols.erase(itCurr);
-                }
+                itCurr = sols.erase(itCurr);
             }
             else
             {
@@ -484,8 +460,6 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, const 
         // if solution has not been added already, append element to the end
         if (must_add)
         {
-            // Remove dummy element
-            sols.erase(end);
             // Create new solution object
             Solution new_sol((*itParent).x, (*itParent).obj);
             new_sol.x.push_back(arc_type);
@@ -495,8 +469,6 @@ inline void ParetoFrontier::merge(ParetoFrontier &frontier, int arc_type, const 
             }
             // Push new solution at the end of the current solution list
             sols.push_back(new_sol);
-            // Update end position
-            end = sols.insert(sols.end(), dummy);
         }
     }
 

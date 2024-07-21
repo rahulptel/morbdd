@@ -36,7 +36,7 @@ void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int
 	// root node
 	// ObjType zero_array[NOBJS];
 	// memset(zero_array, 0, sizeof(ObjType) * NOBJS);
-	list<int> x;
+	vector<int> x;
 	vector<int> obj(NOBJS, 0);
 	Solution rootSol(x, obj);
 	bdd->get_root()->pareto_frontier = mgmr->request();
@@ -75,9 +75,9 @@ void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int
 				{
 					node->pareto_frontier->merge(*((*prev)->pareto_frontier), 0, (*prev)->weights[0]);
 				}
-				total_sol_per_layer += (node->pareto_frontier->sols.size() / NOBJS);
+				total_sol_per_layer += (node->pareto_frontier->sols.size());
 			}
-			// cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
+			cout << l << ": " << total_sol_per_layer << " " << bdd->layers[l].size() << " " << total_sol_per_layer / bdd->layers[l].size() << endl;
 
 			// if (dominance_strategy > 0)
 			// {
@@ -87,10 +87,10 @@ void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int
 			// }
 
 			// Deallocate frontier from previous layer
-			// for (vector<Node *>::iterator it = bdd->layers[l - 1].begin(); it != bdd->layers[l - 1].end(); ++it)
-			// {
-			// 	mgmr->deallocate((*it)->pareto_frontier);
-			// }
+			for (vector<Node *>::iterator it = bdd->layers[l - 1].begin(); it != bdd->layers[l - 1].end(); ++it)
+			{
+				mgmr->deallocate((*it)->pareto_frontier);
+			}
 		}
 	}
 	// else
@@ -145,8 +145,8 @@ void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int
 
 	// // cout << "Filtering time: " << (double)time_filter/CLOCKS_PER_SEC << endl;
 
-	// // Erase memory
-	// delete mgmr;
+	// Erase memory
+	delete mgmr;
 	cout << bdd->get_terminal()->pareto_frontier->sols.size() << endl;
 	// return bdd->get_terminal()->pareto_frontier;
 }
