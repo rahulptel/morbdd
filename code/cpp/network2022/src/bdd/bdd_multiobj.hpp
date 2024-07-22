@@ -35,7 +35,7 @@ struct MultiObjectiveStats
 struct BDDMultiObj
 {
     // Find pareto frontier from top-down approach
-    static void pareto_frontier_topdown(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);
+    static ParetoFrontier *pareto_frontier_topdown(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);
 
     // Find pareto frontier from bottom-up approach
     // static ParetoFrontier *pareto_frontier_bottomup(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);

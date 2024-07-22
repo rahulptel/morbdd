@@ -21,7 +21,7 @@ inline bool SetPackingStateMinElementSmallestToLargestComp(Node *l, Node *r)
 //
 // Find pareto frontier using top-down approach
 //
-void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int problem_type, int dominance_strategy, MultiObjectiveStats *stats)
+ParetoFrontier *BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int problem_type, int dominance_strategy, MultiObjectiveStats *stats)
 {
 	cout << "\nComputing Pareto Frontier..." << endl;
 
@@ -148,7 +148,7 @@ void BDDMultiObj::pareto_frontier_topdown(BDD *bdd, bool maximization, const int
 	// Erase memory
 	delete mgmr;
 	cout << bdd->get_terminal()->pareto_frontier->sols.size() << endl;
-	// return bdd->get_terminal()->pareto_frontier;
+	return bdd->get_terminal()->pareto_frontier;
 }
 
 //
