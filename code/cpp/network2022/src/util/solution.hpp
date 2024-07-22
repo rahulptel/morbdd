@@ -14,33 +14,19 @@ using namespace std;
 //
 struct Solution
 {
-    list<int> x;        // solution
-    ObjType obj[NOBJS]; // objectives
+    vector<int> x;   // solution
+    vector<int> obj; // objectives
 
     // Constructors
     Solution() {}
-    Solution(list<int> &_x, ObjType *_obj)
-        : x(_x)
-    {
-        copy(_obj, _obj + NOBJS, obj);
-    }
+    Solution(vector<int> &_x, vector<int> &_obj)
+        : x(_x), obj(_obj) {}
 
     map<string, vector<int>> get()
     {
         map<string, vector<int>> sol;
-        vector<int> x_sol, z_sol;
-        for (list<int>::iterator i = x.begin(); i != x.end(); ++i)
-        {
-            x_sol.push_back(*i);
-        }
-
-        for (int i = 0; i < NOBJS; ++i)
-        {
-            z_sol.push_back(obj[i]);
-        }
-
-        sol.insert({"x", x_sol});
-        sol.insert({"z", z_sol});
+        sol.insert({"x", x});
+        sol.insert({"z", obj});
         return sol;
     }
 
@@ -61,9 +47,9 @@ struct Solution
     void print_x()
     {
         cout << "x: ";
-        for (list<int>::iterator i = x.begin(); i != x.end(); ++i)
+        for (vector<int>::iterator i = x.begin(); i != x.end(); ++i)
         {
-            cout << *i << " ";
+            cout << (*i) << " ";
         }
     }
 };
