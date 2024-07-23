@@ -40,7 +40,7 @@ struct BDDMultiObj
     static ParetoFrontier *pareto_frontier_topdown(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);
 
     // Find pareto frontier using dynamic layer cutset
-    static ParetoFrontier *pareto_frontier_dynamic_layer_cutset(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);
+    // static ParetoFrontier *pareto_frontier_dynamic_layer_cutset(BDD *bdd, bool maximization = true, const int problem_type = -1, const int dominance_strategy = 0, MultiObjectiveStats *stats = NULL);
 };
 
 #endif
