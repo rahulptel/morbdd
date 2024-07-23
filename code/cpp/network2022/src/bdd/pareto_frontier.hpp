@@ -15,7 +15,7 @@
 #include <vector>
 #include <list>
 #include <iterator>
-
+#include <map>
 #include "../util/util.hpp"
 #include "../util/solution.hpp"
 

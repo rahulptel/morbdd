@@ -16,6 +16,7 @@
 #include <vector>
 #include <iostream>
 #include <fstream>
+#include <deque>
 
 #include "../bdd/bdd.hpp"
 #include "../util/util.hpp"

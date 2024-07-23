@@ -22,13 +22,13 @@ struct Solution
     Solution(vector<int> &_x, vector<int> &_obj)
         : x(_x), obj(_obj) {}
 
-    map<string, vector<int>> get()
-    {
-        map<string, vector<int>> sol;
-        sol.insert({"x", x});
-        sol.insert({"z", obj});
-        return sol;
-    }
+    // map<string, vector<int>> get()
+    // {
+    //     map<string, vector<int>> sol;
+    //     sol.insert({"x", x});
+    //     sol.insert({"z", obj});
+    //     return sol;
+    // }
 
     void print_obj()
     {
