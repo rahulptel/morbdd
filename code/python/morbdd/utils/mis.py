@@ -274,6 +274,16 @@ class CustomCollater:
         return pids, pids_index, lids, vids, indices, labels
 
 
+def get_instance_path(seed, n_objs, n_vars, split, pid, attach=None, name="indepset", prefix="ind"):
+    size = f'{n_objs}-{n_vars}'
+    suffix = ".dat"
+    if attach:
+        size += f'-{attach}'
+        suffix = ".npz"
+        
+    return path.inst / f'{name}/{size}/{split}/{prefix}_{seed}_{n_objs}_{n_vars}_{pid}{suffix}'
+
+
 def get_size(cfg):
     if cfg.graph_type == "stidsen":
         return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"

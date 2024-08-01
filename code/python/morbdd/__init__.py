@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import sys
 
 root_path_dict = {
     "desktop": Path("/home/rahul/Documents/projects/MORBDD/resources"),
@@ -20,8 +21,14 @@ class ResourcePaths:
     order = resource / "orders"
     dataset = resource / "datasets"
     checkpoint = resource / "checkpoint"
+    bin = resource / "bin"
 
 
-class Const:
+sys.path.append(str(ResourcePaths.bin))
+
+
+class CONST:
     TIME_COMPILE = 1
     TIME_PARETO = 2
+    ONE_ARC = 1
+    ZERO_ARC = -1

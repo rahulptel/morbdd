@@ -1,19 +1,37 @@
+import hashlib
 import io
 import json
+import os
 import random
 import zipfile
 from operator import itemgetter
+
 import numpy as np
 import torch
+from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
 from morbdd import resource_path
-import hashlib
-from torch.distributed import init_process_group
-import os
 
 ZERO_ARC = -1
 ONE_ARC = 1
+
+
+def zipdir(path, ziph):
+    # Iterate over all the files in the directory
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            # Create the relative path to maintain the folder structure
+            ziph.write(os.path.join(root, file),
+                       os.path.relpath(os.path.join(root, file), os.path.join(path, '..')))
+
+
+def get_env(n_objs=3):
+    modname = "libbddenvv2o" + str(n_objs)
+    libbddenv = __import__(modname)
+    env = libbddenv.BDDEnv()
+
+    return env
 
 
 class Meter(object):

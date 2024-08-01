@@ -1,0 +1,43 @@
+name: knapsack
+prefix: kp
+# uncorr: uncorrelated
+# corr: correlated
+inst_type: uncorr
+n_objs: 3
+n_vars: 80
+size: ${prob.n_objs}_${prob.n_vars}
+
+order_type: MinWt
+# Range from which to sample the objective coefficients
+obj_lb: 1
+obj_ub: 1000
+# Range from which to sample the constraint coefficients
+cons_lb: ${prob.obj_lb}
+cons_ub: ${prob.obj_ub}
+state_norm_const: 1000
+layer_norm_const: 100
+
+#########################################
+# BDD Manager Params
+#########################################
+# 1: knapsack
+problem_type: 1
+# 0: Do nothing
+# 1: Minimize bandwidth
+preprocess: false
+# 1: top-down
+# 2: bottom-up (not working)
+# 3: coupled
+pf_enum_method: 1
+# Is problem is maximization form
+maximization: true
+# Dominance strategy
+dominance: false
+# BDD Type
+# 0: Exact
+# 1: Restricted
+bdd_type: 0
+# Only used when bdd_type > 0
+maxwidth: 0
+# Time limit to compute the Pareto frontier
+time_limit: 1800
