@@ -50,22 +50,6 @@ def get_static_order(order_type, data):
         return np.arange(data['n_vars'])
 
 
-def get_dataset_path(cfg):
-    file_path = path.dataset / f"{cfg.prob.name}/{cfg.size}/{cfg.split}"
-    prefix = []
-    if cfg.with_parent:
-        prefix.append("wp")
-    if cfg.layer_weight is not None:
-        prefix.append(f"{cfg.layer_weight}")
-    if cfg.neg_to_pos_ratio != 1.0:
-        prefix.append(f"{cfg.neg_to_pos_ratio}")
-    if len(prefix):
-        prefix = "-".join(prefix)
-        file_path /= prefix
-
-    return file_path
-
-
 def get_bdd_node_features(lidx, node, prev_layer, capacity, layer_norm_const, state_norm_const, with_parent=False):
     # Node features
     norm_state = node["s"][0] / state_norm_const

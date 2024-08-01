@@ -16,6 +16,7 @@ from morbdd.utils import read_from_zip
 from morbdd.utils import zipdir
 import zipfile
 import shutil
+from morbdd.utils import get_dataset_path
 
 
 class DataManager(ABC):
@@ -49,10 +50,14 @@ class DataManager(ABC):
 
     @staticmethod
     def _preprocess_inst(env):
-        pass
+        env.preprocess_inst()
 
     @abstractmethod
     def _get_static_order(self, *args):
+        pass
+
+    @abstractmethod
+    def _get_dynamic_order(self, *args):
         pass
 
     @abstractmethod
@@ -84,13 +89,12 @@ class DataManager(ABC):
 
         return bdd
 
-    def _save_order(self, pid, dynamic_order):
-        if dynamic_order is not None:
-            file_path = path.order / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
-            file_path.mkdir(parents=True, exist_ok=True)
-            file_path /= f"dynamic_{pid}.dat"
-            with open(file_path, "w") as fp:
-                fp.write(" ".join(map(str, dynamic_order)))
+    def _save_order(self, pid, order):
+        file_path = path.order / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        file_path.mkdir(parents=True, exist_ok=True)
+        file_path /= f"{pid}.dat"
+        with open(file_path, "w") as fp:
+            fp.write(" ".join(map(str, order)))
 
     def _save_dd(self, pid, dd):
         file_path = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
@@ -120,9 +124,13 @@ class DataManager(ABC):
         signal.signal(signal.SIGALRM, handle_timeout)
 
         for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
+            order_type = None
             print(f"{rank}/1/10: Fetching instance data and order...")
             data = self._get_instance_data(pid)
-            order = self._get_static_order(data)
+            static_order = self._get_static_order(data)
+            if len(static_order):
+                self._save_order(pid, static_order)
+                order_type = "static"
 
             print(f"{rank}/2/10: Resetting env...")
             env.reset(self.cfg.prob.problem_type,
@@ -132,7 +140,7 @@ class DataManager(ABC):
                       self.cfg.prob.dominance,
                       self.cfg.prob.bdd_type,
                       self.cfg.prob.maxwidth,
-                      order)
+                      static_order)
 
             print(f"{rank}/3/10: Initializing instance...")
             self._set_inst(env, data)
@@ -153,13 +161,16 @@ class DataManager(ABC):
             exact_size = []
             for i, layer in enumerate(dd):
                 exact_size.append(len(layer))
-            dynamic_order = env.get_var_layer()
+            dynamic_order = self._get_dynamic_order()
+            if len(dynamic_order):
+                self._save_order(pid, dynamic_order)
+                order_type = "dynamic"
 
             print(f"{rank}/7/10: Computing Pareto Frontier...")
             try:
                 signal.alarm(self.cfg.prob.time_limit)
                 env.compute_pareto_frontier()
-            except TimeoutError as exc:
+            except TimeoutError:
                 is_pf_computed = False
                 print(f"PF not computed within {self.cfg.prob.time_limit} for pid {pid}")
             else:
@@ -178,18 +189,19 @@ class DataManager(ABC):
             dd = self._tag_dd_nodes(dd, pareto_state_scores)
 
             print(f"{rank}/10/10: Saving data...")
-            # Save order
-            # self._save_order(pid, dynamic_order)
-            # self._save_dd(pid, dd)
-            # self._save_solution(pid, frontier, dynamic_order)
-            # self._save_dm_stats(pid, frontier, env, time_fetch, time_compile, time_pareto)
+            # Save dd, solution and stats
+            self._save_dd(pid, dd)
+            sol_var_order = static_order if order_type == "static" else dynamic_order
+            self._save_solution(pid, frontier, sol_var_order)
+            self._save_dm_stats(pid, frontier, env, time_fetch, time_compile, time_pareto)
 
     @abstractmethod
     def _get_bdd_node_dataset(self, *args):
         pass
 
-    def _generate_dataset_worker(self, rank):
+    def _generate_dataset_worker(self, rank, dataset_path):
         archive_bdds = path.bdd / f"{self.cfg.prob.name}/{self.cfg.size}.zip"
+
         for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
             # Read instance data
             inst_data = self._get_instance_data(self.cfg.size, self.cfg.split, pid)
@@ -200,7 +212,7 @@ class DataManager(ABC):
                 f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}/{pid}.dat").read_text()
             order = np.array(list(map(int, order.strip().split())))
             # Get node data
-            self._get_bdd_node_dataset(pid, inst_data, order, bdd)
+            self._get_bdd_node_dataset(pid, inst_data, order, bdd, dataset_path)
 
     def _generate_dataset_tensor(self, rank):
         pass
@@ -245,22 +257,25 @@ class DataManager(ABC):
                 r.get()
 
     def generate_dataset(self):
+        dataset_path = get_dataset_path(self.cfg)
+        dataset_path.mkdir(exist_ok=True, parents=True)
+
         if self.cfg.n_processes == 1:
-            self._generate_dataset_worker(0)
+            self._generate_dataset_worker(0, dataset_path)
         else:
             pool = mp.Pool(processes=self.cfg.n_processes)
             results = []
 
             for rank in range(self.cfg.n_processes):
-                results.append(pool.apply_async(self._generate_dataset_worker, args=(rank,)))
+                results.append(pool.apply_async(self._generate_dataset_worker, args=(rank, dataset_path)))
 
             for r in results:
                 r.get()
 
-        # dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
-        # M = None
-        # for p in dataset_path.rglob("*.npy"):
-        #     mat = np.load(p)
-        #     M = np.concatenate((M, mat), axis=0) if M is not None else mat
-        #
-        # np.save(dataset_path.parent / f"{self.cfg.split}.npy", M)
+        M = None
+        for p in dataset_path.rglob("*.npy"):
+            mat = np.load(p)
+            M = np.concatenate((M, mat), axis=0) if M is not None else mat
+
+        prefix = dataset_path.stem
+        np.save(dataset_path.parent / f"{prefix}-{self.cfg.split}.npy", M)

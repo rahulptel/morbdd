@@ -4,8 +4,8 @@ import numpy as np
 
 from morbdd.featurizer.knapsack import KnapsackFeaturizer
 from morbdd.utils import FeaturizerConfig
+from morbdd.utils import get_dataset_path
 from morbdd.utils.kp import get_bdd_node_features
-from morbdd.utils.kp import get_dataset_path
 from morbdd.utils.kp import get_instance_data
 from morbdd.utils.kp import get_instance_path
 from morbdd.utils.kp import get_static_order
@@ -71,9 +71,8 @@ class KnapsackDataManager(DataManager):
     def _get_static_order(self, data):
         return get_static_order(self.cfg.prob.order_type, data)
 
-    @staticmethod
-    def _preprocess_inst(env):
-        env.preprocess_inst()
+    def _get_dynamic_order(self, env):
+        return []
 
     def _get_pareto_state_scores(self, data, x, order=None):
         weight = data["cons_coeffs"][0]
@@ -176,7 +175,7 @@ class KnapsackDataManager(DataManager):
 
         return np.array(features_lst)
 
-    def _get_bdd_node_dataset(self, pid, data, order, bdd):
+    def _get_bdd_node_dataset(self, pid, data, order, bdd, dataset_path):
         rng = random.Random(self.cfg.seed_dataset)
         dataset = None
         if self.cfg.for_model == "tf":
@@ -185,6 +184,4 @@ class KnapsackDataManager(DataManager):
             dataset = self._get_bdd_node_dataset_xgboost(data, order, bdd, rng)
 
         if dataset is not None:
-            dataset_path = get_dataset_path(self.cfg)
-            dataset_path.mkdir(exist_ok=True, parents=True)
             np.save(dataset_path / f"{pid}.npy", dataset)

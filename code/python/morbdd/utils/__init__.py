@@ -32,8 +32,7 @@ def get_env(n_objs=3):
     return env
 
 
-def get_dataset_path(cfg):
-    file_path = path.dataset / f"{cfg.prob.name}/{cfg.prob.size}/{cfg.split}"
+def get_dataset_prefix(cfg):
     prefix = []
     if cfg.with_parent:
         prefix.append("wp")
@@ -41,9 +40,19 @@ def get_dataset_path(cfg):
         prefix.append(f"{cfg.layer_weight}")
     if cfg.neg_to_pos_ratio != 1.0:
         prefix.append(f"{cfg.neg_to_pos_ratio}")
+
     if len(prefix):
         prefix = "-".join(prefix)
-        file_path /= prefix
+    else:
+        prefix = "default"
+
+    return prefix
+
+
+def get_dataset_path(cfg):
+    file_path = path.dataset / f"{cfg.prob.name}/{cfg.prob.size}/{cfg.split}"
+    prefix = get_dataset_prefix(cfg)
+    file_path /= prefix
 
     return file_path
 
