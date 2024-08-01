@@ -12,9 +12,7 @@ from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
 from morbdd import resource_path
-
-ZERO_ARC = -1
-ONE_ARC = 1
+from morbdd import CONST
 
 
 def zipdir(path, ziph):
@@ -467,7 +465,7 @@ def get_parent_features(problem, node, bdd, lidx, inst_data, state_norm_const):
 
         for p in node['op']:
             parents_feat.append([
-                ONE_ARC,
+                CONST.ONE_ARC,
                 0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / state_norm_const,
                 0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / inst_data['capacity'],
             ])
@@ -475,7 +473,7 @@ def get_parent_features(problem, node, bdd, lidx, inst_data, state_norm_const):
         for _ in node['zp']:
             # Parent state will be the same as the current state for zero-arc
             parents_feat.append([
-                ZERO_ARC,
+                CONST.ZERO_ARC,
                 node['s'][0] / state_norm_const,
                 node['s'][0] / inst_data['capacity'],
             ])
