@@ -11,7 +11,7 @@ import torch
 from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
-from morbdd import resource_path
+from morbdd import ResourcePaths as path
 from morbdd import CONST
 
 
@@ -30,6 +30,22 @@ def get_env(n_objs=3):
     env = libbddenv.BDDEnv()
 
     return env
+
+
+def get_dataset_path(cfg):
+    file_path = path.dataset / f"{cfg.prob.name}/{cfg.prob.size}/{cfg.split}"
+    prefix = []
+    if cfg.with_parent:
+        prefix.append("wp")
+    if cfg.layer_weight is not None:
+        prefix.append(f"{cfg.layer_weight}")
+    if cfg.neg_to_pos_ratio != 1.0:
+        prefix.append(f"{cfg.neg_to_pos_ratio}")
+    if len(prefix):
+        prefix = "-".join(prefix)
+        file_path /= prefix
+
+    return file_path
 
 
 class Meter(object):
@@ -170,13 +186,13 @@ class KnapsackBDDDataset(Dataset):
                  sampling_type=None, labels_type=None, weights_type=None, device=None):
         super(KnapsackBDDDataset, self).__init__()
 
-        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
         self.node_feat = torch.load(zf.open(f"{sampling_type}/n{pid}.pt")).to(device)
         self.parent_feat = torch.load(zf.open(f"{sampling_type}/p{pid}.pt")).to(device)
         self.inst_feat = torch.load(zf.open(f"{sampling_type}/i{pid}.pt")).to(device)
         self.wt = torch.load(zf.open(f"{sampling_type}/{weights_type}/{pid}.pt")).to(device)
 
-        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
+        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
         self.labels = torch.load(zf.open(f"{labels_type}/{pid}.pt")).to(device)
 
         # self.node_feat = data["nf"].to(device)
@@ -305,7 +321,7 @@ def get_instance_prefix(problem):
 
 def get_instance_data(problem, size, split, pid):
     prefix = get_instance_prefix(problem)
-    archive = resource_path / f"instances/{problem}/{size}.zip"
+    archive = path.inst / f"{problem}/{size}.zip"
     suffix = "dat"
     if problem == "indepset":
         if len(size.split("-")) > 2:
@@ -394,7 +410,7 @@ def get_layer_weights(flag_penalty, penalty, num_vars):
 
 
 def get_bdd_data(problem, size, split, pid):
-    archive = resource_path / f"bdds/{problem}/{size}.zip"
+    archive = path.bdd / f"{problem}/{size}.zip"
     zf = zipfile.ZipFile(archive)
     fp = zf.open(f"{size}/{split}/{pid}.json", "r")
     bdd = json.load(fp)
@@ -515,12 +531,12 @@ def convert_bdd_to_tensor_data(problem,
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "tensors" / problem / size / split / sampling_type
+    sampling_data_path = path.resource / "tensors" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.pt").exists()
     features_exists = False
 
-    labels_data_path = resource_path / "tensors" / problem / size / split / "labels" / label_type
+    labels_data_path = path.resource / "tensors" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.pt").exists()
     labels_exists = False
@@ -531,7 +547,7 @@ def convert_bdd_to_tensor_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "tensors" / problem / size / split / sampling_type / weights_type
+    weights_data_path = path.resource / "tensors" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.pt").exists()
     weights_exists = False
@@ -748,11 +764,11 @@ def convert_bdd_to_xgb_data(problem,
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
+    sampling_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.npy").exists()
 
-    labels_data_path = resource_path / "xgb_data" / problem / size / split / "labels" / label_type
+    labels_data_path = path.resource / "xgb_data" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.npy").exists()
 
@@ -762,7 +778,7 @@ def convert_bdd_to_xgb_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type / weights_type
+    weights_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.npy").exists()
 
@@ -898,11 +914,11 @@ def convert_bdd_to_xgb_mixed_data(problem,
     dataset_type = "mixed"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type
+    sampling_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{counter}.npy").exists()
 
-    labels_data_path = resource_path / "xgb_data" / problem / dataset_type / split / "labels" / label_type
+    labels_data_path = path.resource / "xgb_data" / problem / dataset_type / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{counter}.npy").exists()
 
@@ -912,7 +928,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
+    weights_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{counter}.npy").exists()
 
@@ -1026,7 +1042,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
 
 def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device):
     def get_dataset_knapsack():
-        zf = zipfile.Path(resource_path / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.Path(path.resource / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
         if zf.joinpath(f"{sampling_type}/n{pid}.pt").exists():
             return KnapsackBDDDataset(size=size,
                                       split=split,
@@ -1049,10 +1065,10 @@ def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weight
 def get_xgb_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
     def get_dataset_knapsack():
         dtype = f"npr{neg_pos_ratio}ms{min_samples}"
-        zf = zipfile.Path(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+        zf = zipfile.Path(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
         np_file = zf.joinpath(f"{split}/{dtype}/{pid}.npy")
         if np_file.exists():
-            zf = zipfile.ZipFile(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+            zf = zipfile.ZipFile(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
             with zf.open(f"{split}/{dtype}/{pid}.npy", "r") as fp:
                 data = io.BytesIO(fp.read())
                 np_array = np.load(data)
@@ -1172,7 +1188,7 @@ def get_log_dir_name(name,
 
 
 def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None):
-    mdl_path = resource_path / f"pretrained/nn/{cfg.prob.name}/{cfg.prob.size}"
+    mdl_path = path.resource / f"pretrained/nn/{cfg.prob.name}/{cfg.prob.size}"
     mdl_path.mkdir(parents=True, exist_ok=True)
 
     mdl_name = get_nn_model_name(cfg)
@@ -1213,7 +1229,7 @@ def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None)
 
 
 def checkpoint_test(cfg, scores_df):
-    checkpoint_dir = resource_path / "experiments/"
+    checkpoint_dir = path.resource / "experiments/"
     checkpoint_str = get_log_dir_name(cfg.prob.name,
                                       cfg.prob.size,
                                       cfg.train.flag_layer_penalty,
