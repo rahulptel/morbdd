@@ -52,13 +52,16 @@ class DataManager(ABC):
     def _preprocess_inst(env):
         env.preprocess_inst()
 
-    @abstractmethod
-    def _get_static_order(self, *args):
+    @staticmethod
+    def _reduce_dd(env):
         pass
 
-    @abstractmethod
-    def _get_dynamic_order(self, *args):
-        pass
+    def _get_static_order(self, *args):
+        return []
+
+    @staticmethod
+    def _get_dynamic_order(env):
+        return []
 
     @abstractmethod
     def _get_pareto_state_scores(self, data, x, order=None):
@@ -151,6 +154,7 @@ class DataManager(ABC):
             print(f"{rank}/5/10: Generating decision diagram...")
             env.initialize_dd_constructor()
             env.generate_dd()
+            self._reduce_dd(env)
             time_compile = env.get_time(CONST.TIME_COMPILE)
 
             print(f"{rank}/6/10: Fetching decision diagram...")

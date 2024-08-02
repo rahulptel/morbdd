@@ -62,14 +62,20 @@ class KnapsackDataManager(DataManager):
         env.set_inst(data['n_vars'],
                      data['n_cons'],
                      data['n_objs'],
-                     data['value'],
+                     list(np.array(data['value']).T),
                      [data['weight']],
                      [data['capacity']])
 
     def _get_static_order(self, data):
         return get_static_order(self.cfg.prob.order_type, data)
 
-    def _get_dynamic_order(self, env):
+    @staticmethod
+    def _reduce_dd(env):
+        print("Reducing dd...")
+        env.reduce_dd()
+
+    @staticmethod
+    def _get_dynamic_order(env):
         return []
 
     def _get_pareto_state_scores(self, data, x, order=None):

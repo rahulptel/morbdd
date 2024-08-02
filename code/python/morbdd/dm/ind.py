@@ -99,10 +99,8 @@ class IndepsetDataManager(DataManager):
     def _get_instance_data(self, pid):
         return get_instance_data(self.cfg.prob.size, self.cfg.split, pid)
 
-    def _get_static_order(self, data):
-        return []
-
-    def _get_dynamic_order(self, env):
+    @staticmethod
+    def _get_dynamic_order(env):
         return env.get_var_layer()
 
     @staticmethod
