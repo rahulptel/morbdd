@@ -40,8 +40,6 @@ class KnapsackDataManager(DataManager):
         return data
 
     def _save_instance(self, inst_path, data):
-        inst_path.parent.mkdir(parents=True, exist_ok=True)
-
         n_vars = len(list(data["weight"]))
         n_objs = len(data["value"])
 

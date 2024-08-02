@@ -230,6 +230,7 @@ class DataManager(ABC):
                 for pid in range(start, end):
                     inst_path = self._get_instance_path(self.cfg.seed, n_objs, n_vars, split, pid)
                     inst_data = self._generate_instance(rng, n_vars, n_objs)
+                    inst_path.parent.mkdir(parents=True, exist_ok=True)
                     self._save_instance(inst_path, inst_data)
 
                 if split == "train":
