@@ -161,7 +161,7 @@ class DataManager(ABC):
             exact_size = []
             for i, layer in enumerate(dd):
                 exact_size.append(len(layer))
-            dynamic_order = self._get_dynamic_order()
+            dynamic_order = self._get_dynamic_order(env)
             if len(dynamic_order):
                 self._save_order(pid, dynamic_order)
                 order_type = "dynamic"
@@ -183,7 +183,7 @@ class DataManager(ABC):
 
             print(f"{rank}/8/10: Fetching Pareto Frontier...")
             frontier = env.get_frontier()
-
+            print(f"{pid}: |Z| = {len(frontier['z'])}")
             print(f"{rank}/9/10: Marking Pareto nodes...")
             pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"], order=dynamic_order)
             dd = self._tag_dd_nodes(dd, pareto_state_scores)
