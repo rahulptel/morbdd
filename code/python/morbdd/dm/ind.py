@@ -1,14 +1,13 @@
-from .dm import DataManager
-import numpy as np
-from morbdd.utils.mis import get_instance_data
-from morbdd import ResourcePaths as path
-from morbdd.utils import read_from_zip
 import random
+
+import numpy as np
+
+from morbdd.utils.mis import get_instance_data
 from morbdd.utils.mis import get_instance_path
-from morbdd.utils import get_dataset_path
+from .dm import DataManager
 
 
-class MISDataManager(DataManager):
+class IndepsetDataManager(DataManager):
     def _get_instance_path(self, seed, n_objs, n_vars, split, pid):
         if self.cfg.prob.inst_type == "stidsen":
             return get_instance_path(seed, n_objs, n_vars, split, pid, attach=None, name=self.cfg.prob.name,
@@ -115,7 +114,7 @@ class MISDataManager(DataManager):
                      data['cons_coeffs'],
                      data['rhs'])
 
-    def _get_pareto_state_score(self, data, x, order=None):
+    def _get_pareto_state_scores(self, data, x, order=None):
         x_sol, adj_list_comp = np.array(x), data["adj_list_comp"]
         pareto_state_scores = []
 

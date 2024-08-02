@@ -3,6 +3,6 @@ def dm_factory(cfg):
         from .kp import KnapsackDataManager
         return KnapsackDataManager(cfg)
 
-    elif cfg.prob.name == "mis":
-        from .mis import MISDataManager
-        return MISDataManager(cfg)
+    elif cfg.prob.name == "indepset":
+        from .ind import IndepsetDataManager
+        return IndepsetDataManager(cfg)
