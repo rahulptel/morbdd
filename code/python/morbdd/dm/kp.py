@@ -79,7 +79,8 @@ class KnapsackDataManager(DataManager):
         return []
 
     def _get_pareto_state_scores(self, data, x, order=None):
-        weight = data["cons_coeffs"][0]
+        weight = np.array(data["weight"])
+        x = np.array(x)
         pareto_state_scores = []
         for i in range(1, x.shape[1]):
             x_partial = x[:, :i].reshape(-1, i)
@@ -90,6 +91,24 @@ class KnapsackDataManager(DataManager):
             pareto_state_scores.append((pareto_state, pareto_score))
 
         return pareto_state_scores
+
+    def _tag_dd_nodes(self, bdd, pareto_state_scores):
+        assert len(pareto_state_scores) == len(bdd)
+
+        for l in range(len(bdd)):
+            pareto_states, pareto_scores = pareto_state_scores[l]
+
+            for n in bdd[l]:
+                node_state = n["s"][0]
+                index = np.where(pareto_states == node_state)[0]
+                if len(index):
+                    n["pareto"] = 1
+                    n["score"] = pareto_scores[index[0]]
+                else:
+                    n["pareto"] = 0
+                    n["score"] = 0
+
+        return bdd
 
     def _get_bdd_node_dataset_tf(self, pid, inst_data, order, bdd, rng):
         features_lst, labels_lst, weights_lst = [], [], []

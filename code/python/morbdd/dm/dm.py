@@ -67,31 +67,6 @@ class DataManager(ABC):
     def _get_pareto_state_scores(self, data, x, order=None):
         pass
 
-    def _tag_dd_nodes(self, bdd, pareto_state_scores):
-        assert len(pareto_state_scores) == len(bdd)
-        items = np.array(range(0, 100))
-
-        for l in range(len(bdd)):
-            pareto_states, pareto_scores = pareto_state_scores[l]
-            for pareto_state, score in zip(pareto_states, pareto_scores):
-                _pareto_state = items[pareto_state.astype(bool)]
-                is_found = False
-                for n in bdd[l]:
-                    if np.array_equal(n["s"], _pareto_state):
-                        n["pareto"] = 1
-                        n["score"] = score
-                        is_found = True
-                        break
-
-                assert is_found
-
-            for n in bdd[l]:
-                if "pareto" not in n:
-                    n["pareto"] = 0
-                    n["score"] = 0
-
-        return bdd
-
     def _save_order(self, pid, order):
         file_path = path.order / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)

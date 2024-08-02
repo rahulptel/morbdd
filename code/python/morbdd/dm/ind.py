@@ -157,6 +157,31 @@ class IndepsetDataManager(DataManager):
 
         return pareto_state_scores
 
+    def _tag_dd_nodes(self, bdd, pareto_state_scores):
+        assert len(pareto_state_scores) == len(bdd)
+        items = np.array(range(0, self.cfg.prob.n_vars))
+
+        for l in range(len(bdd)):
+            pareto_states, pareto_scores = pareto_state_scores[l]
+            for pareto_state, score in zip(pareto_states, pareto_scores):
+                _pareto_state = items[pareto_state.astype(bool)]
+                is_found = False
+                for n in bdd[l]:
+                    if np.array_equal(n["s"], _pareto_state):
+                        n["pareto"] = 1
+                        n["score"] = score
+                        is_found = True
+                        break
+
+                assert is_found
+
+            for n in bdd[l]:
+                if "pareto" not in n:
+                    n["pareto"] = 0
+                    n["score"] = 0
+
+        return bdd
+
     def _get_bdd_node_dataset(self, pid, inst_data, order, bdd, dataset_path):
         rng = random.Random(self.cfg.seed_dataset)
         dataset = None
