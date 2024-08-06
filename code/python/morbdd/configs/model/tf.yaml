@@ -1,0 +1,16 @@
+# Transformer config
+type: tf
+model_version: 2
+n_node_feat: 2
+n_edge_type: 2
+d_emb: 64
+n_blocks: 2
+n_heads: 8
+dropout_token: 0
+dropout: 0.2
+dropout_attn: 0.2
+dropout_proj: 0.2
+dropout_mlp: 0.2
+bias_mha: false
+bias_mlp: false
+h2i_ratio: 2

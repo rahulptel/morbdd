@@ -1,0 +1,77 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+  - prob: ind
+  - model: gtf
+
+seed: 1413
+
+#################
+# BDD data config
+bdd_data:
+  # Use parent data used to characterize node information
+  with_parent: false
+  # Number of negative samples used per positive sample
+  neg_to_pos_ratio: 1
+#################
+
+#################
+# BDD data config
+dataset:
+  version: 1
+  train:
+    from_pid: 0
+    to_pid: 10
+  val:
+    from_pid: 1000
+    to_pid: 1010
+  test:
+    from_pid: 1100
+    to_pid: 1200
+#################
+
+#################
+# Training config
+# Distributed training for transformer-based models
+distributed: false
+dist_backend: nccl
+init_method: tcp://127.0.0.1:3456
+# scratch | last_checkpoint
+training_from: scratch
+epochs: 3
+# Epochs after which to validate the model
+validate_every: 1
+# Perform validation on master process in case of distributed training
+validate_on_master: true
+validate_on_split:
+  - val
+# Epochs after which to save the model
+save_every: 1
+# Set this to a positive number when using GPU
+n_worker_dataloader: 1
+# Checkpoint directory with timestamp
+with_timestamp: false
+# Tensorboard config
+# Number of batches after which to log
+# Logging when set to less than zero
+log_every: -1
+layer_weight:
+#################
+
+#################
+# Optimization config
+batch_size: 100
+opt:
+  name: Adam
+  lr: 1e-3
+  wd: 1e-4
+clip_grad: 1.0
+norm_type: 2.0
+agg: sum            # cat | sum
+#################
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
