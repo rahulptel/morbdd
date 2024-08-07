@@ -8,11 +8,12 @@ from operator import itemgetter
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
-from morbdd import ResourcePaths as path
 from morbdd import CONST
+from morbdd import ResourcePaths as path
 
 
 def zipdir(path, ziph):
@@ -1564,3 +1565,9 @@ def dict2cpu(stats):
             cpu_stats[k] = None
 
     return cpu_stats
+
+
+def reduce_epoch_time(epoch_time, device):
+    epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
+    dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
+    return epoch_time
