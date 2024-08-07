@@ -63,7 +63,7 @@ layer_weight:
 # Optimization config
 batch_size: 100
 opt:
-  name: Adam
+  name: AdamW
   lr: 1e-3
   wd: 1e-4
 clip_grad: 1.0

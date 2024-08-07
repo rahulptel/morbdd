@@ -1,5 +1,5 @@
 import hydra
-from morbdd.dm import dm_factory
+from morbdd.trainer import trainer_factory
 
 
 @hydra.main(config_path="../configs", config_name="03_train.yaml", version_base="1.2")

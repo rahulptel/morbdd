@@ -19,6 +19,7 @@ class Trainer(ABC):
 
         return exp
 
+    @abstractmethod
     def get_trainer_str(self):
         return ""
 
@@ -42,7 +43,20 @@ class Trainer(ABC):
         return dstr
 
     @abstractmethod
-    def get_model(self):
+    def set_model(self):
+        pass
+
+    @abstractmethod
+    def set_optimizer(self):
+        pass
+
+    @abstractmethod
+    def set_dataset(self, *args):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def print_stats(*args):
         pass
 
     @abstractmethod
