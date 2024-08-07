@@ -179,16 +179,16 @@ class DataManager(ABC):
         pass
 
     def _generate_dataset_worker(self, rank, dataset_path):
-        archive_bdds = path.bdd / f"{self.cfg.prob.name}/{self.cfg.size}.zip"
+        archive_bdds = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
 
         for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
             # Read instance data
-            inst_data = self._get_instance_data(self.cfg.size, self.cfg.split, pid)
-            file = f"{self.cfg.size}/{self.cfg.split}/{pid}.json"
+            inst_data = self._get_instance_data(pid)
+            file = f"{self.cfg.prob.size}/{self.cfg.split}/{pid}.json"
             bdd = read_from_zip(archive_bdds, file, format="json")
             # Read order
             order = path.order.joinpath(
-                f"{self.cfg.prob.name}/{self.cfg.size}/{self.cfg.split}/{pid}.dat").read_text()
+                f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}/{pid}.dat").read_text()
             order = np.array(list(map(int, order.strip().split())))
             # Get node data
             self._get_bdd_node_dataset(pid, inst_data, order, bdd, dataset_path)
