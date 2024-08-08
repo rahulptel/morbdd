@@ -112,7 +112,7 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     def __init__(self,
                  d_emb=64,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  bias_mha=False,
                  dropout_mha=0.2,
@@ -127,7 +127,7 @@ class Encoder(nn.Module):
                                                           bias_mlp=bias_mlp,
                                                           dropout_mlp=dropout_mlp,
                                                           h2i_ratio=h2i_ratio)
-                                             for _ in range(n_blocks)])
+                                             for _ in range(n_layers)])
 
     def forward(self, n):
         for block in self.encoder_blocks:

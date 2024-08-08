@@ -321,11 +321,11 @@ class GTEncoderLayer(nn.Module):
 
 
 class GATEncoder(nn.Module):
-    def __init__(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2):
+    def __init__(self, d_emb=64, n_layers=2, n_heads=8, dropout=0.2):
         super(GATEncoder, self).__init__()
         d_k = d_emb // n_heads
         self.conv_list = nn.ModuleList([GATConv(d_emb, d_k, heads=n_heads, dropout=dropout)
-                                        for _ in range(n_blocks)])
+                                        for _ in range(n_layers)])
 
     def forward(self, n, adj_mat):
         n_nodes = n.shape[0]
@@ -340,7 +340,7 @@ class GATEncoder(nn.Module):
 class Encoder(nn.Module):
     def __init__(self,
                  d_emb=64,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  bias_mha=False,
                  dropout_mha=0.2,
@@ -355,7 +355,7 @@ class Encoder(nn.Module):
                                                           bias_mlp=bias_mlp,
                                                           dropout_mlp=dropout_mlp,
                                                           h2i_ratio=h2i_ratio)
-                                             for _ in range(n_blocks)])
+                                             for _ in range(n_layers)])
 
     def forward(self, n):
         for block in self.encoder_blocks:
@@ -367,7 +367,7 @@ class Encoder(nn.Module):
 class GTEncoder(nn.Module):
     def __init__(self,
                  d_emb=64,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  bias_mha=False,
                  dropout_mha=0.2,
@@ -382,8 +382,8 @@ class GTEncoder(nn.Module):
                                                             bias_mlp=bias_mlp,
                                                             dropout_mlp=dropout_mlp,
                                                             h2i_ratio=h2i_ratio,
-                                                            is_last_block=i == n_blocks - 1)
-                                             for i in range(n_blocks)])
+                                                            is_last_block=i == n_layers - 1)
+                                             for i in range(n_layers)])
 
     def forward(self, n, e):
         # print("EncoderBlock: ", n[0][0])
@@ -401,7 +401,7 @@ class ParetoStatePredictorMIS(nn.Module):
                  n_edge_type=2,
                  d_emb=64,
                  top_k=5,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  dropout_token=0.2,
                  dropout=0.2,
@@ -412,7 +412,7 @@ class ParetoStatePredictorMIS(nn.Module):
         self.encoder_type = encoder_type
         self.token_emb = TokenEmbedGraph(encoder_type, n_node_feat, n_edge_type=n_edge_type, d_emb=d_emb, top_k=top_k,
                                          dropout=dropout)
-        self.set_node_encoder(d_emb=d_emb, n_blocks=n_blocks, n_heads=n_heads, dropout_token=dropout_token,
+        self.set_node_encoder(d_emb=d_emb, n_layers=n_layers, n_heads=n_heads, dropout_token=dropout_token,
                               bias_mha=bias_mha, dropout=dropout, bias_mlp=bias_mlp,
                               h2i_ratio=h2i_ratio)
         assert self.node_encoder is not None
@@ -451,12 +451,12 @@ class ParetoStatePredictorMIS(nn.Module):
 
         return logits
 
-    def set_node_encoder(self, d_emb=64, n_blocks=2, n_heads=8, dropout=0.2, dropout_token=0.0,
+    def set_node_encoder(self, d_emb=64, n_layers=2, n_heads=8, dropout=0.2, dropout_token=0.0,
                          bias_mha=False, bias_mlp=False, h2i_ratio=2):
         if self.encoder_type == "transformer":
             print("Using Graph Transformer")
             self.node_encoder = GTEncoder(d_emb=d_emb,
-                                          n_blocks=n_blocks,
+                                          n_layers=n_layers,
                                           n_heads=n_heads,
                                           bias_mha=bias_mha,
                                           dropout_mha=dropout,
@@ -466,7 +466,7 @@ class ParetoStatePredictorMIS(nn.Module):
         elif self.encoder_type == "gat":
             print("Using GAT Encoder")
             self.node_encoder = GATEncoder(d_emb=d_emb,
-                                           n_blocks=n_blocks,
+                                           n_layers=n_layers,
                                            n_heads=n_heads,
                                            dropout=dropout)
         else:
@@ -480,7 +480,7 @@ class ParetoStatePredictorKnapsack(nn.Module):
                  n_obj_feat=2,
                  n_con_feat=2,
                  d_emb=64,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  bias_mha=False,
                  dropout_mha=0,
@@ -495,7 +495,7 @@ class ParetoStatePredictorKnapsack(nn.Module):
                                             d_emb)
         self.encoder = self.get_encoder(encoder_type,
                                         d_emb=d_emb,
-                                        n_blocks=n_blocks,
+                                        n_layers=n_layers,
                                         n_heads=n_heads,
                                         bias_mha=bias_mha,
                                         dropout_mha=dropout_mha,

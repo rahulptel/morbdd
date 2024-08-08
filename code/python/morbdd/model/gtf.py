@@ -176,7 +176,7 @@ class GTEncoderLayer(nn.Module):
 class GTEncoder(nn.Module):
     def __init__(self,
                  d_emb=64,
-                 n_blocks=2,
+                 n_layers=2,
                  n_heads=8,
                  bias_mha=False,
                  dropout_attn=0.1,
@@ -193,8 +193,8 @@ class GTEncoder(nn.Module):
                                                             bias_mlp=bias_mlp,
                                                             dropout_mlp=dropout_mlp,
                                                             h2i_ratio=h2i_ratio,
-                                                            is_last_block=i == n_blocks - 1)
-                                             for i in range(n_blocks)])
+                                                            is_last_block=i == n_layers - 1)
+                                             for i in range(n_layers)])
 
     def forward(self, n, e):
         # print("EncoderBlock: ", n[0][0])
