@@ -246,5 +246,14 @@ class IndepsetDataManager(DataManager):
             else:
                 data = pos_data
 
-            if data.shape[0]:
-                np.save(dataset_path / f"{pid}.npy", data)
+            if dataset is None:
+                dataset = data
+            else:
+                dataset = np.concatenate((dataset, data), axis=0)
+
+        dataset = np.concatenate((np.array([pid] * dataset.shape[0]).reshape(-1, 1),
+                                  dataset), axis=1)
+        dataset = dataset.astype(np.ushort)
+
+        print(f"Pid :{pid}, dataset size: {dataset.shape}")
+        np.save(dataset_path / f"{pid}.npy", dataset)
