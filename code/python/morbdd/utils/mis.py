@@ -100,8 +100,8 @@ class MISTrainingHelper(TrainingHelper):
                 model_str += f"-emb-{self.cfg.d_emb}"
             if self.cfg.top_k != 5:
                 model_str += f"-k-{self.cfg.top_k}"
-            if self.cfg.n_blocks != 2:
-                model_str += f"-l-{self.cfg.n_blocks}"
+            if self.cfg.n_layers != 2:
+                model_str += f"-l-{self.cfg.n_layers}"
             if self.cfg.n_heads != 8:
                 model_str += f"-h-{self.cfg.n_heads}"
             if self.cfg.dropout_token != 0.0:
@@ -280,7 +280,7 @@ def get_instance_path(seed, n_objs, n_vars, split, pid, attach=None, name="indep
     if attach:
         size += f'-{attach}'
         suffix = ".npz"
-        
+
     return path.inst / f'{name}/{size}/{split}/{prefix}_{seed}_{n_objs}_{n_vars}_{pid}{suffix}'
 
 

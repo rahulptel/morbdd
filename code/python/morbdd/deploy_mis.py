@@ -76,7 +76,7 @@ def load_model(cfg, model_path):
                                     n_edge_type=cfg.n_edge_type,
                                     d_emb=cfg.d_emb,
                                     top_k=cfg.top_k,
-                                    n_blocks=cfg.n_blocks,
+                                    n_layers=cfg.n_layers,
                                     n_heads=cfg.n_heads,
                                     dropout_token=cfg.dropout_token,
                                     bias_mha=cfg.bias_mha,
