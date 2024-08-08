@@ -1,8 +1,10 @@
 def trainer_factory(cfg):
-    if cfg.prob.name == "kp":
-        from kp import KnapsackTrainer
-        return KnapsackTrainer(cfg)
+    # Transformer
+    if cfg.model.type == "tf":
+        from .ann import TransformerTrainer
+        return TransformerTrainer(cfg)
 
-    elif cfg.prob.name == "ind":
-        from ind import IndepsetTrainer
-        return IndepsetTrainer(cfg)
+    # Graph Transformer
+    elif cfg.model.type == "gtf":
+        from .ann import TransformerTrainer
+        return TransformerTrainer(cfg)

@@ -1,9 +1,9 @@
 defaults:
   - _self_
-  - override hydra/hydra_logging: disabled
-  - override hydra/job_logging: disabled
   - prob: ind
   - model: gtf
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
 
 seed: 1413
 
@@ -70,6 +70,8 @@ clip_grad: 1.0
 norm_type: 2.0
 agg: sum            # cat | sum
 #################
+
+split:
 
 hydra:
   output_subdir: null

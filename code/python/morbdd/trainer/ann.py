@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from morbdd import ResourcePaths as path
 from morbdd.utils import Meter
-from morbdd.utils import get_dataset_path
+from morbdd.utils import get_dataset_prefix
 from morbdd.utils import get_device
 from morbdd.utils import reduce_epoch_time
 from morbdd.utils import set_seed
@@ -232,10 +232,14 @@ class ANNTrainer(Trainer):
         return data
 
     def set_dataset(self, split):
-        bdd_node_dataset = np.load(str(path.dataset) + f"/{self.cfg.prob.name}/{self.cfg.size}/{split}.npy")
-        dataset_path = get_dataset_path(self.cfg)
-        prefix = dataset_path.stem
-        dataset_path = dataset_path.parent / f"{prefix}-{split}.npz"
+        self.cfg.split = split
+        dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        prefix = get_dataset_prefix(with_parent=self.cfg.bdd_data.with_parent,
+                                    layer_weight=self.cfg.layer_weight,
+                                    neg_to_pos_ratio=self.cfg.bdd_data.neg_to_pos_ratio)
+        dataset_path = dataset_path / f"{prefix}-{split}.npy"
+        print(dataset_path)
+        bdd_node_dataset = np.load(dataset_path)
 
         from_pid, to_pid = self.cfg.dataset[split].from_pid, self.cfg.dataset[split].to_pid
         valid_rows = (from_pid <= bdd_node_dataset[:, 0])
@@ -260,8 +264,8 @@ class ANNTrainer(Trainer):
         if self.cfg.prob.name == "knapsack":
             pass
         elif self.cfg.prob.name == "indepset":
-            dataset = IndepsetBDDNodeDataset(bdd_node_dataset, inst_node_dataset, inst_edge_dataset,
-                                             top_k=self.cfg.top_k)
+            dataset = IndepsetBDDNodeDataset(self.cfg.prob.n_vars, self.cfg.prob.n_objs, bdd_node_dataset,
+                                             inst_node_dataset, inst_edge_dataset, top_k=self.cfg.model.top_k)
         assert dataset is not None
 
         setattr(self, f"{split}_dataset", dataset)
@@ -546,51 +550,41 @@ class TransformerTrainer(ANNTrainer):
             sys.exit()
 
     def get_model_str(self):
-        model_str = ""
-        if self.cfg.model.name == "gtf":
-            model_str += "tf-v" + str(self.cfg.model_version) + "-"
-            if self.cfg.d_emb != 64:
-                model_str += f"-emb-{self.cfg.d_emb}"
-            if self.cfg.top_k != 5:
-                model_str += f"-k-{self.cfg.top_k}"
-            if self.cfg.n_blocks != 2:
-                model_str += f"-l-{self.cfg.n_blocks}"
-            if self.cfg.n_heads != 8:
-                model_str += f"-h-{self.cfg.n_heads}"
-            if self.cfg.dropout_token != 0.0:
-                model_str += f"-dptk-{self.cfg.dropout_token}"
-            if self.cfg.model_version == 3:
-                if self.cfg.dropout_attn != 0.2:
-                    model_str += f"-dpa-{self.cfg.dropout_attn}"
-                if self.cfg.dropout_proj != 0.2:
-                    model_str += f"-dpp-{self.cfg.dropout_proj}"
-                if self.cfg.dropout_mlp != 0.2:
-                    model_str += f"-dpm-{self.cfg.dropout_mlp}"
-            else:
-                if self.cfg.dropout != 0.2:
-                    model_str += f"-dp-{self.cfg.dropout}"
-            if self.cfg.bias_mha:
-                model_str += f"-ba-{self.cfg.bias_mha}"
-            if self.cfg.bias_mha:
-                model_str += f"-bm-{self.cfg.bias_mlp}"
-            if self.cfg.h2i_ratio != 2:
-                model_str += f"-h2i-{self.cfg.h2i_ratio}"
-
-        elif self.cfg.encoder_type == "gat":
-            model_str += "gat"
-            if self.cfg.d_emb != 64:
-                model_str += f"-emb-{self.cfg.d_emb}"
+        model_str = f"{self.cfg.model.type}-v{self.cfg.model.version}-"
+        if self.cfg.model.d_emb != 64:
+            model_str += f"-emb-{self.cfg.model.d_emb}"
+        if self.cfg.model.n_layers != 2:
+            model_str += f"-l-{self.cfg.model.n_layers}"
+        if self.cfg.model.n_heads != 8:
+            model_str += f"-h-{self.cfg.model.n_heads}"
+        if self.cfg.model.dropout_token != 0.0:
+            model_str += f"-dptk-{self.cfg.model.dropout_token}"
+        if self.cfg.model.dropout_attn != 0.2:
+            model_str += f"-dpa-{self.cfg.dropout_attn}"
+        if self.cfg.model.dropout_proj != 0.2:
+            model_str += f"-dpp-{self.cfg.model.dropout_proj}"
+        if self.cfg.model.dropout_mlp != 0.2:
+            model_str += f"-dpm-{self.cfg.model.dropout_mlp}"
+        if self.cfg.model.bias_mha:
+            model_str += f"-ba-{self.cfg.model.bias_mha}"
+        if self.cfg.model.bias_mha:
+            model_str += f"-bm-{self.cfg.model.bias_mlp}"
+        if self.cfg.model.h2i_ratio != 2:
+            model_str += f"-h2i-{self.cfg.model.h2i_ratio}"
+        # Graph transformer specific
+        if self.cfg.model.type == "gtf" and self.cfg.model.top_k != 5:
+            model_str += f"-k-{self.cfg.model.top_k}"
 
         return model_str
 
     def set_model(self):
-        if self.cfg.model.name == "gtf":
+        if self.cfg.model.type == "gtf":
             from morbdd.model.psp import GTFParetoStatePredictor
             self.model = GTFParetoStatePredictor()
-        elif self.cfg.model.name == "tf":
+        elif self.cfg.model.type == "tf":
             from morbdd.model.psp import TFParetoStatePredictor
             self.model = TFParetoStatePredictor()
-        assert self.model is not None, "Invalid model name"
+        assert self.model is not None, "Invalid model type"
 
     def process_batch_indepset(self, batch, curr_iter=0, log=False, split="train"):
         objs, adjs, pos, _, lids, vids, states, labels = batch
