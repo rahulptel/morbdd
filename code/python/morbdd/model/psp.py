@@ -21,6 +21,8 @@ class TFParetoStatePredictor(nn.Module):
                  h2i_ratio=2,
                  device=None):
         super(TFParetoStatePredictor, self).__init__()
+        print("Model: Transformer")
+
         self.tokenizer = KnapsackInstanceTokenizer(device=device)
         self.token_emb = TokenEmbedKnapsack(n_obj_feat,
                                             n_con_feat,
@@ -86,7 +88,7 @@ class GTFParetoStatePredictor(nn.Module):
                  bias_mlp=False,
                  h2i_ratio=2):
         super(GTFParetoStatePredictor, self).__init__()
-        print("Using Graph Transformer")
+        print("Model: Graph Transformer")
         self.token_emb = TokenEmbedGraph(n_node_feat, n_edge_type=n_edge_type, d_emb=d_emb, top_k=top_k,
                                          dropout=dropout_token)
         self.node_encoder = GTEncoder(d_emb=d_emb,

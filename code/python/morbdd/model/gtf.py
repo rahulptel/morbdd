@@ -66,9 +66,6 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
         self.drop_proj_n = nn.Dropout(dropout_proj)
 
         # Node Q, K, V params
-        # self.W_q = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
-        # self.W_k = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
-        # self.W_v = nn.Linear(d_emb, n_heads * self.d_k, bias=bias_mha)
         self.W_qkv = nn.Linear(d_emb, 3 * d_emb, bias=bias_mha)
         self.O_n = nn.Linear(n_heads * self.d_k, d_emb, bias=bias_mha)
 
@@ -118,8 +115,7 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
         # batch_size x n_heads x n_nodes x d_k
         _V = self.drop_attn(_A) @ V
         _V = torch.einsum('ijkl,ijk->ijkl', [_V, dynamic_centrality])
-
-        n = self.drop_proj_n(self.O_n(_V.transpose(1, 2))).reshape(B, -1, self.d_emb)
+        n = self.drop_proj_n(self.O_n(_V.transpose(1, 2).reshape(B, -1, self.d_emb)))
         e = None if self.O_e is None else self.drop_proj_e(self.O_e(_E.permute(0, 2, 3, 1)))
 
         return n, e
@@ -161,13 +157,11 @@ class GTEncoderLayer(nn.Module):
 
     def forward(self, n, e=None):
         n_, e_ = self.mha(self.ln_n1(n), self.ln_e1(e))
-        # n = n + self.dropout_mha_n(n_)
-        n += n_
+        n = n + n_
 
         n = n + self.dropout_mlp_n(self.mlp_node(self.ln_n2(n)))
         if not self.is_last_block:
-            # e = e + self.dropout_mha_e(e_)
-            e += e_
+            e = e + e_
             e = e + self.dropout_mlp_e(self.mlp_edge(self.ln_e2(e)))
 
         return n, e
@@ -197,9 +191,7 @@ class GTEncoder(nn.Module):
                                              for i in range(n_layers)])
 
     def forward(self, n, e):
-        # print("EncoderBlock: ", n[0][0])
         for block in self.encoder_blocks:
             n, e = block(n, e)
-            # print("EncoderBlock: ", n[0][0])
 
         return n

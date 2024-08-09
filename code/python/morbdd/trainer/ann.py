@@ -204,9 +204,7 @@ class ANNTrainer(Trainer):
 
     def set_optimizer(self):
         opt_cls = getattr(optim, self.cfg.opt.name)
-        optimizer = opt_cls(self.model.parameters(), lr=self.cfg.opt.lr, weight_decay=self.cfg.opt.wd)
-
-        return optimizer
+        self.optimizer = opt_cls(self.model.parameters(), lr=self.cfg.opt.lr, weight_decay=self.cfg.opt.wd)
 
     def get_instance_data(self, split, pid):
         data = None
@@ -222,7 +220,7 @@ class ANNTrainer(Trainer):
         elif self.cfg.prob.name == "indepset":
             data = get_instance_data_ind(self.cfg.prob.size, split, pid)
             data["inst_node"] = data.pop("obj_coeffs")
-            data["inst_node"] = np.array(data["inst_node"]).T
+            data["inst_node"] = np.array(data["inst_node"])
 
             data["inst_edge"] = data.pop("adj_list")
             data["inst_edge"] = np.array(data["inst_edge"])
@@ -238,7 +236,7 @@ class ANNTrainer(Trainer):
                                     layer_weight=self.cfg.layer_weight,
                                     neg_to_pos_ratio=self.cfg.bdd_data.neg_to_pos_ratio)
         dataset_path = dataset_path / f"{prefix}-{split}.npy"
-        print(dataset_path)
+        print(f"Dataset {split} path: ", dataset_path)
         bdd_node_dataset = np.load(dataset_path)
 
         from_pid, to_pid = self.cfg.dataset[split].from_pid, self.cfg.dataset[split].to_pid
@@ -281,7 +279,7 @@ class ANNTrainer(Trainer):
                                stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
                                stats[prefix + "specificity"], ept, bt, dt))
 
-        print("\nLogit distribution:")
+        print("Logit distribution:")
         print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
         for i in ["0", "1"]:
             print(print_str.format("lgt" + i,
@@ -289,7 +287,7 @@ class ANNTrainer(Trainer):
                                    stats[prefix + "lgt" + i + "-std"],
                                    stats[prefix + "lgt" + i + "-min"],
                                    stats[prefix + "lgt" + i + "-max"]))
-        print("--------------------------\n")
+        print()
 
     @staticmethod
     def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
@@ -315,13 +313,13 @@ class ANNTrainer(Trainer):
             if self.val_sampler is None:
                 if "cuda" in self.device_str:
                     if self.cfg.distributed:
-                        print("Multi-GPU: Validation on master GPU")
+                        print("Training: Multi-GPU, Validation: Master/Single GPU")
                     else:
-                        print("Validation on GPU")
+                        print("Training/Validation: Single GPU")
                 else:
-                    print("Validation on CPU")
+                    print("Training/Validation: CPU")
             else:
-                print("Multi-GPU: Validation across GPUs")
+                print("Training/Validation: Multi-GPU")
 
     def get_grad_norm(self, norm=2):
         grads = torch.empty(0).to(next(self.model.parameters()).device)
@@ -332,6 +330,7 @@ class ANNTrainer(Trainer):
         return torch.norm(grads, p=norm)
 
     def setup(self):
+        print("Training set-up in progress...")
         set_seed(self.cfg.seed)
 
         # Set-up device
@@ -339,7 +338,7 @@ class ANNTrainer(Trainer):
                                  init_method=self.cfg.init_method,
                                  dist_backend=self.cfg.dist_backend)
         (self.device, self.device_str, self.pin_memory, self.master, self.device_id, self.world_size) = device_data
-        print("Device :", self.device)
+        print("Device: ", self.device)
 
         self.set_model()
         self.set_optimizer()
@@ -404,9 +403,7 @@ class ANNTrainer(Trainer):
                 data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=self.device))
                 log = self.master and self.cfg.log_every > 0 and batch_id % self.cfg.log_every == 0
                 curr_iter = (epoch * max_batches) + batch_id
-
-                loss, batch_result = self.process_batch(batch, F.cross_entropy, curr_iter=curr_iter, log=log,
-                                                        split="val-" + split)
+                loss, batch_result = self.process_batch(batch, curr_iter=curr_iter, log=log, split="val-" + split)
 
                 result = torch.cat((result, batch_result), dim=1)
                 losses.update(loss.detach(), batch_result.shape[0])
@@ -471,6 +468,8 @@ class ANNTrainer(Trainer):
         return stats, result
 
     def train(self):
+        print()
+        print("Training in progress...")
         if self.master:
             print("Train samples: {}, Val samples {}".format(len(self.train_dataset), len(self.val_dataset)))
             print("Train loader: {}, Val loader {}".format(len(self.train_dataloader), len(self.val_dataloader)))
@@ -534,7 +533,7 @@ class ANNTrainer(Trainer):
                                         optimizer=self.optimizer.state_dict())
                 self.save_stats(self.ckpt_path)
 
-            print() if self.master else None
+            print("--------------------------\n") if self.master else None
 
 
 class TransformerTrainer(ANNTrainer):
@@ -559,11 +558,11 @@ class TransformerTrainer(ANNTrainer):
             model_str += f"-h-{self.cfg.model.n_heads}"
         if self.cfg.model.dropout_token != 0.0:
             model_str += f"-dptk-{self.cfg.model.dropout_token}"
-        if self.cfg.model.dropout_attn != 0.2:
-            model_str += f"-dpa-{self.cfg.dropout_attn}"
-        if self.cfg.model.dropout_proj != 0.2:
+        if self.cfg.model.dropout_attn != 0.0:
+            model_str += f"-dpa-{self.cfg.model.dropout_attn}"
+        if self.cfg.model.dropout_proj != 0.0:
             model_str += f"-dpp-{self.cfg.model.dropout_proj}"
-        if self.cfg.model.dropout_mlp != 0.2:
+        if self.cfg.model.dropout_mlp != 0.0:
             model_str += f"-dpm-{self.cfg.model.dropout_mlp}"
         if self.cfg.model.bias_mha:
             model_str += f"-ba-{self.cfg.model.bias_mha}"
