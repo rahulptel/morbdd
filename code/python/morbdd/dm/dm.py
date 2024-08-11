@@ -204,6 +204,7 @@ class DataManager(ABC):
 
         for s in self.cfg.sizes:
             n_objs, n_vars = map(int, s.split("-"))
+            self.cfg.prob.n_objs, self.cfg.prob.n_vars = n_objs, n_vars
             start, end = 0, self.cfg.n_train
             for split in ["train", "val", "test"]:
                 for pid in range(start, end):
