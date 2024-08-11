@@ -281,7 +281,7 @@ def get_instance_path(seed, n_objs, n_vars, split, pid, attach=None, name="indep
         size += f'-{attach}'
         suffix = ".npz"
 
-    return path.inst / f'{name}/{size}/{split}/{prefix}_{seed}_{n_objs}_{n_vars}_{pid}{suffix}'
+    return path.inst / f'{name}/{size}/{split}/{prefix}_{seed}_{size}_{pid}{suffix}'
 
 
 def get_size(cfg):
