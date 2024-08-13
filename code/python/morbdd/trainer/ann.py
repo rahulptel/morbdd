@@ -296,7 +296,7 @@ class ANNTrainer(Trainer):
         if best_model:
             model_path = save_path / "best_model.pt"
         else:
-            model_path = save_path / "model.pt"
+            model_path = save_path / f"model_{epoch}.pt"
         # print("Saving model to: {}".format(model_path))
 
         model_obj = {"epoch": epoch + 1, "model": model, "optimizer": optimizer}
