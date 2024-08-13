@@ -1,0 +1,131 @@
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+seed: 1413
+prob:
+  name: indepset
+  prefix: ind
+  n_objs: 3
+  n_vars: 100
+  attach: 4
+  seed: 7
+  obj_norm_const: 100
+size:
+
+# Raw data config used to generate the dataset
+raw_data:
+  # Save parents of nodes in the dataset
+  with_parent: false
+  max_objs: 10
+
+# Dataset config
+dataset:
+  version: 1
+  train:
+    from_pid: 0
+    to_pid: 10
+  val:
+    from_pid: 1000
+    to_pid: 1010
+  test:
+    from_pid: 1100
+    to_pid: 1200
+  # Number of negative samples per one positive sample
+  neg_to_pos_ratio: 1
+  validate_on: val
+
+# Distributed training
+distributed: false
+dist_backend: nccl
+init_method: tcp://127.0.0.1:3456
+
+# Training config
+# scratch | last_checkpoint
+training_from: scratch
+epochs: 3
+# Epochs after which to validate the model
+validate_every: 1
+validate_on_master: true
+validate_on_split:
+  - val
+# Epochs after which to save the model
+save_every: 1
+# Set this to a positive number when using GPU
+n_worker_dataloader: 1
+# Checkpoint directory with timestamp
+with_timestamp: false
+# Tensorboard config
+# Number of batches after which to log
+# Logging when set to less than zero
+log_every: -1
+
+
+# Optimization config
+batch_size: 100
+opt:
+  name: Adam
+  lr: 1e-3
+  wd: 1e-4
+clip_grad: 1.0
+norm_type: 2.0
+agg: sum            # cat | sum
+
+# Model config
+# transformer | gat
+encoder_type: transformer
+n_node_feat: 2
+n_edge_type: 2
+d_emb: 64
+top_k: 5
+n_layers: 2
+n_heads: 8
+dropout_token: 0
+dropout: 0.2
+bias_mha: false
+bias_mlp: false
+h2i_ratio: 2
+
+
+deploy:
+  # learning | downstream
+  task: learning
+  # learning: train | val
+  # downstream: train | val | test
+  split: val
+  pid: 1000
+  # Select all nodes upto layer
+  select_all: 1
+  # Method used for stitching
+  # parent: Select all nodes with a high-scoring parent
+  # min_resistance: Minimize local resistance based on lookahead
+  # mip: Minimize global resistance using MIP
+  stitch: parent
+  # To be used with min resistance
+  lookahead: 1
+  node_select:
+    strategy: threshold
+    prune_from_lid: 1
+    width: 100
+    threshold: 0.5
+
+# Bin parameters
+problem_type: 2
+preprocess: false
+# Restriction method
+# 1: Manual
+method: 1
+# Is problem is maximization form
+maximization: true
+dominance: 0
+bdd_type: 0
+maxwidth: 0
+order_type: min_state
+# Graph type for Set Packing/Independent Set problem
+graph_type: stidsen
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
