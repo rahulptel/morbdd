@@ -1,11 +1,11 @@
 import hydra
-from morbdd.dm import dm_factory
+from morbdd.deployer import deployer_factory
 
 
 @hydra.main(config_path="../configs", config_name="05_deploy.yaml", version_base="1.2")
 def main(cfg):
-    trainer = trainer_factory(cfg)
-    trainer.predict()
+    deployer = deployer_factory(cfg)
+    deployer.deploy()
 
 
 if __name__ == "__main__":

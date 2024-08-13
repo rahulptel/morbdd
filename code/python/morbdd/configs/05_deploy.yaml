@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - prob: ind
-  - model: gtf
+  - prob: kp
+  - model: gbt
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
@@ -29,10 +29,10 @@ dataset:
   version: 1
   train:
     from_pid: 0
-    to_pid: 10
+    to_pid: 1000
   val:
     from_pid: 1000
-    to_pid: 1010
+    to_pid: 1100
   test:
     from_pid: 1100
     to_pid: 1200
@@ -79,7 +79,17 @@ norm_type: 2.0
 agg: sum            # cat | sum
 #################
 
-split:
+deploy:
+  split: test
+  from_pid: 1100
+  to_pid: 1101
+  n_processes: 1
+  order_type: MinWt
+  node_select:
+    strategy: threshold
+    alpha: 20
+    beta: 5
+    tau: 0.49
 
 hydra:
   output_subdir: null
