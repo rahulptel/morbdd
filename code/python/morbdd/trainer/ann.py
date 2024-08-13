@@ -347,7 +347,7 @@ class ANNTrainer(Trainer):
         self.set_checkpoint_path()
         self.ckpt_path.mkdir(exist_ok=True, parents=True)
         print("Checkpoint path: {}".format(self.ckpt_path))
-        self.writer = SummaryWriter(self.ckpt_path) if self.cfg.log_every else None
+        self.writer = SummaryWriter(self.ckpt_path) if self.cfg.log_every > 0 else None
         if self.cfg.training_from == "last_checkpoint":
             ckpt = torch.load(self.ckpt_path / "model.pt", map_location="cpu")
             self.model.load_state_dict(ckpt["state_dict"])
@@ -384,6 +384,26 @@ class ANNTrainer(Trainer):
                                          num_workers=self.cfg.n_worker_dataloader,
                                          pin_memory=self.pin_memory)
         self.print_validation_machine()
+
+    def setup_predict(self):
+        set_seed(self.cfg.seed)
+        self.device = torch.device("cpu")
+        self.device_str = "cpu"
+        self.pin_memory = False
+        self.master = True
+        self.device_id = 0
+        self.world_size = 1
+
+        self.set_model()
+        self.set_checkpoint_path()
+        self.ckpt_path.mkdir(exist_ok=True, parents=True)
+        print("Checkpoint path: {}".format(self.ckpt_path))
+
+        ckpt = torch.load(self.ckpt_path / "best_model.pt", map_location="cpu")
+        print(ckpt.keys())
+        self.model.load_state_dict(ckpt["model"])
+        self.model.to(self.device)
+        self.model.eval()
 
     @torch.no_grad()
     def validate(self, epoch, split, dataloader):
@@ -558,11 +578,11 @@ class TransformerTrainer(ANNTrainer):
             model_str += f"-h-{self.cfg.model.n_heads}"
         if self.cfg.model.dropout_token != 0.0:
             model_str += f"-dptk-{self.cfg.model.dropout_token}"
-        if self.cfg.model.dropout_attn != 0.0:
+        if self.cfg.model.dropout_attn != 0.1:
             model_str += f"-dpa-{self.cfg.model.dropout_attn}"
-        if self.cfg.model.dropout_proj != 0.0:
+        if self.cfg.model.dropout_proj != 0.1:
             model_str += f"-dpp-{self.cfg.model.dropout_proj}"
-        if self.cfg.model.dropout_mlp != 0.0:
+        if self.cfg.model.dropout_mlp != 0.1:
             model_str += f"-dpm-{self.cfg.model.dropout_mlp}"
         if self.cfg.model.bias_mha:
             model_str += f"-ba-{self.cfg.model.bias_mha}"
@@ -579,7 +599,19 @@ class TransformerTrainer(ANNTrainer):
     def set_model(self):
         if self.cfg.model.type == "gtf":
             from morbdd.model.psp import GTFParetoStatePredictor
-            self.model = GTFParetoStatePredictor()
+            self.model = GTFParetoStatePredictor(n_node_feat=self.cfg.model.n_node_feat,
+                                                 n_edge_type=self.cfg.model.n_edge_type,
+                                                 d_emb=self.cfg.model.d_emb,
+                                                 top_k=self.cfg.model.top_k,
+                                                 n_layers=self.cfg.model.n_layers,
+                                                 n_heads=self.cfg.model.n_heads,
+                                                 dropout_token=self.cfg.model.dropout_token,
+                                                 dropout_attn=self.cfg.model.dropout_attn,
+                                                 dropout_proj=self.cfg.model.dropout_proj,
+                                                 dropout_mlp=self.cfg.model.dropout_mlp,
+                                                 bias_mha=self.cfg.model.bias_mha,
+                                                 bias_mlp=self.cfg.model.bias_mlp,
+                                                 h2i_ratio=self.cfg.model.h2i_ratio)
         elif self.cfg.model.type == "tf":
             from morbdd.model.psp import TFParetoStatePredictor
             self.model = TFParetoStatePredictor()

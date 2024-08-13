@@ -89,7 +89,7 @@ deploy:
     strategy: threshold
     alpha: 20
     beta: 5
-    tau: 0.49
+    tau: 0.5
 
 hydra:
   output_subdir: null

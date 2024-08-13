@@ -9,8 +9,10 @@ import torch
 import torch.nn.functional as F
 
 from morbdd import ResourcePaths as path
-from morbdd.model import ParetoStatePredictorMIS
+from morbdd.model.pytorch_v2 import ParetoStatePredictorMIS
 from morbdd.train_mis import MISTrainingHelper
+from morbdd.utils import LayerNodeSelector
+from morbdd.utils import compute_cardinality
 from morbdd.utils import get_instance_data
 from morbdd.utils import read_from_zip
 from morbdd.utils.mis import get_size
@@ -19,38 +21,6 @@ sys.path.append(path.resource / "bin")
 
 RESTRICT = 1
 RELAX = 2
-
-
-class LayerNodeSelector:
-    def __init__(self, strategy, width=-1, threshold=0.5):
-        self.strategy = strategy
-        self.width = width
-        self.threshold = threshold
-
-    def __call__(self, lid, scores):
-
-        idx_score = [(i, s) for i, s in enumerate(scores)]
-        selection = [0] * len(scores)
-        selected_idx, removed_idx = None, None
-        if self.strategy == "width":
-            if self.width >= len(scores):
-                selected_nodes, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
-            else:
-                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
-                selected_idx = [i[0] for i in idx_score[:self.width]]
-                for i in idx_score[:self.width]:
-                    selection[i[0]] = 1
-
-        elif self.strategy == "threshold":
-            selected_idx = []
-            for i in idx_score:
-                if i[1] > self.threshold:
-                    selection[i[0]] = 1
-                    selected_idx.append(i[0])
-
-        removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
-
-        return selection, selected_idx, removed_idx
 
 
 class LayerStitcher:
@@ -70,13 +40,14 @@ def get_env(n_objs=3):
 
 
 def load_model(cfg, model_path):
+    print(model_path)
     best_model = torch.load(path.resource / "checkpoint" / model_path, map_location="cpu")
     model = ParetoStatePredictorMIS(encoder_type="transformer",
                                     n_node_feat=cfg.n_node_feat,
                                     n_edge_type=cfg.n_edge_type,
                                     d_emb=cfg.d_emb,
                                     top_k=cfg.top_k,
-                                    n_layers=cfg.n_layers,
+                                    n_blocks=cfg.n_blocks,
                                     n_heads=cfg.n_heads,
                                     dropout_token=cfg.dropout_token,
                                     bias_mha=cfg.bias_mha,
@@ -199,28 +170,6 @@ def load_pf(cfg):
     print("Sol path not found!")
 
 
-def compute_cardinality(true_pf=None, pred_pf=None):
-    z, z_pred = np.array(true_pf), np.array(pred_pf)
-    assert z.shape[1] == z_pred.shape[1]
-
-    if z_pred.shape[0] == 0:
-        return 0
-    else:
-        # Defining a data type
-        rows, cols = z.shape
-        dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
-                'formats': cols * [z.dtype]}
-
-        rows, cols = z_pred.shape
-        dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
-                     'formats': cols * [z_pred.dtype]}
-
-        # Finding intersection
-        found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
-
-        return found_ndps.shape[0]
-
-
 def compute_dd_size(dd):
     s = 0
     for l in dd:
@@ -240,12 +189,13 @@ def load_orig_dd(cfg):
 
 @hydra.main(config_path="configs", config_name="deploy_mis.yaml", version_base="1.2")
 def main(cfg):
+    total_score_time = 0
     cfg.size = get_size(cfg)
     # Load instance data
     data = get_instance_data(cfg.prob.name, cfg.size, cfg.deploy.split, cfg.deploy.pid)
     node_selector = LayerNodeSelector(cfg.deploy.node_select.strategy,
                                       width=cfg.deploy.node_select.width,
-                                      threshold=cfg.deploy.node_select.threshold)
+                                      tau=cfg.deploy.node_select.threshold)
     layer_stitcher = LayerStitcher()
 
     # Load model
@@ -290,6 +240,7 @@ def main(cfg):
 
     # Restrict and build
     while lid < data["n_vars"] - 1:
+        # print(lid)
         env.generate_next_layer()
         env.set_var_layer(-1)
 
@@ -297,11 +248,15 @@ def main(cfg):
         states = get_state_tensor(layer, cfg.prob.n_vars)
         vid = torch.tensor(env.get_var_layer()[lid + 1]).int()
 
+        score_time = time.time()
         scores = get_node_scores(model, v_emb, inst_emb, lid, vid, states, threshold=0.5)
+        score_time = time.time() - score_time
+        total_score_time += score_time
         lid += 1
 
-        if lid >= cfg.deploy.node_select.prune_from_lid:
-            selection, selected_idx, removed_idx = node_selector(lid, scores)
+        # if lid >= cfg.deploy.node_select.prune_from_lid:
+        if 0 < lid:
+            selection, selected_idx, removed_idx = node_selector(scores)
             # Stitch in case of a disconnected BDD
             if len(removed_idx) == len(scores):
                 removed_idx = layer_stitcher(scores)
@@ -314,43 +269,46 @@ def main(cfg):
     env.generate_next_layer()
     build_time = time.time() - start
 
-    start = time.time()
-    # Compute pareto frontier
-    env.compute_pareto_frontier()
-    pareto_time = time.time() - start
+    print(data_preprocess_time, node_emb_time, inst_emb_time, build_time)
+    print(total_score_time)
 
-    orig_dd = load_orig_dd(cfg)
-    restricted_dd = env.get_dd()
-    orig_size = compute_dd_size(orig_dd)
-    rest_size = compute_dd_size(restricted_dd)
-    size_ratio = rest_size / orig_size
-
-    true_pf = load_pf(cfg)
-    try:
-        pred_pf = env.get_frontier()["z"]
-    except:
-        pred_pf = None
-
-    cardinality_raw, cardinality = -1, -1
-    if true_pf is not None and pred_pf is not None:
-        cardinality_raw = compute_cardinality(true_pf=true_pf, pred_pf=pred_pf)
-        cardinality = cardinality_raw / len(true_pf)
-
-    run_path = get_run_path(cfg, helper.get_checkpoint_path().stem)
-    run_path.mkdir(parents=True, exist_ok=True)
-
-    total_time = data_preprocess_time + node_emb_time + inst_emb_time + build_time + pareto_time
-    df = pd.DataFrame([[cfg.size, cfg.deploy.split, cfg.deploy.pid, total_time, size_ratio, cardinality,
-                        rest_size, orig_size, cardinality_raw, len(pred_pf) if pred_pf is not None else 0,
-                        data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time]],
-                      columns=["size", "split", "pid", "total_time", "size", "cardinality", "rest_size", "orig_size",
-                               "cardinality_raw", "pred_pf", "data_preprocess_time", "node_emb_time", "inst_emb_time",
-                               "build_time", "pareto_time"])
-    print(df)
-
-    pid = str(cfg.deploy.pid) + ".csv"
-    result_path = run_path / pid
-    df.to_csv(result_path)
+    # start = time.time()
+    # # Compute pareto frontier
+    # env.compute_pareto_frontier()
+    # pareto_time = time.time() - start
+    #
+    # orig_dd = load_orig_dd(cfg)
+    # restricted_dd = env.get_dd()
+    # orig_size = compute_dd_size(orig_dd)
+    # rest_size = compute_dd_size(restricted_dd)
+    # size_ratio = rest_size / orig_size
+    #
+    # true_pf = load_pf(cfg)
+    # try:
+    #     pred_pf = env.get_frontier()["z"]
+    # except:
+    #     pred_pf = None
+    #
+    # cardinality_raw, cardinality = -1, -1
+    # if true_pf is not None and pred_pf is not None:
+    #     cardinality_raw = compute_cardinality(true_pf=true_pf, pred_pf=pred_pf)
+    #     cardinality = cardinality_raw / len(true_pf)
+    #
+    # run_path = get_run_path(cfg, helper.get_checkpoint_path().stem)
+    # run_path.mkdir(parents=True, exist_ok=True)
+    #
+    # total_time = data_preprocess_time + node_emb_time + inst_emb_time + build_time + pareto_time
+    # df = pd.DataFrame([[cfg.size, cfg.deploy.split, cfg.deploy.pid, total_time, size_ratio, cardinality,
+    #                     rest_size, orig_size, cardinality_raw, len(pred_pf) if pred_pf is not None else 0,
+    #                     data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time]],
+    #                   columns=["size", "split", "pid", "total_time", "size", "cardinality", "rest_size", "orig_size",
+    #                            "cardinality_raw", "pred_pf", "data_preprocess_time", "node_emb_time", "inst_emb_time",
+    #                            "build_time", "pareto_time"])
+    # print(df)
+    #
+    # pid = str(cfg.deploy.pid) + ".csv"
+    # result_path = run_path / pid
+    # df.to_csv(result_path)
 
 
 if __name__ == '__main__':

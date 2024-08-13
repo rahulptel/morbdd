@@ -1574,12 +1574,12 @@ def reduce_epoch_time(epoch_time, device):
 
 
 class LayerNodeSelector:
-    def __init__(self, strategy, width=-1, threshold=0.5):
+    def __init__(self, strategy, width=-1, tau=0.5):
         self.strategy = strategy
         self.width = width
-        self.threshold = threshold
+        self.tau = tau
 
-    def __call__(self, lid, scores):
+    def __call__(self, scores):
 
         idx_score = [(i, s) for i, s in enumerate(scores)]
         selection = [0] * len(scores)
@@ -1596,10 +1596,32 @@ class LayerNodeSelector:
         elif self.strategy == "threshold":
             selected_idx = []
             for i in idx_score:
-                if i[1] > self.threshold:
+                if i[1] > self.tau:
                     selection[i[0]] = 1
                     selected_idx.append(i[0])
 
         removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
 
         return selection, selected_idx, removed_idx
+
+
+def compute_cardinality(true_pf=None, pred_pf=None):
+    z, z_pred = np.array(true_pf), np.array(pred_pf)
+    assert z.shape[1] == z_pred.shape[1]
+
+    if z_pred.shape[0] == 0:
+        return 0
+    else:
+        # Defining a data type
+        rows, cols = z.shape
+        dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
+                'formats': cols * [z.dtype]}
+
+        rows, cols = z_pred.shape
+        dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                     'formats': cols * [z_pred.dtype]}
+
+        # Finding intersection
+        found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
+
+        return found_ndps.shape[0]

@@ -25,10 +25,10 @@ dataset:
   version: 1
   train:
     from_pid: 0
-    to_pid: 10
+    to_pid: 1000
   val:
     from_pid: 1000
-    to_pid: 1010
+    to_pid: 1100
   test:
     from_pid: 1100
     to_pid: 1200
@@ -77,12 +77,12 @@ agg: sum            # cat | sum
 encoder_type: transformer
 n_node_feat: 2
 n_edge_type: 2
-d_emb: 64
+d_emb: 32
 top_k: 5
-n_layers: 2
+n_blocks: 2
 n_heads: 8
 dropout_token: 0
-dropout: 0.2
+dropout: 0
 bias_mha: false
 bias_mlp: false
 h2i_ratio: 2

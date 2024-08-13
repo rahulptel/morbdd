@@ -233,29 +233,10 @@ class KnapsackDeployer(Deployer):
         else:
             raise ValueError("Invalid model name!")
 
-    @staticmethod
-    def node_selector(scores, round_upto=1, tau=0.5):
-        idx_score = [(i, s) for i, s in enumerate(scores)]
-        selection = [0] * len(scores)
-
-        selected_idx = []
-        for i in idx_score:
-            if np.round(i[1], round_upto) >= tau:
-                selection[i[0]] = 1
-                selected_idx.append(i[0])
-
-        removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
-
-        return selection, selected_idx, removed_idx
-
     def worker(self, rank):
         self.set_trainer()
-        alpha_lid, beta_lid = (self.cfg.deploy.node_select.alpha / 100), (self.cfg.deploy.node_select.beta / 100)
-        alpha_lid = int(alpha_lid * self.cfg.prob.n_vars)
-        beta_lid = self.cfg.prob.n_vars - int(beta_lid * self.cfg.prob.n_vars)
-        print(alpha_lid, beta_lid)
-        pred_sol = json.load(open('1100.json', 'r'))
-        pred_bdd = json.load(open('1100_bdd.json', 'r'))
+        self.set_alpha_beta_lid()
+
         for pid in range(self.cfg.deploy.from_pid + rank, self.cfg.deploy.to_pid, self.cfg.deploy.n_processes):
             env = self.get_env()
 
@@ -314,8 +295,8 @@ class KnapsackDeployer(Deployer):
                 lid += 1
                 # print(lid, len(scores), np.mean(scores), np.median(scores), np.min(scores), np.max(scores))
 
-                if alpha_lid < lid < beta_lid:
-                    _, _, removed_idx = self.node_selector(scores, tau=self.cfg.deploy.node_select.tau)
+                if self.alpha_lid < lid < self.beta_lid:
+                    _, _, removed_idx = self.node_selector(scores)
                     # Stitch in case of a disconnected BDD
                     if len(removed_idx) == len(scores):
                         removed_idx = []
