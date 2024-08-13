@@ -341,10 +341,10 @@ def main(cfg):
 
     total_time = data_preprocess_time + node_emb_time + inst_emb_time + build_time + pareto_time
     df = pd.DataFrame([[cfg.size, cfg.deploy.split, cfg.deploy.pid, total_time, size_ratio, cardinality,
-                        rest_size, orig_size, cardinality_raw, data_preprocess_time, node_emb_time, inst_emb_time,
-                        build_time, pareto_time]],
+                        rest_size, orig_size, cardinality_raw, len(pred_pf) if pred_pf is not None else 0,
+                        data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time]],
                       columns=["size", "split", "pid", "total_time", "size", "cardinality", "rest_size", "orig_size",
-                               "cardinality_raw", "data_preprocess_time", "node_emb_time", "inst_emb_time",
+                               "cardinality_raw", "pred_pf", "data_preprocess_time", "node_emb_time", "inst_emb_time",
                                "build_time", "pareto_time"])
     print(df)
 
