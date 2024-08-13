@@ -1571,3 +1571,35 @@ def reduce_epoch_time(epoch_time, device):
     epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
     dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
     return epoch_time
+
+
+class LayerNodeSelector:
+    def __init__(self, strategy, width=-1, threshold=0.5):
+        self.strategy = strategy
+        self.width = width
+        self.threshold = threshold
+
+    def __call__(self, lid, scores):
+
+        idx_score = [(i, s) for i, s in enumerate(scores)]
+        selection = [0] * len(scores)
+        selected_idx, removed_idx = None, None
+        if self.strategy == "width":
+            if self.width >= len(scores):
+                selected_nodes, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
+            else:
+                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                selected_idx = [i[0] for i in idx_score[:self.width]]
+                for i in idx_score[:self.width]:
+                    selection[i[0]] = 1
+
+        elif self.strategy == "threshold":
+            selected_idx = []
+            for i in idx_score:
+                if i[1] > self.threshold:
+                    selection[i[0]] = 1
+                    selected_idx.append(i[0])
+
+        removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
+        return selection, selected_idx, removed_idx

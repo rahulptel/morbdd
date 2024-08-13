@@ -32,3 +32,5 @@ class CONST:
     TIME_PARETO = 2
     ONE_ARC = 1
     ZERO_ARC = -1
+    RESTRICT = 1
+    RELAX = 2
