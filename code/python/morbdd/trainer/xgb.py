@@ -9,28 +9,30 @@ import numpy as np
 import xgboost as xgb
 from omegaconf import OmegaConf
 
+from morbdd import ResourcePaths as path
 from morbdd import resource_path
+from morbdd.utils import get_dataset_prefix
+from morbdd.utils import get_layer_weights
 from .trainer import Trainer
 
 
 class Iterator(xgb.DataIter):
-    def __init__(self, problem, size, split, neg_pos_ratio, min_samples, sampling_type, weights_type, labels_type,
-                 names):
-        self.problem = problem
-        self.size = size
-        self.split = split
-        self.neg_pos_ratio = neg_pos_ratio
-        self.min_samples = min_samples
-        self.sampling_type = sampling_type
-        self.weights_type = weights_type
-        self.labels_type = labels_type
+    def __init__(self, n_vars, zf_file, dataset_prefix, flag_layer_penalty, layer_penalty_type,
+                 flag_imbalance_penalty, flag_importance_penalty, penalty_aggregation, names):
+        self.n_vars = n_vars
+        self.zf_file = zf_file
+        self.dataset_prefix = dataset_prefix
+        self.flag_layer_penalty = flag_layer_penalty
+        self.layer_penalty_type = layer_penalty_type
+        self.flag_imbalance_penalty = flag_imbalance_penalty
+        self.flag_importance_penalty = flag_importance_penalty
+        self.penalty_aggregation = penalty_aggregation
         self.names = names
 
-        self.zf_sampling_type = zipfile.ZipFile(
-            resource_path / f"xgb_data/{self.problem}/{self.size}/{self.split}/{sampling_type}.zip")
-        self.zf_labels_type = zipfile.ZipFile(
-            resource_path / f"xgb_data/{self.problem}/{self.size}/{self.split}/labels/{labels_type}.zip")
-
+        if flag_layer_penalty:
+            self.layer_penalty_store = get_layer_weights(self.flag_layer_penalty, self.layer_penalty_type, self.n_vars)
+        else:
+            self.layer_penalty_store = np.array([0] * (self.n_vars + 1))
         self._it = 0
         # XGBoost will generate some cache files under current directory with the prefix
         # "cache"
@@ -48,17 +50,20 @@ class Iterator(xgb.DataIter):
         # input_data is a function passed in by XGBoost who has the exact same signature of
         # ``DMatrix``
         _name = self.names[self._it]
-        with self.zf_sampling_type.open(f"{self.sampling_type}/{_name}", "r") as fp:
+        with self.zf_file.open(f"{self.dataset_prefix}/{_name}", "r") as fp:
             data = io.BytesIO(fp.read())
             x = np.load(data)
+            scores = x[:, -1]
+            lidxs = (x[:, -2]).astype(int)
 
-        with self.zf_sampling_type.open(f"{self.sampling_type}/{self.weights_type}/{_name}", "r") as fp:
-            data = io.BytesIO(fp.read())
-            wt = np.load(data)
-
-        with self.zf_labels_type.open(f"{self.labels_type}/{_name}", "r") as fp:
-            data = io.BytesIO(fp.read())
-            y = np.load(data)
+            x = x[:, :-2]
+            y = (scores > 0).astype(np.int64)
+            wt = np.array(self.layer_penalty_store)[lidxs]
+            if self.penalty_aggregation == "sum":
+                if self.flag_importance_penalty:
+                    wt += scores
+            if np.sum(wt) == 0:
+                wt = None
 
         input_data(data=x, label=y, weight=wt)
         self._it += 1
@@ -91,23 +96,26 @@ class XGBTrainer(Trainer):
         h.update(self.mdl_name.encode("utf-8"))
         self.mdl_hex = h.hexdigest()
 
-    def get_iterator(self, sampling_type, weights_type, split):
-        valid_names = [f"{i}.npy" for i in range(self.cfg.dataset[split].from_pid, self.cfg.dataset[split].to_pid)]
+    def get_iterator(self, split, dataset_path, dataset_prefix):
+        dataset_prefix_zip = dataset_prefix + ".zip"
 
-        zf_path = zipfile.Path(resource_path / f"xgb_data/knapsack/{self.cfg.prob.size}/{split}/{sampling_type}.zip")
-        filenames = [p.name for p in zf_path.joinpath(f'{sampling_type}').iterdir() if p.name in valid_names]
+        zip_path = zipfile.Path(dataset_path / split / dataset_prefix_zip)
+        zip_file = zipfile.ZipFile(dataset_path / split / dataset_prefix_zip)
+        valid_names = [f"{i}.npy" for i in
+                       range(self.cfg.dataset[split].from_pid, self.cfg.dataset[split].to_pid)]
+        filenames = [p.name for p in zip_path.joinpath(dataset_prefix).iterdir() if p.name in valid_names]
+
         print("Iterator on ", split, ": len - ", len(filenames))
-        it = Iterator(self.cfg.prob.name,
-                      self.cfg.prob.size,
-                      split,
-                      self.cfg.bdd_data.neg_to_pos_ratio,
-                      self.cfg.bdd_data.min_samples,
-                      sampling_type,
-                      weights_type,
-                      self.cfg.bdd_data.label,
-                      filenames)
 
-        return it
+        return Iterator(self.cfg.prob.n_vars,
+                        zip_file,
+                        dataset_prefix,
+                        self.cfg.bdd_data.flag_layer_penalty,
+                        self.cfg.bdd_data.layer_penalty,
+                        self.cfg.bdd_data.flag_imbalance_penalty,
+                        self.cfg.bdd_data.flag_importance_penalty,
+                        self.cfg.bdd_data.penalty_aggregation,
+                        filenames)
 
     def set_mdl_param(self):
         self.param = {"max_depth": self.cfg.model.max_depth,
@@ -128,21 +136,29 @@ class XGBTrainer(Trainer):
             self.bst = xgb.Booster(self.param)
             self.bst.load_model(mdl_path)
 
-    def setup(self):
-        sampling_type = f"npr{self.cfg.bdd_data.neg_to_pos_ratio}ms{self.cfg.bdd_data.min_samples}"
-        weights_type = ""
-        if self.cfg.bdd_data.flag_layer_penalty:
-            weights_type += f"{self.cfg.bdd_data.layer_penalty}-"
-        weights_type += "1-" if self.cfg.bdd_data.flag_imbalance_penalty else "0-"
-        weights_type += "1-" if self.cfg.bdd_data.flag_importance_penalty else "0-"
-        weights_type += self.cfg.bdd_data.penalty_aggregation
-        # dtrain = xgb.DMatrix(get_iterator(cfg, sampling_type, weights_type, cfg.label, "train"))
-        # dval = xgb.DMatrix(self.get_iterator(cfg, sampling_type, weights_type, cfg.label, "val"))
-        self.set_dataset(sampling_type, weights_type, "train")
-        self.set_dataset(sampling_type, weights_type, "val")
+    def get_dataset_path(self):
+        return path.dataset / f"{self.cfg.prob.name}/{self.cfg.model.type}/{self.cfg.prob.size}"
+
+    def set_dataset(self, *args):
+        dataset_path = self.get_dataset_path()
+        prefix = get_dataset_prefix(self.cfg.bdd_data.with_parent, self.cfg.layer_weight,
+                                    self.cfg.bdd_data.neg_to_pos_ratio)
+        prefix_zip = prefix + ".zip"
+
+        # train_zip_path = zipfile.Path(dataset_path / "train" / prefix_zip)
+        train_iterator = self.get_iterator("train", dataset_path, prefix)
+        self.dtrain = xgb.DMatrix(train_iterator)
+
+        # val_zip_path = zipfile.Path(dataset_path / "val" / prefix_zip)
+        val_iterator = self.get_iterator("val", dataset_path, prefix)
+        self.dval = xgb.DMatrix(val_iterator)
+
         print("Number of training samples: ", self.dtrain.num_row())
         print("Number of validation samples: ", self.dval.num_row())
-        print("Setting up training...")
+
+    def setup(self):
+        print("Setting up dataset...")
+        self.set_dataset()
 
         self.evals = []
         for eval in self.cfg.model.evals:
@@ -157,91 +173,53 @@ class XGBTrainer(Trainer):
     def print_stats(*args):
         pass
 
-    def set_dataset(self, sampling_type, weights_type, split):
-        setattr(self, f"d{split}", xgb.DMatrix(self.get_iterator(sampling_type, weights_type, split)))
-
     def set_optimizer(self):
         pass
 
     def get_trainer_str(self):
         name = ""
-        if self.cfg.model.max_depth is not None:
-            name += f"{self.cfg.model.max_depth}-"
-        if self.cfg.model.eta is not None:
-            name += f"{self.cfg.model.eta}-"
-        if self.cfg.model.min_child_weight is not None:
-            name += f"{self.cfg.model.min_child_weight}-"
-        if self.cfg.model.subsample is not None:
-            name += f"{self.cfg.model.subsample}-"
-        if self.cfg.model.colsample_bytree is not None:
-            name += f"{self.cfg.model.colsample_bytree}-"
-        if self.cfg.model.objective is not None:
+        if self.cfg.model.max_depth != 5:
+            name += f"d{self.cfg.model.max_depth}-"
+        if self.cfg.model.eta != 0.3:
+            name += f"eta{self.cfg.model.eta}-"
+        if self.cfg.model.min_child_weight != 100:
+            name += f"mcw{self.cfg.model.min_child_weight}-"
+        if self.cfg.model.subsample != 1:
+            name += f"ss{self.cfg.model.subsample}-"
+        if self.cfg.model.colsample_bytree != 1:
+            name += f"csbt{self.cfg.model.colsample_bytree}-"
+        if self.cfg.model.objective != "binary:logistic":
             name += f"{self.cfg.model.objective}-"
-        if self.cfg.model.num_round is not None:
-            name += f"{self.cfg.model.num_round}-"
-        if self.cfg.model.early_stopping_rounds is not None:
-            name += f"{self.cfg.model.early_stopping_rounds}-"
-        if type(self.cfg.model.evals) is list and len(self.cfg.model.evals):
-            for eval in self.cfg.model.evals:
-                name += f"{eval}"
-        if type(self.cfg.model.eval_metric) is list and len(self.cfg.model.eval_metric):
-            for em in self.cfg.model.eval_metric:
-                name += f"{em}-"
-        if self.cfg.model.seed is not None:
-            name += f"{self.cfg.model.seed}"
+        if self.cfg.model.num_round != 250:
+            name += f"ep{self.cfg.model.num_round}-"
+        if self.cfg.model.early_stopping_rounds != 20:
+            name += f"es{self.cfg.model.early_stopping_rounds}-"
+        if self.cfg.model.evals[-1] != "val":
+            name += f"eval{self.cfg.model.evals[-1]}-"
+        if self.cfg.model.eval_metric[-1] != "logloss":
+            name += f"l{self.cfg.model.eval_metric[-1]}"
+        if self.cfg.model.seed != 789541:
+            name += f"seed{self.cfg.model.seed}"
 
-        if self.cfg.prob.name is not None:
-            name += f"{self.cfg.prob.name}-"
-        if self.cfg.prob.n_objs is not None:
-            name += f"{self.cfg.prob.n_objs}-"
-        if self.cfg.prob.n_vars is not None:
-            name += f"{self.cfg.prob.n_vars}-"
-        if self.cfg.prob.order_type is not None:
-            name += f"{self.cfg.prob.order_type}-"
-        if self.cfg.prob.layer_norm_const is not None:
-            name += f"{self.cfg.prob.layer_norm_const}-"
-        if self.cfg.prob.state_norm_const is not None:
-            name += f"{self.cfg.prob.state_norm_const}-"
+        if self.cfg.dataset.train.from_pid != 0:
+            name += f"trs{self.cfg.dataset.train.from_pid}-"
+        if self.cfg.dataset.train.to_pid != 1000:
+            name += f"tre{self.cfg.dataset.train.to_pid}-"
+        if self.cfg.dataset.val.from_pid != 1000:
+            name += f"vls{self.cfg.dataset.val.from_pid}-"
+        if self.cfg.dataset.val.to_pid != 1100:
+            name += f"vle{self.cfg.dataset.val.to_pid}-"
 
-        if self.cfg.dataset.train.from_pid is not None:
-            name += f"{self.cfg.dataset.train.from_pid}-"
-        if self.cfg.dataset.train.to_pid is not None:
-            name += f"{self.cfg.dataset.train.to_pid}-"
-        if self.cfg.bdd_data.neg_to_pos_ratio is not None:
-            name += f"{self.cfg.bdd_data.neg_to_pos_ratio}-"
-        if self.cfg.bdd_data.min_samples is not None:
-            name += f"{self.cfg.bdd_data.min_samples}-"
-        if self.cfg.bdd_data.flag_layer_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_layer_penalty}-"
-        if self.cfg.bdd_data.layer_penalty is not None:
-            name += f"{self.cfg.bdd_data.layer_penalty}-"
-        if self.cfg.bdd_data.flag_imbalance_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_imbalance_penalty}-"
-        if self.cfg.bdd_data.flag_importance_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_importance_penalty}-"
-        if self.cfg.bdd_data.penalty_aggregation is not None:
+        if self.cfg.bdd_data.neg_to_pos_ratio != 1:
+            name += f"npr{self.cfg.bdd_data.neg_to_pos_ratio}-"
+        if self.cfg.bdd_data.layer_penalty != "exponential":
+            name += f"lp{self.cfg.bdd_data.layer_penalty}-"
+        if self.cfg.bdd_data.flag_importance_penalty is False:
+            name += "nfimp-"
+        if self.cfg.bdd_data.penalty_aggregation != "sum":
             name += f"{self.cfg.bdd_data.penalty_aggregation}-"
-
-        if self.cfg.dataset.val.from_pid is not None:
-            name += f"{self.cfg.dataset.val.from_pid}-"
-        if self.cfg.dataset.val.to_pid is not None:
-            name += f"{self.cfg.dataset.val.to_pid}-"
-        if self.cfg.bdd_data.neg_to_pos_ratio is not None:
-            name += f"{self.cfg.bdd_data.neg_to_pos_ratio}-"
-        if self.cfg.bdd_data.min_samples is not None:
-            name += f"{self.cfg.bdd_data.min_samples}-"
-        if self.cfg.bdd_data.flag_layer_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_layer_penalty}-"
-        if self.cfg.bdd_data.layer_penalty is not None:
-            name += f"{self.cfg.bdd_data.layer_penalty}-"
-        if self.cfg.bdd_data.flag_imbalance_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_imbalance_penalty}-"
-        if self.cfg.bdd_data.flag_importance_penalty is not None:
-            name += f"{self.cfg.bdd_data.flag_importance_penalty}-"
-        if self.cfg.bdd_data.penalty_aggregation is not None:
-            name += f"{self.cfg.bdd_data.penalty_aggregation}-"
-        if self.cfg.device is not None:
-            name += f"{self.cfg.device}"
+        if self.cfg.device != "cpu":
+            name += f"dev{self.cfg.device}"
         return name
 
     def save(self):
@@ -270,7 +248,7 @@ class XGBTrainer(Trainer):
         self.bst = xgb.train(self.param, self.dtrain,
                              num_boost_round=self.cfg.model.num_round,
                              evals=self.evals,
-                             early_stopping_rounds=self.cfg.model.cfg.early_stopping_rounds,
+                             early_stopping_rounds=self.cfg.model.early_stopping_rounds,
                              evals_result=self.evals_result)
 
         # Save config
