@@ -253,11 +253,12 @@ class DataManager(ABC):
             for r in results:
                 r.get()
 
-        M = None
-        for p in dataset_path.rglob("*.npy"):
-            mat = np.load(p)
-            M = np.concatenate((M, mat), axis=0) if M is not None else mat
-        print(f"Dataset size (all instances concat): {M.shape}")
+        if self.cfg.concat:
+            M = None
+            for p in dataset_path.rglob("*.npy"):
+                mat = np.load(p)
+                M = np.concatenate((M, mat), axis=0) if M is not None else mat
+            print(f"Dataset size (all instances concat): {M.shape}")
 
-        prefix = dataset_path.stem
-        np.save(dataset_path.parent / f"{prefix}-{self.cfg.split}.npy", M)
+            prefix = dataset_path.stem
+            np.save(dataset_path.parent / f"{prefix}-{self.cfg.split}.npy", M)

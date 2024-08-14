@@ -1,27 +1,25 @@
 defaults:
   - _self_
-  - prob: ind
+  - prob: kp
+  - model: gbt
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
 
 seed: 7
-split: train
 n_train: 1000
 n_test: 100
 n_val: 100
-# tf: transformer
-# nn: neural network
-# xgb: xgboost
-for_model: tf
 with_parent: false
 layer_weight:
 neg_to_pos_ratio: 1
 seed_dataset: 2317
 n_processes: 1
+concat: false
 
 #################
 # BDD data config
+split: train
 from_pid: 0
 to_pid: 1000
 #################

@@ -122,7 +122,7 @@ class KnapsackDataManager(DataManager):
             if self.cfg.neg_to_pos_ratio < 1:
                 num_neg_samples = len(neg_ids)
             else:
-                num_neg_samples = int(self.cfg.neg_pos_ratio * num_pos_samples)
+                num_neg_samples = int(self.cfg.neg_to_pos_ratio * num_pos_samples)
                 num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
                 rng.shuffle(neg_ids)
             neg_ids = neg_ids[:num_neg_samples]
@@ -141,70 +141,66 @@ class KnapsackDataManager(DataManager):
 
         return np.array(features_lst)
 
-    def _get_bdd_node_dataset_xgboost(self, inst_data, order, bdd, rng):
+    def _get_bdd_node_dataset_gbt(self, inst_data, order, bdd, rng):
         # Extract instance and variable features
         featurizer = KnapsackFeaturizer(FeaturizerConfig(norm_const=self.cfg.prob.state_norm_const,
                                                          raw=False,
                                                          context=True))
         features = featurizer.get(inst_data)
-        # Instance features
         inst_features = features["inst"][0]
-        # Variable features. Reordered features based on ordering
         var_features = features["var"][order]
-        num_var_features = features["var"].shape[1]
-
-        features_lst, labels_lst, weights_lst = [], [], []
+        features_lst = []
         for lidx, layer in enumerate(bdd):
+            # The bdd contains layer 1 to n-1
+            actual_lidx = lidx + 1
+            var_feat = var_features[actual_lidx]
+            parent_var_feat = var_features[actual_lidx - 1] if self.cfg.with_parent else None
+            prev_layer = bdd[lidx - 1] if self.cfg.with_parent and lidx > 0 else None
+
             # _features_lst, _labels_lst, _weights_lst = [], [], []
             pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
             neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
-
             # Subsample negative samples
             num_pos_samples = len(pos_ids)
             if self.cfg.neg_to_pos_ratio < 1:
                 num_neg_samples = len(neg_ids)
             else:
-                num_neg_samples = int(self.cfg.neg_pos_ratio * num_pos_samples)
+                num_neg_samples = int(self.cfg.neg_to_pos_ratio * num_pos_samples)
                 num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
                 rng.shuffle(neg_ids)
             neg_ids = neg_ids[:num_neg_samples]
 
-            _var_feat = var_features[lidx]
-            _parent_var_feat = None
-            if self.cfg.with_parent:
-                # Variable features: Parent and current layer
-                _parent_var_feat = -1 * np.ones(num_var_features) if lidx == 0 else var_features[lidx - 1]
-
-            prev_layer = bdd[lidx - 1] if self.cfg.with_parent and lidx > 0 else None
             node_ids = pos_ids[:]
             node_ids.extend(neg_ids)
             for i, node_id in enumerate(node_ids):
                 node = layer[node_id]
-                _node_feat = get_bdd_node_features(lidx, node, prev_layer, inst_data["capacity"],
-                                                   layer_norm_const=self.cfg.prob.layer_norm_const,
-                                                   state_norm_const=self.cfg.prob.state_norm_const,
-                                                   with_parent=self.cfg.with_parent)
+                node_feat = get_bdd_node_features(lidx, node, prev_layer, inst_data["capacity"],
+                                                  layer_norm_const=self.cfg.prob.layer_norm_const,
+                                                  state_norm_const=self.cfg.prob.state_norm_const,
+                                                  with_parent=self.cfg.with_parent)
                 if self.cfg.with_parent:
                     features_lst.append(np.concatenate((inst_features,
-                                                        _parent_var_feat,
-                                                        _var_feat,
-                                                        _node_feat,
-                                                        node["score"])))
+                                                        parent_var_feat,
+                                                        var_feat,
+                                                        node_feat,
+                                                        [actual_lidx,
+                                                         node["score"]])))
                 else:
+                    # print(inst_features.shape, var_feat.shape, node_feat.shape, node["score"])
                     features_lst.append(np.concatenate((inst_features,
-                                                        _var_feat,
-                                                        _node_feat,
-                                                        node["score"])))
-
+                                                        var_feat,
+                                                        node_feat,
+                                                        [actual_lidx,
+                                                         node["score"]])))
         return np.array(features_lst)
 
     def _get_bdd_node_dataset(self, pid, data, order, bdd, dataset_path):
         rng = random.Random(self.cfg.seed_dataset)
         dataset = None
-        if self.cfg.for_model == "tf":
+        if "tf" in self.cfg.model.type:
             dataset = self._get_bdd_node_dataset_tf(pid, data, order, bdd, rng)
-        elif self.cfg.for_model == "xgboost":
-            dataset = self._get_bdd_node_dataset_xgboost(data, order, bdd, rng)
+        elif self.cfg.model.type == "gbt":
+            dataset = self._get_bdd_node_dataset_gbt(data, order, bdd, rng)
 
         if dataset is not None:
             np.save(dataset_path / f"{pid}.npy", dataset)
