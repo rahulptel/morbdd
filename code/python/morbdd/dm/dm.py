@@ -97,11 +97,12 @@ class DataManager(ABC):
                                    "pareto"])
         df.to_csv(file_path.parent / f"dm_stats_{pid}.csv", index=False)
 
-    def _generate_bdd_data_worker(self, rank):
+    def _generate_bdd_data_worker(self, rank, ids):
         env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
-        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
+        for i in range(rank, len(ids), self.cfg.n_processes):
+            pid = ids[i]
             order_type = None
             print(f"{rank}/1/10: Fetching instance data and order...")
             data = self._get_instance_data(pid)
@@ -186,12 +187,14 @@ class DataManager(ABC):
             inst_data = self._get_instance_data(pid)
             file = f"{self.cfg.prob.size}/{self.cfg.split}/{pid}.json"
             bdd = read_from_zip(archive_bdds, file, format="json")
-            # Read order
-            order = path.order.joinpath(
-                f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}/{pid}.dat").read_text()
-            order = np.array(list(map(int, order.strip().split())))
-            # Get node data
-            self._get_bdd_node_dataset(pid, inst_data, order, bdd, dataset_path)
+            if bdd is not None:
+                # Read order
+                order = path.order.joinpath(
+                    f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}/{pid}.dat").read_text()
+                order = np.array(list(map(int, order.strip().split())))
+
+                # Get node data
+                self._get_bdd_node_dataset(pid, inst_data, order, bdd, dataset_path)
 
     def _generate_dataset_tensor(self, rank):
         pass
@@ -254,6 +257,7 @@ class DataManager(ABC):
                 r.get()
 
         if self.cfg.concat:
+            print("Concatenating files...")
             M = None
             for p in dataset_path.rglob("*.npy"):
                 mat = np.load(p)
@@ -262,3 +266,8 @@ class DataManager(ABC):
 
             prefix = dataset_path.stem
             np.save(dataset_path.parent / f"{prefix}-{self.cfg.split}.npy", M)
+        if self.cfg.zip:
+            print("Zipping files...")
+            with zipfile.ZipFile(str(dataset_path) + ".zip", "w", zipfile.ZIP_DEFLATED) as zf:
+                zipdir(dataset_path, zf)
+            shutil.rmtree(dataset_path)

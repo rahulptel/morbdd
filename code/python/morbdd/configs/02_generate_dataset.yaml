@@ -16,6 +16,7 @@ neg_to_pos_ratio: 1
 seed_dataset: 2317
 n_processes: 1
 concat: false
+zip: false
 
 #################
 # BDD data config
