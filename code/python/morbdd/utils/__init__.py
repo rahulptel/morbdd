@@ -51,7 +51,7 @@ def get_dataset_prefix(with_parent=False, layer_weight=None, neg_to_pos_ratio=1.
 
 
 def get_dataset_path(cfg):
-    file_path = path.dataset / f"{cfg.prob.name}/{cfg.prob.size}/{cfg.split}"
+    file_path = path.dataset / f"{cfg.prob.name}/{cfg.model.type}/{cfg.prob.size}/{cfg.split}"
     prefix = get_dataset_prefix(cfg.with_parent, cfg.layer_weight, cfg.neg_to_pos_ratio)
     file_path /= prefix
 
