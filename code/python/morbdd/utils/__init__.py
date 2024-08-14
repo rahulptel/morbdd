@@ -14,6 +14,52 @@ from torch.utils.data import Dataset, DataLoader
 
 from morbdd import CONST
 from morbdd import ResourcePaths as path
+import pygmo as pg
+
+
+class MetricCalculator:
+    def __init__(self, n_objs, eps=0.1, delta=0.1):
+        self.eps = eps
+        self.delta = delta
+        self.ref_point = None
+        self.set_ref_point(n_objs)
+
+    def set_ref_point(self, n_objs):
+        self.ref_point = np.zeros(n_objs)
+
+    @staticmethod
+    def compute_cardinality(z, z_pred):
+        z, z_pred = np.array(z), np.array(z_pred)
+        assert z.shape[1] == z_pred.shape[1]
+
+        if z.shape[0] == 0:
+            print("True PF not available!")
+            return {'card': -1, 'precision': -1}
+
+        if z_pred.shape[0] == 0:
+            print("Predicted PF not available!")
+            return {'card': 0, 'precision': 0}
+
+        # Defining a data type
+        rows, cols = z.shape
+        data_type_z = {'names': ['f{}'.format(i) for i in range(cols)],
+                       'formats': cols * [z.dtype]}
+
+        rows, cols = z_pred.shape
+        data_type_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                            'formats': cols * [z_pred.dtype]}
+
+        # Finding intersection
+        found_ndps = np.intersect1d(z.view(data_type_z), z_pred.view(data_type_z_pred))
+
+        return {'card': found_ndps.shape[0], 'precision': found_ndps.shape[0] / z_pred.shape[0]}
+
+    def compute_approx_hv(self, seed, z_norm):
+        hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
+        hv = pg.hypervolume(z_norm)
+        hv_approx = hv.compute(self.ref_point, hv_algo=hv_algo)
+
+        return {'hv_approx': hv_approx}
 
 
 def zipdir(path, ziph):

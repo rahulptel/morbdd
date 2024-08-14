@@ -1,0 +1,19 @@
+population_size: 25000
+sampling: BinaryRandomSampling
+crossover: TwoPointCrossover
+mutation: BitflipMutation
+eliminate_duplicates: true
+time_limit: 00:15:00
+
+minimize_seeds:
+  - 13
+  - 349109032
+  - 8094
+  - 9342019
+  - 47623
+hv_approx_seeds:
+  - 873
+  - 4302
+  - 56743
+  - 298
+  - 509
