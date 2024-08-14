@@ -8,3 +8,7 @@ def trainer_factory(cfg):
     elif cfg.model.type == "gtf":
         from .ann import TransformerTrainer
         return TransformerTrainer(cfg)
+
+    elif cfg.model.type == "gbt":
+        from .xgb import XGBTrainer
+        return XGBTrainer(cfg)
