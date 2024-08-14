@@ -92,9 +92,9 @@ class XGBTrainer(Trainer):
         self.mdl_name = self.get_trainer_str()
 
         # Convert to hex
-        h = hashlib.blake2s(digest_size=32)
-        h.update(self.mdl_name.encode("utf-8"))
-        self.mdl_hex = h.hexdigest()
+        # h = hashlib.blake2s(digest_size=32)
+        # h.update(self.mdl_name.encode("utf-8"))
+        # self.mdl_hex = h.hexdigest()
 
     def get_iterator(self, split, dataset_path, dataset_prefix):
         dataset_prefix_zip = dataset_prefix + ".zip"
@@ -130,7 +130,7 @@ class XGBTrainer(Trainer):
                       "seed": self.cfg.model.seed}
 
     def set_model(self):
-        mdl_path = self.mdl_path.joinpath(f"model_{self.mdl_hex}.json")
+        mdl_path = self.mdl_path.joinpath(f"model_{self.mdl_name}.json")
         print("Loading model: ", mdl_path, mdl_path.exists())
         if mdl_path.exists():
             self.bst = xgb.Booster(self.param)
@@ -224,11 +224,11 @@ class XGBTrainer(Trainer):
 
     def save(self):
         # Save metrics
-        json.dump(self.evals_result, open(self.mdl_path.joinpath(f"metrics_{hex}.json"), "w"))
+        json.dump(self.evals_result, open(self.mdl_path.joinpath(f"metrics_{self.mdl_name}.json"), "w"))
 
         # Save summary
         summary_obj = {"timestamp": str(datetime.datetime.now()),
-                       "mdl_hex": hex,
+                       "mdl_hex": self.mdl_name,
                        "best_iteration": self.bst.best_iteration,
                        "eval_metric": list(self.cfg.model.eval_metric)[-1]}
         summary_obj.update({em: self.evals_result["train"][em][self.bst.best_iteration]
@@ -252,11 +252,11 @@ class XGBTrainer(Trainer):
                              evals_result=self.evals_result)
 
         # Save config
-        with open(self.mdl_path.joinpath(f"config_{hex}.yaml"), "w") as fp:
+        with open(self.mdl_path.joinpath(f"config_{self.mdl_name}.yaml"), "w") as fp:
             OmegaConf.save(self.cfg, fp)
 
         # Save model
-        self.bst.save_model(self.mdl_path.joinpath(f"model_{hex}.json"))
+        self.bst.save_model(self.mdl_path.joinpath(f"model_{self.mdl_name}.json"))
 
     def setup_predict(self):
         self.set_mdl_param()
