@@ -131,7 +131,7 @@ class XGBTrainer(Trainer):
 
     def set_model(self):
         mdl_path = self.mdl_path.joinpath(f"model_{self.mdl_name}.json")
-        print("Loading model: ", mdl_path, mdl_path.exists())
+        print("Loading model: ", mdl_path, ", Exists: ", mdl_path.exists())
         if mdl_path.exists():
             self.bst = xgb.Booster(self.param)
             self.bst.load_model(mdl_path)

@@ -6,5 +6,11 @@ defaults:
   - override hydra/job_logging: disabled
 
 split: test
-from_pid: 0
-to_pid: 1
+from_pid: 1100
+to_pid: 1101
+trial_seeds:
+  - 13
+  - 349109032
+  - 8094
+  - 9342019
+  - 47623

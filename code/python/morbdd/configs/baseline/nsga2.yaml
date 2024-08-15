@@ -1,3 +1,4 @@
+type: nsga2
 population_size: 25000
 sampling: BinaryRandomSampling
 crossover: TwoPointCrossover
