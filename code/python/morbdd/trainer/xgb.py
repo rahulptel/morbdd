@@ -257,6 +257,7 @@ class XGBTrainer(Trainer):
 
         # Save model
         self.bst.save_model(self.mdl_path.joinpath(f"model_{self.mdl_name}.json"))
+        self.save()
 
     def setup_predict(self):
         self.set_mdl_param()

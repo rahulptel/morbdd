@@ -138,7 +138,6 @@ class IndepsetDeployer(Deployer):
         self.set_alpha_beta_lid()
         print(self.trainer.model.training)
         for pid in range(self.cfg.deploy.from_pid, self.cfg.deploy.to_pid, self.cfg.deploy.n_processes):
-            total_score_time = 0
 
             # Load instance data
             data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
@@ -190,10 +189,7 @@ class IndepsetDeployer(Deployer):
                 states = get_state_tensor(layer, self.cfg.prob.n_vars)
                 vid = torch.tensor(env.get_var_layer()[lid + 1]).int()
 
-                score_time = time.time()
                 scores = get_node_scores(self.trainer.model, v_emb, inst_emb, lid, vid, states)
-                score_time = time.time() - score_time
-                total_score_time += score_time
                 lid += 1
 
                 if self.alpha_lid < lid < self.beta_lid:

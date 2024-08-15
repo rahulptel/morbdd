@@ -9,8 +9,8 @@ from pymoo.termination import get_termination
 
 from morbdd import ResourcePaths as path
 from morbdd.utils import get_instance_data
-from .baseline import Baseline
 from morbdd.utils import read_from_zip
+from .baseline import Baseline
 
 
 class MultiObjectiveKnapsack(Problem):

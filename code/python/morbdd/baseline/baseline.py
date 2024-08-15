@@ -6,6 +6,7 @@ class Baseline:
         self.cfg = cfg
         self.hv_approx = None
         self.cardinality = None
+        self.cardinality_raw = None
         self.precision = None
         self.times = None
         self.problem = None
