@@ -52,7 +52,8 @@ class MetricCalculator:
         # Finding intersection
         found_ndps = np.intersect1d(z.view(data_type_z), z_pred.view(data_type_z_pred))
 
-        return {'card': found_ndps.shape[0], 'precision': found_ndps.shape[0] / z_pred.shape[0]}
+        return {'cardinality': found_ndps.shape[0] / z.shape[0], 'cardinality_raw': found_ndps.shape[0],
+                'precision': found_ndps.shape[0] / z_pred.shape[0]}
 
     def compute_approx_hv(self, seed, z_norm):
         hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
