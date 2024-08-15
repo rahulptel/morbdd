@@ -8,6 +8,7 @@ defaults:
 split: test
 from_pid: 1100
 to_pid: 1101
+n_processes: 1
 trial_seeds:
   - 13
   - 349109032

@@ -163,27 +163,27 @@ class WidthRestrictedBDD(Baseline):
         self.post_process(env, bdd, pid)
         self.save_result(seed, pid, build_time, pareto_time)
 
-    def worker(self, pid):
+    def worker(self, rank):
         signal.signal(signal.SIGALRM, handle_timeout)
+        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
+            archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
+            file = f"{self.cfg.prob.size}/{self.cfg.split}/{pid}.json"
+            bdd = read_from_zip(archive, file, format="json")
+            if bdd is not None:
+                width = np.max([len(l) for l in bdd])
+                max_width = int(width * (self.cfg.baseline.max_width / 100))
+                print(f"Width: {width}, max width: {max_width}")
 
-        archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
-        file = f"{self.cfg.prob.size}/{self.cfg.split}/{pid}.json"
-        bdd = read_from_zip(archive, file, format="json")
-        if bdd is not None:
-            width = np.max([len(l) for l in bdd])
-            max_width = int(width * (self.cfg.baseline.max_width / 100))
-            print(f"Width: {width}, max width: {max_width}")
+                # Load instance data
+                data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.split, pid)
 
-            # Load instance data
-            data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.split, pid)
+                order = get_static_order(self.cfg.prob.name, self.cfg.prob.order_type, data)
+                print("Static Order: ", order)
 
-            order = get_static_order(self.cfg.prob.name, self.cfg.prob.order_type, data)
-            print("Static Order: ", order)
-
-            n_trails = 5 if self.cfg.baseline.node_selection == "random" else 1
-            for t in range(n_trails):
-                seed = self.cfg.trial_seeds[t]
-                self.run_pipeline(seed, pid, data, bdd, order, max_width)
+                n_trails = 5 if self.cfg.baseline.node_selection == "random" else 1
+                for t in range(n_trails):
+                    seed = self.cfg.trial_seeds[t]
+                    self.run_pipeline(seed, pid, data, bdd, order, max_width)
 
 
 class KnapsackWidthRestrictedBDD(WidthRestrictedBDD):

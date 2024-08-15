@@ -1,4 +1,5 @@
 from morbdd.utils import MetricCalculator
+import multiprocessing as mp
 
 
 class Baseline:
@@ -29,5 +30,14 @@ class Baseline:
         raise NotImplementedError
 
     def run(self):
-        for pid in range(self.cfg.from_pid, self.cfg.to_pid):
-            self.worker(pid)
+        if self.cfg.n_processes == 1:
+            self.worker(0)
+        else:
+            pool = mp.Pool(processes=self.cfg.n_processes)
+            results = []
+
+            for rank in range(self.cfg.n_processes):
+                results.append(pool.apply_async(self.worker, args=(rank,)))
+
+            for r in results:
+                r.get()
