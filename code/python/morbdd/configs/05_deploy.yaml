@@ -90,6 +90,7 @@ deploy:
     alpha: 20
     beta: 5
     tau: 0.5
+    width:
 
 hydra:
   output_subdir: null

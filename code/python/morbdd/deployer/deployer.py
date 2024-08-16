@@ -2,8 +2,7 @@ import json
 from abc import ABC
 
 from morbdd import ResourcePaths as path
-from morbdd.utils import LayerNodeSelector
-from morbdd.utils import compute_cardinality
+from morbdd.utils import LayerNodeSelector, MetricCalculator
 from morbdd.utils import read_from_zip
 
 
@@ -29,10 +28,14 @@ class Deployer(ABC):
         self.cardinality = None
         self.rest_size = None
         self.orig_size = None
-
+        self.precision = None
+        self.orig_width = None
+        self.rest_width = None
         self.node_selector = LayerNodeSelector(self.cfg.deploy.node_select.strategy,
-                                               tau=self.cfg.deploy.node_select.tau)
+                                               tau=self.cfg.deploy.node_select.tau,
+                                               width=self.cfg.deploy.node_select.width)
         self.layer_stitcher = LayerStitcher()
+        self.metric_calculator = MetricCalculator(self.cfg.prob.n_objs)
 
     def get_env(self):
         libbddenv = __import__("libbddenvv2o" + str(self.cfg.prob.n_objs))
@@ -95,8 +98,10 @@ class Deployer(ABC):
 
         self.cardinality_raw, self.cardinality = -1, -1
         if true_pf is not None and self.pred_pf is not None:
-            self.cardinality_raw = compute_cardinality(true_pf=true_pf, pred_pf=self.pred_pf)
-            self.cardinality = self.cardinality_raw / len(true_pf)
+            res = self.metric_calculator.compute_cardinality(true_pf, self.pred_pf)
+            self.cardinality_raw = res['cardinality_raw']
+            self.cardinality = res['cardinality']
+            self.precision = res['precision']
 
     def save_result(self, *args):
         pass

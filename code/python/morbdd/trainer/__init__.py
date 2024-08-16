@@ -12,3 +12,7 @@ def trainer_factory(cfg):
     elif cfg.model.type == "gbt":
         from .xgb import XGBTrainer
         return XGBTrainer(cfg)
+
+    elif cfg.model.type == "gbt_rank":
+        from .xgb import XGBRankTrainer
+        return XGBRankTrainer(cfg)

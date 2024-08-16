@@ -57,32 +57,14 @@ def get_bdd_node_features(lidx, node, prev_layer, capacity, layer_norm_const, st
     layers_to_go = (layer_norm_const - lidx) / layer_norm_const
     node_feat = np.array([norm_state, state_to_capacity, layers_to_go])
 
-    if with_parent:
-        # Parent node features
-        parent_node_feat = []
-        if lidx == 0:
-            parent_node_feat.extend([1, -1, -1, -1, -1, -1])
-        else:
-            # 1 implies parent of the one arc
-            parent_node_feat.append(1)
-            if len(node["op"]) > 0:
-                prev_node_idx = node["op"][0]
-                prev_state = prev_layer[prev_node_idx]["s"][0]
-                parent_node_feat.append(prev_state / state_norm_const)
-                parent_node_feat.append(prev_state / capacity)
-            else:
-                parent_node_feat.append(-1)
-                parent_node_feat.append(-1)
+    return node_feat
 
-            # -1 implies parent of the zero arc
-            parent_node_feat.append(-1)
-            if len(node["zp"]) > 0:
-                parent_node_feat.append(norm_state)
-                parent_node_feat.append(state_to_capacity)
-            else:
-                parent_node_feat.append(-1)
-                parent_node_feat.append(-1)
-        parent_node_feat = np.array(parent_node_feat)
-        node_feat = np.concatenate([node_feat, parent_node_feat])
+
+def get_bdd_node_features_gbt_rank(lidx, node, capacity, layer_norm_const, state_norm_const):
+    # Node features
+    norm_state = node["s"][0] / state_norm_const
+    state_to_capacity = node["s"][0] / capacity
+    layers_to_go = (layer_norm_const - lidx) / layer_norm_const
+    node_feat = np.array([norm_state, state_to_capacity, layers_to_go])
 
     return node_feat

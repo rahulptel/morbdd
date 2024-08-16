@@ -4,8 +4,8 @@ import numpy as np
 
 from morbdd.featurizer.knapsack import KnapsackFeaturizer
 from morbdd.utils import FeaturizerConfig
-from morbdd.utils import get_dataset_path
 from morbdd.utils.kp import get_bdd_node_features
+from morbdd.utils.kp import get_bdd_node_features_gbt_rank
 from morbdd.utils.kp import get_instance_data
 from morbdd.utils.kp import get_instance_path
 from morbdd.utils.kp import get_static_order
@@ -174,7 +174,7 @@ class KnapsackDataManager(DataManager):
             node_ids.extend(neg_ids)
             for i, node_id in enumerate(node_ids):
                 node = layer[node_id]
-                node_feat = get_bdd_node_features(lidx, node, prev_layer, inst_data["capacity"],
+                node_feat = get_bdd_node_features(actual_lidx, node, prev_layer, inst_data["capacity"],
                                                   layer_norm_const=self.cfg.prob.layer_norm_const,
                                                   state_norm_const=self.cfg.prob.state_norm_const,
                                                   with_parent=self.cfg.with_parent)
@@ -194,6 +194,46 @@ class KnapsackDataManager(DataManager):
                                                          node["score"]])))
         return np.array(features_lst)
 
+    def _get_bdd_node_dataset_gbt_rank(self, inst_data, order, bdd, rng):
+        # Extract instance and variable features
+        featurizer = KnapsackFeaturizer(FeaturizerConfig(norm_const=self.cfg.prob.state_norm_const,
+                                                         raw=False,
+                                                         context=True))
+        features = featurizer.get(inst_data)
+        inst_features = features["inst"][0]
+        var_features = features["var"][order]
+        features_lst = []
+        for lidx, layer in enumerate(bdd):
+            # The bdd contains layer 1 to n-1
+            actual_lidx = lidx + 1
+            var_feat = var_features[actual_lidx]
+            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
+            # Subsample negative samples
+            num_pos_samples = len(pos_ids)
+            if self.cfg.neg_to_pos_ratio < 1:
+                num_neg_samples = len(neg_ids)
+            else:
+                num_neg_samples = int(self.cfg.neg_to_pos_ratio * num_pos_samples)
+                num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
+                rng.shuffle(neg_ids)
+            neg_ids = neg_ids[:num_neg_samples]
+
+            node_ids = pos_ids[:]
+            node_ids.extend(neg_ids)
+            for i, node_id in enumerate(node_ids):
+                node = layer[node_id]
+                node_feat = get_bdd_node_features_gbt_rank(actual_lidx, node, inst_data["capacity"],
+                                                           layer_norm_const=self.cfg.prob.layer_norm_const,
+                                                           state_norm_const=self.cfg.prob.state_norm_const)
+
+                features_lst.append(np.concatenate((inst_features,
+                                                    var_feat,
+                                                    node_feat,
+                                                    [actual_lidx,
+                                                     node["score"]])))
+        return np.array(features_lst)
+
     def _get_bdd_node_dataset(self, pid, data, order, bdd, dataset_path):
         rng = random.Random(self.cfg.seed_dataset)
         dataset = None
@@ -201,6 +241,7 @@ class KnapsackDataManager(DataManager):
             dataset = self._get_bdd_node_dataset_tf(pid, data, order, bdd, rng)
         elif self.cfg.model.type == "gbt":
             dataset = self._get_bdd_node_dataset_gbt(data, order, bdd, rng)
-
+        elif self.cfg.model.type == "gbt_rank":
+            dataset = self._get_bdd_node_dataset_gbt_rank(data, order, bdd, rng)
         if dataset is not None:
             np.save(dataset_path / f"{pid}.npy", dataset)
