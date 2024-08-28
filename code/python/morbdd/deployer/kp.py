@@ -196,3 +196,97 @@ class KnapsackRankDeployer(KnapsackDeployer):
 
     def set_alpha_beta_lid(self):
         pass
+
+    def build_dd(self, env, width):
+        lid = 0
+
+        # Restrict and build
+        while lid < self.cfg.prob.n_vars - 1:
+            env.generate_next_layer()
+            lid += 1
+
+            layer = env.get_layer(lid)
+            print(lid, len(layer))
+            if len(layer) > width:
+                print("Restricting...")
+                features = self.converter.convert_bdd_layer(lid, layer)
+                scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
+
+                idx_score = [(i, s) for i, s in enumerate(scores)]
+                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                selected_idx = [i[0] for i in idx_score[:width]]
+                removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
+                # Restrict if necessary
+                env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+                # print(len(env.get_layer(lid)))
+        # Generate terminal layer
+        env.generate_next_layer()
+
+    def deploy(self):
+        self.set_trainer()
+        # self.set_alpha_beta_lid()
+
+        for pid in range(self.cfg.deploy.from_pid, self.cfg.deploy.to_pid):
+            archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
+            file = f"{self.cfg.prob.size}/{self.cfg.deploy.split}/{pid}.json"
+            bdd = read_from_zip(archive, file, format="json")
+            bdd_width = np.sum([len(l) for l in bdd])
+            max_width = int(bdd_width * (self.cfg.deploy.node_select.width / 100))
+            if bdd is not None:
+                # Read instance
+                inst_data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
+                order = get_static_order(self.cfg.prob.name, self.cfg.deploy.order_type, inst_data)
+                print("Static Order: ", order)
+
+                env = self.get_env()
+                self.converter.set_features(inst_data, order)
+
+                signal.signal(signal.SIGALRM, handle_timeout)
+                env.reset(self.cfg.prob.problem_type,
+                          self.cfg.prob.preprocess,
+                          self.cfg.prob.pf_enum_method,
+                          self.cfg.prob.maximization,
+                          self.cfg.prob.dominance,
+                          self.cfg.prob.bdd_type,
+                          self.cfg.prob.maxwidth,
+                          order)
+
+                env.set_inst(inst_data['n_vars'],
+                             inst_data['n_cons'],
+                             inst_data['n_objs'],
+                             list(np.array(inst_data['value']).T),
+                             [inst_data['weight']],
+                             [inst_data['capacity']])
+                env.preprocess_inst()
+                env.initialize_dd_constructor()
+
+                start = time.time()
+                self.build_dd(env, max_width)
+                build_time = time.time() - start
+
+                start = time.time()
+                env.reduce_dd()
+                reduce_time = time.time() - start
+                build_time += reduce_time
+
+                print(f"/7/10: Computing Pareto Frontier...")
+                try:
+                    signal.alarm(self.cfg.prob.time_limit)
+                    env.compute_pareto_frontier()
+                    self.pred_pf = env.get_frontier()["z"]
+                except TimeoutError:
+                    is_pf_computed = False
+                    print(f"PF not computed within {self.cfg.prob.time_limit} for pid {pid}")
+                else:
+                    is_pf_computed = True
+                    print(f"PF computed successfully for pid {pid}")
+                signal.alarm(0)
+                if not is_pf_computed:
+                    continue
+                time_pareto = env.get_time(CONST.TIME_PARETO)
+
+                self.post_process(env, pid)
+                self.save_result(pid, build_time, time_pareto)
+                # frontier = env.get_frontier()
+                # print(f"{pid}: |Z| = {len(frontier['z'])}")

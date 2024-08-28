@@ -1633,7 +1633,7 @@ class LayerNodeSelector:
         selected_idx, removed_idx = None, None
         if self.strategy == "width":
             if self.width >= len(scores):
-                selected_nodes, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
+                selection, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
             else:
                 idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
                 selected_idx = [i[0] for i in idx_score[:self.width]]
