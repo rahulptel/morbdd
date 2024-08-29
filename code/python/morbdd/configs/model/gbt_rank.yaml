@@ -1,0 +1,20 @@
+type: gbt_rank
+
+version: 1
+max_depth: 2
+min_child_weight: 1
+subsample: 1
+eta: 0.1
+colsample_bytree: 1
+objective: rank:map
+num_round: 100
+early_stopping_rounds: 20
+evals:
+  - train
+  - val
+eval_metric:
+  - ndcg
+  - map
+
+nthread: 16
+seed: 789541
