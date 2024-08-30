@@ -496,5 +496,5 @@ class XGBRankTrainer(Trainer):
         self.set_model()
 
     def predict(self, features):
-        print("Best iteration: ", self.bst.best_iteration)
+        # print("Best iteration: ", self.bst.best_iteration)
         return self.bst.predict(features, iteration_range=(0, self.bst.best_iteration + 1))

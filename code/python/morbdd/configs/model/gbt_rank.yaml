@@ -13,8 +13,8 @@ evals:
   - train
   - val
 eval_metric:
-  - ndcg
-  - map
+  - ndcg@1000
+  - map@1000
 
 nthread: 16
 seed: 789541
