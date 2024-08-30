@@ -112,14 +112,12 @@ class KnapsackDeployer(Deployer):
             if len(layer) > self.cfg.deploy.node_select.width:
                 print("Restricting...")
                 features = self.converter.convert_bdd_layer(lid, layer)
-
                 scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
 
                 _, _, removed_idx = self.node_selector(scores)
                 # Restrict if necessary
                 if len(removed_idx):
                     env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
-                print(len(env.get_layer(lid)))
         # Generate terminal layer
         env.generate_next_layer()
 
@@ -226,12 +224,11 @@ class KnapsackRankDeployer(KnapsackDeployer):
     def deploy(self):
         self.set_trainer()
         # self.set_alpha_beta_lid()
-
         for pid in range(self.cfg.deploy.from_pid, self.cfg.deploy.to_pid):
             archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
             file = f"{self.cfg.prob.size}/{self.cfg.deploy.split}/{pid}.json"
             bdd = read_from_zip(archive, file, format="json")
-            bdd_width = np.sum([len(l) for l in bdd])
+            bdd_width = np.max([len(l) for l in bdd])
             max_width = int(bdd_width * (self.cfg.deploy.node_select.width / 100))
             if bdd is not None:
                 # Read instance
