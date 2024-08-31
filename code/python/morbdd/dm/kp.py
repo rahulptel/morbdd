@@ -10,6 +10,7 @@ from morbdd.utils.kp import get_instance_data
 from morbdd.utils.kp import get_instance_path
 from morbdd.utils.kp import get_static_order
 from .dm import DataManager
+from scipy.stats import rankdata
 
 
 class KnapsackDataManager(DataManager):
@@ -221,6 +222,12 @@ class KnapsackDataManager(DataManager):
 
             node_ids = pos_ids[:]
             node_ids.extend(neg_ids)
+
+            # Get labels
+            scores = [layer[node_id]["score"] for node_id in node_ids]
+            labels = rankdata(scores, method="max")
+
+            # print(inst_features.shape, var_feat.shape, node_feat.shape, node["score"])
             for i, node_id in enumerate(node_ids):
                 node = layer[node_id]
                 node_feat = get_bdd_node_features_gbt_rank(actual_lidx, node, inst_data["capacity"],
@@ -231,7 +238,9 @@ class KnapsackDataManager(DataManager):
                                                     var_feat,
                                                     node_feat,
                                                     [actual_lidx,
-                                                     node["score"]])))
+                                                     node["score"],
+                                                     labels[i]])))
+
         return np.array(features_lst)
 
     def _get_bdd_node_dataset(self, pid, data, order, bdd, dataset_path):

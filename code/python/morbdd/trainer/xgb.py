@@ -52,19 +52,19 @@ class Iterator(xgb.DataIter):
         _name = self.names[self._it]
         with self.zf_file.open(f"{self.dataset_prefix}/{_name}", "r") as fp:
             data = io.BytesIO(fp.read())
-            x = np.load(data)
-            scores = x[:, -1]
-            lidxs = (x[:, -2]).astype(int)
+            data = np.load(data)
 
-            x = x[:, :-2]
-            y = (scores > 0).astype(np.int64)
+            y = data[:, -1]
+            scores = data[:, -2]
+            lidxs = (data[:, -3]).astype(int)
+            x = data[:, :-3]
+
             wt = np.array(self.layer_penalty_store)[lidxs]
             if self.penalty_aggregation == "sum":
                 if self.flag_importance_penalty:
                     wt += scores
             if np.sum(wt) == 0:
                 wt = None
-
         input_data(data=x, label=y, weight=wt)
         self._it += 1
         # Return 1 to let XGBoost know we haven't seen all the files yet.
