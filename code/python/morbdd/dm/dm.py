@@ -67,6 +67,10 @@ class DataManager(ABC):
     def _get_pareto_state_scores(self, data, x, order=None):
         pass
 
+    @abstractmethod
+    def _tag_dd_nodes(self, *args):
+        pass
+
     def _save_order(self, pid, order):
         file_path = path.order / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
         file_path.mkdir(parents=True, exist_ok=True)
