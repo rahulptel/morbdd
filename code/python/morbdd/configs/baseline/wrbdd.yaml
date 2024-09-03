@@ -5,12 +5,11 @@ max_width: 20
 #  kp:
 #    - random
 #    - min_weight
-#    - max_weight
+#    - max_weight (default)
 #  ind:
 #    - random
-#    - max_items
+#    - max_items (default)
 #    - min_items
-#    - max_value_remaining
-node_selection: random
+node_selection: ${prob.node_selection}
 
 

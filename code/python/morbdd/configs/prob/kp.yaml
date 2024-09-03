@@ -16,6 +16,7 @@ cons_lb: ${prob.obj_lb}
 cons_ub: ${prob.obj_ub}
 state_norm_const: 1000
 layer_norm_const: 100
+node_selection: max_weight
 
 #########################################
 # BDD Manager Params

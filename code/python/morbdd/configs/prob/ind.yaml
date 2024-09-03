@@ -13,6 +13,7 @@ vars_per_con: 10
 # Range from which to sample the objective coefficients
 obj_lb: 1
 obj_ub: 100
+node_selection: max_items
 
 #########################################
 # BDD Manager Params
