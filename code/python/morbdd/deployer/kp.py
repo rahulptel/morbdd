@@ -71,11 +71,12 @@ class KnapsackDeployer(Deployer):
         assert self.converter is not None
 
     def set_trainer(self):
+        print(self.cfg.model.type)
         if self.cfg.model.type == "gbt":
             from morbdd.trainer.xgb import XGBTrainer
             self.trainer = XGBTrainer(self.cfg)
             self.trainer.setup_predict()
-        if self.cfg.model.type == "gbt_rank":
+        elif self.cfg.model.type == "gbt_rank":
             from morbdd.trainer.xgb import XGBRankTrainer
             self.trainer = XGBRankTrainer(self.cfg)
             self.trainer.setup_predict()
@@ -108,16 +109,21 @@ class KnapsackDeployer(Deployer):
             lid += 1
 
             layer = env.get_layer(lid)
-            print(lid, len(layer))
-            if len(layer) > self.cfg.deploy.node_select.width:
+            if len(layer) > self.rest_width:
                 print("Restricting...")
+                print(lid, len(layer), self.rest_width)
                 features = self.converter.convert_bdd_layer(lid, layer)
                 scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
 
-                _, _, removed_idx = self.node_selector(scores)
+                # _, _, removed_idx = self.node_selector(scores)
+                idx_score = [(i, s) for i, s in enumerate(scores)]
+                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                selected_idx = [i[0] for i in idx_score[:self.rest_width]]
+                removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
                 # Restrict if necessary
-                if len(removed_idx):
-                    env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+                env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+
         # Generate terminal layer
         env.generate_next_layer()
 
@@ -130,6 +136,8 @@ class KnapsackDeployer(Deployer):
             file = f"{self.cfg.prob.size}/{self.cfg.deploy.split}/{pid}.json"
             bdd = read_from_zip(archive, file, format="json")
             if bdd is not None:
+                self.orig_width = np.max(np.array([len(l) for l in bdd]))
+                self.rest_width = int(self.orig_width * (self.cfg.deploy.node_select.width / 100))
                 # Read instance
                 inst_data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
                 order = get_static_order(self.cfg.prob.name, self.cfg.deploy.order_type, inst_data)
@@ -228,9 +236,9 @@ class KnapsackRankDeployer(KnapsackDeployer):
             archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
             file = f"{self.cfg.prob.size}/{self.cfg.deploy.split}/{pid}.json"
             bdd = read_from_zip(archive, file, format="json")
-            bdd_width = np.max([len(l) for l in bdd])
-            max_width = int(bdd_width * (self.cfg.deploy.node_select.width / 100))
             if bdd is not None:
+                bdd_width = np.max([len(l) for l in bdd])
+                allowed_width = int(bdd_width * (self.cfg.deploy.node_select.width / 100))
                 # Read instance
                 inst_data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
                 order = get_static_order(self.cfg.prob.name, self.cfg.deploy.order_type, inst_data)
@@ -259,7 +267,7 @@ class KnapsackRankDeployer(KnapsackDeployer):
                 env.initialize_dd_constructor()
 
                 start = time.time()
-                self.build_dd(env, max_width)
+                self.build_dd(env, allowed_width)
                 build_time = time.time() - start
 
                 start = time.time()
