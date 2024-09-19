@@ -13,33 +13,6 @@ from morbdd.utils import read_from_zip
 from .baseline import Baseline
 
 
-class MultiObjectiveKnapsack(Problem):
-    def __init__(self, inst_data):
-        super().__init__(n_var=inst_data["n_var"], n_obj=inst_data["n_obj"], n_ieq_constr=1, xl=0, xu=1, vtype=bool)
-        self.W = inst_data["weight"]
-        self.V = inst_data["value"]
-        self.C = inst_data["capacity"]
-
-    def _evaluate(self, x, out, *args, **kwargs):
-        f = [-np.sum(v * x, axis=1) for v in self.V]
-        out["F"] = np.column_stack(f)
-        out["G"] = (np.sum(self.W * x, axis=1) - self.C)
-
-
-class MultiObjectiveIndepset(Problem):
-    def __init__(self, inst_data):
-        super().__init__(n_var=inst_data["n_var"], n_obj=inst_data["n_obj"], n_ieq_constr=inst_data["n_cons"], xl=0,
-                         xu=1, vtype=bool)
-        self.W = inst_data["adj_mat"]
-        self.V = inst_data["obj_coeffs"]
-
-    def _evaluate(self, x, out, *args, **kwargs):
-        f = [-np.sum(v * x) for v in self.V]
-        out["F"] = np.column_stack(f)
-        g = [np.sum(w * x) - 1 for w in self.W]
-        out["G"] = np.column_stack(g)
-
-
 class EABaseline(Baseline):
     def __init__(self, cfg):
         Baseline.__init__(self, cfg)
@@ -149,27 +122,3 @@ class EABaseline(Baseline):
 
     def set_problem(self):
         raise NotImplementedError
-
-
-class KnapsackEABaseline(EABaseline):
-    def __init__(self, cfg):
-        super(EABaseline, self).__init__(cfg)
-
-    @staticmethod
-    def min_converter(z):
-        return -np.array(z)
-
-    def set_problem(self):
-        self.problem = MultiObjectiveKnapsack(self.inst_data)
-
-
-class IndepsetEABaseline(EABaseline):
-    def __init__(self, cfg):
-        EABaseline.__init__(self, cfg)
-
-    @staticmethod
-    def min_converter(z):
-        return -np.array(z)
-
-    def set_problem(self):
-        self.problem = MultiObjectiveIndepset(self.inst_data)

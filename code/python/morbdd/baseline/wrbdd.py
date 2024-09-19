@@ -10,6 +10,9 @@ from morbdd import CONST
 from morbdd import ResourcePaths as path
 from morbdd.baseline.baseline import Baseline
 from morbdd.utils import MetricCalculator
+from morbdd.utils import compute_dd_size
+from morbdd.utils import compute_dd_width
+from morbdd.utils import get_env
 from morbdd.utils import get_instance_data
 from morbdd.utils import get_static_order
 from morbdd.utils import handle_timeout
@@ -22,18 +25,20 @@ class WidthRestrictedBDD(Baseline):
         self.metric_calculator = MetricCalculator(cfg.prob.n_vars)
         self.pred_pf = None
         self.orig_size = None
-        self.rest_size = None
-        self.size_ratio = None
         self.orig_width = None
-        self.rest_width = None
 
-    def get_env(self):
-        libbddenv = __import__("libbddenvv2o" + str(self.cfg.prob.n_objs))
-        env = libbddenv.BDDEnv()
+        self.restricted_dd = None
+        self.restricted_size = None
+        self.restricted_width = None
 
-        return env
+        self.reduced_dd = None
+        self.reduced_size = None
+        self.reduced_width = None
 
     def set_inst(self, *args):
+        raise NotImplementedError
+
+    def select_nodes(self, *args):
         raise NotImplementedError
 
     def load_pf(self, pid):
@@ -48,34 +53,15 @@ class WidthRestrictedBDD(Baseline):
         print("Sol path not found!")
 
     @staticmethod
-    def compute_dd_size(dd):
-        s = 0
-        for l in dd:
-            s += len(l)
-
-        return s
-
-    @staticmethod
     def node_select_random(idx_score, max_width, layer_width):
-        idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
-        selected_idx = [i[0] for i in idx_score[:max_width]]
-        removed_idx = list(set(np.arange(layer_width)).difference(set(selected_idx)))
+        idxs = np.arange(layer_width)
+        np.random.shuffle(idxs)
 
-        return removed_idx
+        return idxs[max_width:]
 
-    def select_nodes(self, *args):
-        raise NotImplementedError
-
-    def compute_dd_width(self, dd):
-        return np.max([len(l) for l in dd])
-
-    def post_process(self, env, orig_dd, pid):
-        restricted_dd = env.get_dd()
-        self.orig_size = self.compute_dd_size(orig_dd)
-        self.rest_size = self.compute_dd_size(restricted_dd)
-        self.size_ratio = self.rest_size / self.orig_size
-        self.orig_width = self.compute_dd_width(orig_dd)
-        self.rest_width = self.compute_dd_width(restricted_dd)
+    def post_process(self, orig_dd, pid):
+        self.orig_size = compute_dd_size(orig_dd)
+        self.orig_width = compute_dd_width(orig_dd)
         true_pf = self.load_pf(pid)
 
         self.cardinality_raw, self.cardinality = -1, -1
@@ -87,13 +73,13 @@ class WidthRestrictedBDD(Baseline):
 
     def save_result(self, seed, pid, build_time, pareto_time):
         total_time = build_time + pareto_time
-        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.split, pid, total_time, self.size_ratio, self.orig_size,
-                            self.rest_size, self.orig_width, self.rest_width, self.cardinality, self.cardinality_raw,
-                            self.precision,
-                            len(self.pred_pf), build_time, pareto_time]],
-                          columns=["size", "split", "pid", "total_time", "size_ratio", "orig_size", "rest_size",
-                                   "orig_width", "rest_width", "cardinality", "cardinality_raw", "pred_precision",
-                                   "n_pred_pf", "build_time", "pareto_time"])
+        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.split, pid, total_time, self.orig_size, self.restricted_size,
+                            self.reduced_size, self.orig_width, self.restricted_width, self.reduced_width,
+                            self.cardinality, self.cardinality_raw, self.precision, len(self.pred_pf), build_time,
+                            pareto_time]],
+                          columns=["size", "split", "pid", "total_time", "orig_size", "rest_size", "reduced_size",
+                                   "orig_width", "rest_width", "reduced_width", "cardinality", "cardinality_raw",
+                                   "pred_precision", "n_pred_pf", "build_time", "pareto_time"])
 
         pid = str(pid) + f"_{seed}.csv"
         save_path = path.resource / "restricted_sols" / self.cfg.prob.name / self.cfg.prob.size / self.cfg.split
@@ -118,9 +104,10 @@ class WidthRestrictedBDD(Baseline):
             lid += 1
 
             layer = env.get_layer(lid)
-            removed_idx = self.select_nodes(rng, layer, max_width)
-            if len(removed_idx):
-                env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+            if len(layer) > max_width:
+                removed_idx = self.select_nodes(rng, layer, max_width)
+                if len(removed_idx):
+                    env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
 
         # Generate terminal layer
         env.generate_next_layer()
@@ -130,8 +117,9 @@ class WidthRestrictedBDD(Baseline):
 
     def run_pipeline(self, seed, pid, data, bdd, order, max_width):
         print(f"Pid: {pid}, seed: {seed}")
+        signal.signal(signal.SIGALRM, handle_timeout)
         rng = random.Random(seed)
-        env = self.get_env()
+        env = get_env()
         env.reset(self.cfg.prob.problem_type,
                   self.cfg.prob.preprocess,
                   self.cfg.prob.pf_enum_method,
@@ -147,36 +135,43 @@ class WidthRestrictedBDD(Baseline):
         start = time.time()
         self.build_dd(env, max_width, rng)
         build_time = time.time() - start
+        self.restricted_dd = env.get_dd()
+        self.restricted_size = compute_dd_size(self.restricted_dd)
+        self.restricted_width = compute_dd_width(self.restricted_dd)
+
+        start = time.time()
         self.reduce_dd(env)
+        build_time += time.time() - start
+        self.reduced_dd = env.get_dd()
+        self.reduced_size = compute_dd_size(self.reduced_dd)
+        self.reduced_width = compute_dd_width(self.reduced_dd)
 
         # Compute pareto frontier
-        start = time.time()
-        env.compute_pareto_frontier()
-        pareto_time = time.time() - start
         try:
             signal.alarm(1800)
+            env.compute_pareto_frontier()
             self.pred_pf = env.get_frontier()["z"]
+            pareto_time = env.get_time(CONST.TIME_PARETO)
         except:
             self.pred_pf = None
+            pareto_time = 1800
         signal.alarm(0)
 
-        self.post_process(env, bdd, pid)
+        self.post_process(bdd, pid)
         self.save_result(seed, pid, build_time, pareto_time)
 
     def worker(self, rank):
-        signal.signal(signal.SIGALRM, handle_timeout)
         for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
             archive = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}.zip"
             file = f"{self.cfg.prob.size}/{self.cfg.split}/{pid}.json"
             bdd = read_from_zip(archive, file, format="json")
             if bdd is not None:
-                width = np.max([len(l) for l in bdd])
+                width = compute_dd_width(bdd)
                 max_width = int(width * (self.cfg.baseline.max_width / 100))
                 print(f"Width: {width}, max width: {max_width}")
 
                 # Load instance data
                 data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.split, pid)
-
                 order = get_static_order(self.cfg.prob.name, self.cfg.prob.order_type, data)
                 print("Static Order: ", order)
 
@@ -184,73 +179,3 @@ class WidthRestrictedBDD(Baseline):
                 for t in range(n_trails):
                     seed = self.cfg.trial_seeds[t]
                     self.run_pipeline(seed, pid, data, bdd, order, max_width)
-
-
-class KnapsackWidthRestrictedBDD(WidthRestrictedBDD):
-    def __init__(self, cfg):
-        super().__init__(cfg)
-
-    def select_nodes(self, rng, layer, max_width):
-        # print(f"Max width is {max_width}, layer width is {len(layer)}")
-        n_layer = len(layer)
-        if max_width < n_layer:
-            # print("Restricting...")
-            if self.cfg.baseline.node_selection == "random":
-                idxs = np.arange(n_layer)
-                rng.shuffle(idxs)
-
-                return idxs[:max_width]
-            elif self.cfg.baseline.node_selection == "min_weight":
-                idx_score = [(i, n["s"][0]) for i, n in enumerate(layer)]
-                idx_score = sorted(idx_score, key=lambda x: x[1])
-
-                return [i[0] for i in idx_score[max_width:]]
-            elif self.cfg.baseline.node_selection == "max_weight":
-                idx_score = [(i, n["s"][0]) for i, n in enumerate(layer)]
-                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
-
-                return [i[0] for i in idx_score[max_width:]]
-
-        return []
-
-    def set_inst(self, env, data):
-        env.set_inst(self.cfg.prob.n_vars, 1, self.cfg.prob.n_objs, list(np.array(data["value"]).T),
-                     [data["weight"]], [data["capacity"]])
-
-    def reduce_dd(self, env):
-        print("Reducing dd...")
-        env.reduce_dd()
-
-
-class IndepsetWidthRestrictedBDD(WidthRestrictedBDD):
-    def __init__(self, cfg):
-        super().__init__(cfg)
-
-    def select_nodes(self, rng, layer, max_width):
-        n_layer = len(layer)
-        if max_width < n_layer:
-            if self.cfg.baseline.node_selection == "random":
-                idxs = np.arange(n_layer)
-                rng.shuffle(idxs)
-
-                return idxs[:max_width]
-            if self.cfg.baseline.node_selection == "min_items":
-                idx_score = [(i, np.sum(n["s"])) for i, n in enumerate(layer)]
-                idx_score = sorted(idx_score, key=lambda x: x[1])
-
-                return [i[0] for i in idx_score[max_width:]]
-            elif self.cfg.baseline.node_selection == "max_items":
-                idx_score = [(i, np.sum(n["s"])) for i, n in enumerate(layer)]
-                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
-
-                return [i[0] for i in idx_score[max_width:]]
-
-        return []
-
-    def set_inst(self, env, data):
-        env.set_inst(self.cfg.prob.n_vars, data["n_cons"], self.cfg.prob.n_objs, data["obj_coeffs"],
-                     data["cons_coeffs"], data["rhs"])
-
-    def set_var_layer(self, env):
-        # print("Set var layer")
-        env.set_var_layer(-1)

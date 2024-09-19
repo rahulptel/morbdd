@@ -14,7 +14,9 @@ from torch.utils.data import Dataset, DataLoader
 
 from morbdd import CONST
 from morbdd import ResourcePaths as path
-import pygmo as pg
+
+
+# import pygmo as pg
 
 
 class MetricCalculator:
@@ -55,12 +57,12 @@ class MetricCalculator:
         return {'cardinality': found_ndps.shape[0] / z.shape[0], 'cardinality_raw': found_ndps.shape[0],
                 'precision': found_ndps.shape[0] / z_pred.shape[0]}
 
-    def compute_approx_hv(self, seed, z_norm):
-        hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
-        hv = pg.hypervolume(z_norm)
-        hv_approx = hv.compute(self.ref_point, hv_algo=hv_algo)
-
-        return {'hv_approx': hv_approx}
+    # def compute_approx_hv(self, seed, z_norm):
+    #     hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
+    #     hv = pg.hypervolume(z_norm)
+    #     hv_approx = hv.compute(self.ref_point, hv_algo=hv_algo)
+    #
+    #     return {'hv_approx': hv_approx}
 
 
 def zipdir(path, ziph):
@@ -1672,3 +1674,15 @@ def compute_cardinality(true_pf=None, pred_pf=None):
         found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
 
         return found_ndps.shape[0]
+
+
+def compute_dd_size(dd):
+    s = 0
+    for l in dd:
+        s += len(l)
+
+    return s
+
+
+def compute_dd_width(dd):
+    return np.max([len(l) for l in dd])
