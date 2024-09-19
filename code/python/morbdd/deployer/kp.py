@@ -94,13 +94,40 @@ class KnapsackDeployer(Deployer):
         print(df)
         pid = str(pid) + ".csv"
 
-        print(self.trainer.mdl_name)
-        # self.run_path = self.get_run_path(self.trainer.ckpt_path.stem)
-        # self.run_path.mkdir(parents=True, exist_ok=True)
-        # result_path = self.run_path / pid
-        # df.to_csv(result_path)
+        # print(self.trainer.mdl_name)
+        self.run_path = self.get_run_path(self.trainer.mdl_name)
+        self.run_path.mkdir(parents=True, exist_ok=True)
+        result_path = self.run_path / pid
+        df.to_csv(result_path)
 
-    def build_dd(self, env):
+    def build_dd_threshold(self, env):
+        lid = 0
+        start_prune = int((self.cfg.node_select.alpha / 100) * self.cfg.prob.n_vars)
+        end_prune = int((self.cfg.node_select.beta / 100) * self.cfg.prob.n_vars)
+
+        # Restrict and build
+        while lid < self.cfg.prob.n_vars - 1:
+            env.generate_next_layer()
+            lid += 1
+
+            if start_prune < lid < end_prune:
+                layer = env.get_layer(lid)
+                features = self.converter.convert_bdd_layer(lid, layer)
+                scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
+
+                # _, _, removed_idx = self.node_selector(scores)
+                idx_score = [(i, s) for i, s in enumerate(scores) if s >= np.round(self.cfg.node_select.tau, 1)]
+                if len(idx_score) > 0:
+                    selected_idx = [i[0] for i in idx_score]
+                    removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
+                    # Restrict if necessary
+                    env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+
+        # Generate terminal layer
+        env.generate_next_layer()
+
+    def build_dd_width(self, env):
         lid = 0
 
         # Restrict and build
@@ -111,21 +138,24 @@ class KnapsackDeployer(Deployer):
             layer = env.get_layer(lid)
             if len(layer) > self.rest_width:
                 print("Restricting...")
-                print(lid, len(layer), self.rest_width)
                 features = self.converter.convert_bdd_layer(lid, layer)
                 scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
 
-                # _, _, removed_idx = self.node_selector(scores)
                 idx_score = [(i, s) for i, s in enumerate(scores)]
-                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                idx_score = sorted(idx_score, key=lambda x: (x[1], -x[0]), reverse=True)
                 selected_idx = [i[0] for i in idx_score[:self.rest_width]]
                 removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
-
-                # Restrict if necessary
-                env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+                if len(removed_idx):
+                    env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
 
         # Generate terminal layer
         env.generate_next_layer()
+
+    def build_dd(self, env):
+        if self.cfg.deploy.node_select.strategy == "threshold":
+            self.build_dd_threshold(env)
+        elif self.cfg.deploy.node_select.strategy == "width":
+            self.build_dd_width(env)
 
     def deploy(self):
         self.set_trainer()
@@ -137,7 +167,11 @@ class KnapsackDeployer(Deployer):
             bdd = read_from_zip(archive, file, format="json")
             if bdd is not None:
                 self.orig_width = np.max(np.array([len(l) for l in bdd]))
-                self.rest_width = int(self.orig_width * (self.cfg.deploy.node_select.width / 100))
+                if self.cfg.deploy.node_select.strategy == "width":
+                    self.rest_width = int(self.orig_width * (self.cfg.deploy.node_select.width / 100))
+                elif self.cfg.deploy.node_select:
+                    self.rest_width = self.orig_width
+
                 # Read instance
                 inst_data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
                 order = get_static_order(self.cfg.prob.name, self.cfg.deploy.order_type, inst_data)

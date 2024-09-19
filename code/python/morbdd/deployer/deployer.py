@@ -80,10 +80,12 @@ class Deployer(ABC):
         print("Sol path not found!")
 
     def get_run_path(self, model_name):
-        method = str(self.cfg.deploy.node_select.alpha) + "-" + str(self.cfg.deploy.node_select.beta) + "-"
-        method += self.cfg.deploy.node_select.strategy + "-"
+        # method = str(self.cfg.deploy.node_select.alpha) + "-" + str(self.cfg.deploy.node_select.beta) + "-"
+        method = self.cfg.deploy.node_select.strategy
         if self.cfg.deploy.node_select.strategy == "threshold":
-            method += str(self.cfg.deploy.node_select.tau)
+            method += "-" + str(self.cfg.deploy.node_select.tau)
+        elif self.cfg.deploy.node_select.strategy == "width":
+            method += "-" + str(self.cfg.deploy.node_select.width)
 
         run_path = path.resource / "sols_pred" / self.cfg.prob.name / self.cfg.prob.size / self.cfg.deploy.split / model_name / method
         return run_path
