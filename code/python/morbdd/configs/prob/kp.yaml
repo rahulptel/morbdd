@@ -3,8 +3,8 @@ prefix: kp
 # uncorr: uncorrelated
 # corr: correlated
 inst_type: uncorr
-n_objs: 3
-n_vars: 80
+n_objs: 4
+n_vars: 50
 size: ${prob.n_objs}_${prob.n_vars}
 
 order_type: MinWt

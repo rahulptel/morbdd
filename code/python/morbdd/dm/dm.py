@@ -101,13 +101,11 @@ class DataManager(ABC):
                                    "pareto"])
         df.to_csv(file_path.parent / f"dm_stats_{pid}.csv", index=False)
 
-    def _generate_bdd_data_worker(self, rank, ids):
+    def _generate_bdd_data_worker(self, rank):
         env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
-        for i in range(rank, len(ids), self.cfg.n_processes):
-            pid = ids[i]
-            order_type = None
+        for pid in range(self.cfg.from_pid, self.cfg.to_pid, self.cfg.n_processes):
             print(f"{rank}/1/10: Fetching instance data and order...")
             data = self._get_instance_data(pid)
             static_order = self._get_static_order(data)
