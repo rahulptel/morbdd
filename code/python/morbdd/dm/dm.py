@@ -110,6 +110,7 @@ class DataManager(ABC):
             data = self._get_instance_data(pid)
             static_order = self._get_static_order(data)
             if len(static_order):
+                static_order = list(map(int, static_order))
                 self._save_order(pid, static_order)
                 order_type = "static"
 
