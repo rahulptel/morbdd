@@ -105,7 +105,7 @@ class DataManager(ABC):
         env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
-        for pid in range(self.cfg.from_pid, self.cfg.to_pid, self.cfg.n_processes):
+        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
             print(f"{rank}/1/10: Fetching instance data and order...")
             data = self._get_instance_data(pid)
             static_order = self._get_static_order(data)
@@ -133,16 +133,14 @@ class DataManager(ABC):
             print(f"{rank}/5/10: Generating decision diagram...")
             env.initialize_dd_constructor()
             env.generate_dd()
+            exact_dd = env.get_dd()
             self._reduce_dd(env)
             time_compile = env.get_time(CONST.TIME_COMPILE)
 
             print(f"{rank}/6/10: Fetching decision diagram...")
-            start = time.time()
-            dd = env.get_dd()
-            time_fetch = time.time() - start
 
             exact_size = []
-            for i, layer in enumerate(dd):
+            for i, layer in enumerate(exact_dd):
                 exact_size.append(len(layer))
             dynamic_order = self._get_dynamic_order(env)
             if len(dynamic_order):
@@ -169,14 +167,14 @@ class DataManager(ABC):
             print(f"{pid}: |Z| = {len(frontier['z'])}")
             print(f"{rank}/9/10: Marking Pareto nodes...")
             pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"], order=dynamic_order)
-            dd = self._tag_dd_nodes(dd, pareto_state_scores)
+            exact_dd = self._tag_dd_nodes(exact_dd, pareto_state_scores)
 
             print(f"{rank}/10/10: Saving data...")
             # Save dd, solution and stats
-            self._save_dd(pid, dd)
             sol_var_order = static_order if order_type == "static" else dynamic_order
+            self._save_dd(pid, exact_dd)
             self._save_solution(pid, frontier, sol_var_order)
-            self._save_dm_stats(pid, frontier, env, time_fetch, time_compile, time_pareto)
+            self._save_dm_stats(pid, frontier, env, -1, time_compile, time_pareto)
 
     @abstractmethod
     def _get_bdd_node_dataset(self, *args):

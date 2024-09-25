@@ -309,7 +309,7 @@ class KnapsackRankDeployer(KnapsackDeployer):
                 reduce_time = time.time() - start
                 build_time += reduce_time
 
-                print(f"/7/10: Computing Pareto Frontier...")
+                print(f"Computing Pareto Frontier...")
                 try:
                     signal.alarm(self.cfg.prob.time_limit)
                     env.compute_pareto_frontier()
