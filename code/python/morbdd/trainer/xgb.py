@@ -127,7 +127,8 @@ class XGBTrainer(Trainer):
                       "device": self.cfg.device,
                       "eval_metric": list(self.cfg.model.eval_metric),
                       "nthread": self.cfg.model.nthread,
-                      "seed": self.cfg.model.seed}
+                      "seed": self.cfg.model.seed,
+                      "random_state": self.cfg.model.random_state}
 
     def set_model(self):
         mdl_path = self.mdl_path.joinpath(f"model_{self.mdl_name}.json")

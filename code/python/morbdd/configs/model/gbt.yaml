@@ -19,3 +19,4 @@ eval_metric:
   - logloss
 nthread: 16
 seed: 789541
+random_state: 1234

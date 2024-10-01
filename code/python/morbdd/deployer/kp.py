@@ -7,7 +7,7 @@ import xgboost as xgb
 
 from morbdd import CONST
 from morbdd import ResourcePaths as path
-from morbdd.utils import FeaturizerConfig
+from morbdd.utils import FeaturizerConfig, compute_dd_width, compute_dd_size
 from morbdd.utils import get_featurizer
 from morbdd.utils import get_instance_data
 from morbdd.utils import get_static_order
@@ -85,12 +85,13 @@ class KnapsackDeployer(Deployer):
 
     def save_result(self, pid, build_time, pareto_time):
         total_time = build_time + pareto_time
-        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.deploy.split, pid, total_time, self.size_ratio, self.orig_size,
-                            self.rest_size, self.orig_width, self.rest_width, self.cardinality, self.cardinality_raw,
-                            self.precision, len(self.pred_pf), build_time, pareto_time]],
-                          columns=["size", "split", "pid", "total_time", "size_ratio", "orig_size", "rest_size",
-                                   "orig_width", "rest_width", "cardinality", "cardinality_raw", "pred_precision",
-                                   "n_pred_pf", "build_time", "pareto_time"])
+        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.deploy.split, pid, total_time, self.orig_size,
+                            self.rest_size, self.reduced_size, self.orig_width, self.rest_width, self.reduced_width,
+                            self.cardinality, self.cardinality_raw, self.precision, len(self.pred_pf), build_time,
+                            pareto_time]],
+                          columns=["size", "split", "pid", "total_time", "orig_size", "rest_size", "reduced_size",
+                                   "orig_width", "rest_width", "reduced_width", "cardinality", "cardinality_raw",
+                                   "pred_precision", "n_pred_pf", "build_time", "pareto_time"])
         print(df)
         pid = str(pid) + ".csv"
 
@@ -140,7 +141,6 @@ class KnapsackDeployer(Deployer):
                 print("Restricting...")
                 features = self.converter.convert_bdd_layer(lid, layer)
                 scores = self.trainer.predict(xgb.DMatrix(np.array(features)))
-
                 idx_score = [(i, s) for i, s in enumerate(scores)]
                 idx_score = sorted(idx_score, key=lambda x: (x[1], -x[0]), reverse=True)
                 selected_idx = [i[0] for i in idx_score[:self.rest_width]]
@@ -202,11 +202,17 @@ class KnapsackDeployer(Deployer):
                 start = time.time()
                 self.build_dd(env)
                 build_time = time.time() - start
+                rest_dd = env.get_dd()
+                self.rest_width = compute_dd_width(rest_dd)
+                self.rest_size = compute_dd_size(rest_dd)
 
                 start = time.time()
                 env.reduce_dd()
                 reduce_time = time.time() - start
                 build_time += reduce_time
+                rest_dd = env.get_dd()
+                self.reduced_width = compute_dd_width(rest_dd)
+                self.reduced_size = compute_dd_size(rest_dd)
 
                 print(f"/7/10: Computing Pareto Frontier...")
                 try:

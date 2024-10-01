@@ -4,6 +4,7 @@ from abc import ABC
 from morbdd import ResourcePaths as path
 from morbdd.utils import LayerNodeSelector, MetricCalculator
 from morbdd.utils import read_from_zip
+from morbdd.utils import compute_dd_width, compute_dd_size
 
 
 class LayerStitcher:
@@ -26,11 +27,16 @@ class Deployer(ABC):
         self.pred_pf = None
         self.cardinality_raw = None
         self.cardinality = None
-        self.rest_size = None
+
         self.orig_size = None
-        self.precision = None
+        self.rest_size = None
+        self.reduced_size = None
+
         self.orig_width = None
         self.rest_width = None
+        self.reduced_width = None
+
+        self.precision = None
         self.node_selector = LayerNodeSelector(self.cfg.deploy.node_select.strategy,
                                                tau=self.cfg.deploy.node_select.tau,
                                                width=self.cfg.deploy.node_select.width)
@@ -92,10 +98,8 @@ class Deployer(ABC):
 
     def post_process(self, env, pid):
         orig_dd = self.load_orig_dd(pid)
-        restricted_dd = env.get_dd()
-        self.orig_size = self.compute_dd_size(orig_dd)
-        self.rest_size = self.compute_dd_size(restricted_dd)
-        self.size_ratio = self.rest_size / self.orig_size
+        self.orig_size = compute_dd_size(orig_dd)
+        self.orig_width = compute_dd_width(orig_dd)
         true_pf = self.load_pf(pid)
 
         self.cardinality_raw, self.cardinality = -1, -1
