@@ -1,6 +1,7 @@
 import random
 
 import numpy as np
+from sympy import posify
 
 from morbdd.featurizer.knapsack import KnapsackFeaturizer
 from morbdd.utils import FeaturizerConfig
@@ -209,6 +210,7 @@ class KnapsackDataManager(DataManager):
             actual_lidx = lidx + 1
             var_feat = var_features[actual_lidx]
             pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            threshold = 1 / len(pos_ids)
             neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
             # Subsample negative samples
             num_pos_samples = len(pos_ids)
@@ -224,8 +226,14 @@ class KnapsackDataManager(DataManager):
             node_ids.extend(neg_ids)
 
             # Get labels
-            scores = [layer[node_id]["score"] for node_id in node_ids]
-            labels = rankdata(scores, method="max")
+            scores = np.array([layer[node_id]["score"] for node_id in node_ids])
+            labels = np.zeros(len(node_ids))
+            labels[scores > 0] = 2
+            labels[scores > 1.25 * threshold] = 3
+            labels[scores > 1.5 * threshold] = 4
+            labels[scores > 2 * threshold] = 5
+            labels[scores > 4 * threshold] = 10
+            # labels = rankdata(scores, method="max")
 
             # print(inst_features.shape, var_feat.shape, node_feat.shape, node["score"])
             for i, node_id in enumerate(node_ids):
@@ -248,9 +256,15 @@ class KnapsackDataManager(DataManager):
         dataset = None
         if "tf" in self.cfg.model.type:
             dataset = self._get_bdd_node_dataset_tf(pid, data, order, bdd, rng)
+            if dataset is not None:
+                np.save(dataset_path / f"{pid}.npy", dataset)
+
         elif self.cfg.model.type == "gbt":
             dataset = self._get_bdd_node_dataset_gbt(data, order, bdd, rng)
+            if dataset is not None:
+                np.save(dataset_path / f"{pid}.npy", dataset)
+
         elif self.cfg.model.type == "gbt_rank":
             dataset = self._get_bdd_node_dataset_gbt_rank(data, order, bdd, rng)
-        if dataset is not None:
-            np.save(dataset_path / f"{pid}.npy", dataset)
+            dataset = np.hstack(((np.ones(dataset.shape[0]) * pid).reshape(-1, 1), dataset))
+            return dataset
