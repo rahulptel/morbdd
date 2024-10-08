@@ -4,7 +4,7 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(libbddenvv2o3, m)
+PYBIND11_MODULE(libbddenvv2, m)
 {
     py::class_<BDDEnv>(m, "BDDEnv", py::module_local())
         .def(py::init<>())

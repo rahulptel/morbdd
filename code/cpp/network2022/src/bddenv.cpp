@@ -698,11 +698,11 @@ int BDDEnv::compute_pareto_frontier()
         //     // -- Optimal BFS algorithm: bottom-up --
         //     pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj);
         // }
-        // else if (method == 3)
-        // {
-        //     // -- Dynamic layer cutset --
-        //     pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
-        // }
+        else if (method == 3)
+        {
+            // -- Dynamic layer cutset --
+            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+        }
 
         if (pareto_frontier == NULL)
         {
