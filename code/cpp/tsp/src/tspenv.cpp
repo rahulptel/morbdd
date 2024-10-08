@@ -11,122 +11,6 @@
 using namespace std;
 
 
-// //
-// // Main function
-// //
-// int main(int argc, char *argv[])
-// {
-//     if (argc < 8)
-//     {
-//         cout << '\n';
-//         cout << "Usage: multiobj [input file] [problem type] [preprocess?] [method] [appr-S and T] [dominance]\n";
-
-//         cout << "\n\twhere:";
-
-//         cout << "\n";
-//         cout << "\t\tproblem_type = 1: knapsack\n";
-//         cout << "\t\tproblem_type = 2: set packing\n";
-//         cout << "\t\tproblem_type = 3: set covering\n";
-//         cout << "\t\tproblem_type = 4: portfolio optimization\n";
-//         cout << "\t\tproblem_type = 5: absolute value\n";
-//         cout << "\t\tproblem_type = 6: TSP\n";
-
-//         cout << "\n";
-//         cout << "\t\tpreprocess = 0: do not preprocess instance\n";
-//         cout << "\t\tpreprocess = 1: preprocess input to minimize BDD size\n";
-
-//         cout << "\n";
-//         cout << "\t\tmethod = 1: top-down BFS\n";
-//         cout << "\t\tmethod = 2: bottom-up BFS\n";
-//         cout << "\t\tmethod = 3: dynamic layer cutset\n";
-
-//         cout << "\n";
-//         cout << "\t\tapprox = n m: approximate n-sized S set and m-sized T set (n=0 if disabled)\n";
-
-//         cout << "\n";
-//         cout << "\t\tdominance = 0:  disable state dominance\n";
-//         cout << "\t\tdominance = 1:  state dominance strategy 1\n";
-
-//         cout << endl;
-//         exit(1);
-//     }
-
-//     // Read input
-//     int problem_type = atoi(argv[2]);
-//     bool preprocess = (argv[3][0] == '1');
-//     int method = atoi(argv[4]);
-//     bool maximization = true;
-//     int approx_S = atoi(argv[5]);
-//     int approx_T = atoi(argv[6]);
-//     int dominance = atoi(argv[7]);
-
-//     // For statistical analysis
-//     Stats timers;
-//     int bdd_compilation_time = timers.register_name("BDD compilation time");
-//     int pareto_time = timers.register_name("BDD pareto time");
-//     int approx_time = timers.register_name("BDD approximation time");
-//     long int original_width;
-//     long int reduced_width;
-//     long int original_num_nodes;
-//     long int reduced_num_nodes;
-
-//     // Read problem instance and construct BDD
-//     vector<vector<int>> obj_coeffs;
-//     timers.start_timer(bdd_compilation_time);
-
-//     // --- TSP ---
-//     if (problem_type == 6)
-//     {
-
-//         clock_t init_tsp = clock();
-
-//         // Read instance
-//         TSPInstance inst;
-//         inst.read(argv[1]);
-
-//         // Construct MDD
-//         clock_t compilation_tsp = clock();
-
-//         MDDTSPConstructor mddCons(&inst);
-//         MDD *mdd = mddCons.generate_exact();
-//         assert(mdd != NULL);
-
-//         compilation_tsp = clock() - compilation_tsp;
-
-//         // Generate frontier
-//         clock_t frontier_tsp = clock();
-
-//         // cout << "\nGenerating frontier..." << endl;
-//         MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;
-//         ParetoFrontier *pareto_frontier = NULL;
-//         if (method == 1){
-//             pareto_frontier = DDParetoAlgorithm::pareto_frontier_topdown(mdd, statsMultiObj);
-//         }
-//         else if(method ==3){
-//             pareto_frontier = DDParetoAlgorithm::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
-//         }
-        
-
-//         assert(pareto_frontier != NULL);
-
-//         frontier_tsp = clock() - frontier_tsp;
-
-//         cout << pareto_frontier->get_num_sols() << endl;
-//         cout << (double)(compilation_tsp + frontier_tsp) / CLOCKS_PER_SEC << endl;
-//         cout << (double)compilation_tsp / CLOCKS_PER_SEC;
-//         cout << "\t" << frontier_tsp / CLOCKS_PER_SEC;
-//         cout << endl;
-
-//         return 0;
-//     }
-//     else
-//     {
-//         cout << "Error - problem type not recognized" << endl;
-//         exit(1);
-//     }
-
-//     return 0;
-// }
 
 vector<int> dynamicBitsetToVector(const boost::dynamic_bitset<> &bitset)
 {
@@ -165,8 +49,7 @@ void TSPEnv::clean_memory(){
     }
 };
 
-void TSPEnv::reset(int _method){
-    method = _method;
+void TSPEnv::reset(){
     clean_memory();
 }
 
@@ -178,9 +61,72 @@ int TSPEnv::set_inst(int n_cities, int n_objs, vector<vector<vector<int>>> objs)
 
 int TSPEnv::initialize_dd_constructor(){
     tsp_mdd_constructor = MDDTSPConstructor(&inst_tsp);
-
+    mdd = tsp_mdd_constructor.mdd;
     return 0;
 }
+
+bool TSPEnv::generate_next_layer(){
+    return tsp_mdd_constructor.generate_next_layer();
+}
+
+int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){    
+    cout << mdd->layers[layer].size() << endl;
+    if (states_to_remove.size() >= mdd->layers[layer].size())
+    {
+        return -1;
+    }
+    if (states_to_remove.size())
+    {
+        vector<int>::iterator it1;
+
+        for (int i = 0; i < mdd->layers[layer].size(); ++i)
+        {
+            it1 = find(states_to_remove.begin(),
+                        states_to_remove.end(),
+                        i);
+            // Remove state refs
+            if (it1 != states_to_remove.end())
+            {
+                mdd->remove_node_refs(mdd->layers[layer][i]);
+                states_to_remove.erase(it1);
+            }
+            
+        }
+
+        int i = 0;
+        while (i < mdd->layers[layer].size())
+        {
+            MDDNode *node = mdd->layers[layer][i];
+            if (node->in_arcs_list.empty())
+            {
+                // Remove node from layer
+                mdd->layers[layer][i] = mdd->layers[layer].back();
+                mdd->layers[layer].pop_back();
+                // Remove node
+                delete node;
+            }
+            else
+            {
+                ++i;
+            }
+        }
+    
+        mdd->repair_node_indices(layer);
+        tsp_mdd_constructor.fix_state_map();
+        
+        return 0;
+    }
+    return -1;
+}
+
+int TSPEnv::approximate_layer(int layer, int approx_type, vector<int> states_to_process){
+    if (approx_type == 1){
+        // cout << "Restrict layer " << endl;
+        return restrict_layer(layer, states_to_process);
+    }
+}
+
+
 
 int TSPEnv::generate_dd(){
     mdd = tsp_mdd_constructor.generate_exact();
@@ -190,6 +136,7 @@ int TSPEnv::generate_dd(){
 }
 
 int TSPEnv::compute_pareto_frontier(){
+    method=3;
     // Generate frontier
     clock_t frontier_tsp = clock();
 
@@ -198,7 +145,7 @@ int TSPEnv::compute_pareto_frontier(){
     if (method == 1){
         pareto_frontier = DDParetoAlgorithm::pareto_frontier_topdown(mdd, statsMultiObj);
     }
-    else if(method ==3){
+    else if(method==3){
         pareto_frontier = DDParetoAlgorithm::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
     }
     assert(pareto_frontier != NULL);

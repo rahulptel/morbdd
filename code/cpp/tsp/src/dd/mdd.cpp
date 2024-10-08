@@ -200,6 +200,15 @@ void MDD::remove(MDDArc *a)
 //
 void MDD::remove(MDDNode *node)
 {
+    remove_node_refs(node);
+    // Deallocate node
+    delete node;
+}
+
+//
+// Remove node references
+//
+void MDD::remove_node_refs(MDDNode *node){
     // Remove outgoing arcs
     for (int a = 0; a < node->out_arcs_list.size(); ++a)
     {
@@ -216,8 +225,6 @@ void MDD::remove(MDDNode *node)
         delete arc;
     }
     node->in_arcs_list.clear();
-    // Deallocate node
-    delete node;
 }
 
 //
@@ -372,6 +379,8 @@ void MDD::remove_dangling_outgoing()
     }
 }
 
+
+
 //
 // Remove nodes with zero incoming arcs
 //
@@ -517,14 +526,22 @@ bool MDD::check_consistency()
 //
 // Repair MDD node indices
 //
+void MDD::repair_node_indices(int l)
+{
+    for (int i = 0; i < layers[l].size(); ++i)
+    {
+        layers[l][i]->index = i;
+    }
+}
+
+//
+// Repair MDD node indices
+//
 void MDD::repair_node_indices()
 {
     for (int l = 0; l < num_layers; ++l)
     {
-        for (int i = 0; i < layers[l].size(); ++i)
-        {
-            layers[l][i]->index = i;
-        }
+        repair_node_indices(l);
     }
 }
 
@@ -544,46 +561,10 @@ void MDD::update_num_nodes()
 MDDTSPConstructor::MDDTSPConstructor(TSPInstance *_inst)
     : inst(_inst)
 {
-}
-
-
-//
-// Generate exact MDD
-//
-MDD *MDDTSPConstructor::generate_exact()
-{
-
-    // Equality functions for Nodes
-    struct bitset_equal_to : std::binary_function<MDDNode *, MDDNode *, bool>
-    {
-        bool operator()(const MDDNode *const x,
-                        const MDDNode *const y) const
-        {
-            return (x->S == y->S) && (x->last_city == y->last_city);
-        }
-    };
-
-    // Hash functions of dynamic_bitset pointer
-    struct bitset_hash : std::unary_function<MDDNode *, std::size_t>
-    {
-        std::size_t operator()(const MDDNode *const node) const
-        {
-            std::size_t hash_val = 0;
-            boost::hash_combine(hash_val, node->S.m_bits);
-            boost::hash_combine(hash_val, node->last_city);
-
-            return hash_val;
-        }
-    };
-
-    // State map
-    typedef boost::unordered_map<MDDNode *, MDDNode *, bitset_hash, bitset_equal_to> StateNodeMap;
-
     // Initialize MDD
-    MDD *mdd = new MDD(inst->n_cities + 2);
+    mdd = new MDD(inst->n_cities + 2);
 
     // array of cities to visit
-    vector<int> exact_vals;
     for (int i = 0; i < inst->n_cities; ++i)
     {
         exact_vals.push_back(i);
@@ -595,28 +576,26 @@ MDD *MDDTSPConstructor::generate_exact()
     root_node->S.reset();
     root_node->last_city = -1;
 
-    // Values that have to be fixed.
     // This is used for branching, but in this case only the first city (0) is fixed.
-    vector<int> fixed_vals;
     fixed_vals.push_back(0);
 
-    bool *is_fixed = new bool[inst->n_cities];
+    is_fixed = new bool[inst->n_cities];
     memset(is_fixed, false, sizeof(bool) * inst->n_cities);
     for (int c = 0; c < fixed_vals.size(); ++c)
     {
         is_fixed[fixed_vals[c]] = true;
     }
 
+    
     // Values that have to be exact
-    bool *is_city_exact = new bool[inst->n_cities];
+    is_city_exact = new bool[inst->n_cities];
     memset(is_city_exact, false, sizeof(bool) * inst->n_cities);
     for (int c = 0; c < exact_vals.size(); ++c)
     {
         is_city_exact[exact_vals[c]] = true;
     }
 
-    // Map between exact values and their positions in the bitset
-    vector<int> map(inst->n_cities);
+    map.resize(inst->n_cities);
     std::fill(map.begin(), map.end(), -1);
     int pos = 0;
     for (int c = 0; c < exact_vals.size(); ++c)
@@ -624,17 +603,16 @@ MDD *MDDTSPConstructor::generate_exact()
         map[exact_vals[c]] = pos++;
     }
 
-    // Initialize node map
-    StateNodeMap states[2];
-    StateNodeMap::iterator it;
-    int iter = 0;
-    int next = 1;
+    // Initialize node map    
+    iter = 0;
+    next = 1;
 
     // Add root node to state set
+    root_node = mdd->layers[0][0];
     states[iter][root_node] = root_node;
 
     // Initialize node buffer for general operations
-    MDDNode *node_buffer = new MDDNode;
+    node_buffer = new MDDNode;
 
     // Create layers associated with fixed variables
     // All fixed arcs have a zero length
@@ -665,11 +643,14 @@ MDD *MDDTSPConstructor::generate_exact()
         iter = !iter;
     }
 
-    // Create layers associated with non-fixed variables
-    for (int l = fixed_vals.size(); l < inst->n_cities; ++l)
-    {
-        cout << "Layer " << l << endl;
+    l = fixed_vals.size();
 
+}
+
+bool MDDTSPConstructor::generate_next_layer(){
+    // cout << "Layer " << l << endl;
+
+    if (l < inst->n_cities){
         // Reset next state
         states[next].clear();
 
@@ -725,28 +706,58 @@ MDD *MDDTSPConstructor::generate_exact()
         // invert iter and next
         next = !next;
         iter = !iter;
-    }
+        ++l;
 
-    // Create terminal node in last layer
-    MDDNode *terminal = mdd->add_node(inst->n_cities + 1, inst->n_cities);
-    terminal->last_city = -1;
-    for (MDDNode *node : mdd->layers[inst->n_cities])
-    {
-        MDDArc *arc = node->add_out_arc(terminal, 0, 0);
-        arc->weights = new ObjType[inst->n_objs];
-        for (int o = 0; o < inst->n_objs; ++o)
+        return false;
+    }
+    else if(l == inst->n_cities){
+        // Create terminal node in last layer
+        MDDNode *terminal = mdd->add_node(inst->n_cities + 1, inst->n_cities);
+        terminal->last_city = -1;
+        for (MDDNode *node : mdd->layers[inst->n_cities])
         {
-            arc->weights[o] = (-1) * inst->objs[o][node->last_city][0];
+            MDDArc *arc = node->add_out_arc(terminal, 0, 0);
+            arc->weights = new ObjType[inst->n_objs];
+            for (int o = 0; o < inst->n_objs; ++o)
+            {
+                arc->weights[o] = (-1) * inst->objs[o][node->last_city][0];
+            }
         }
+        ++l;        
+        mdd->update();
+        assert(mdd->check_consistency());
+
+        return true;
     }
 
-    // mdd->print();
-    // Update width
-    mdd->update();
-    assert(mdd->check_consistency());
+    return true;
 
-    // mdd->print();
+}
+
+//
+// Generate exact MDD
+//
+MDD *MDDTSPConstructor::generate_exact()
+{
+    bool is_done=false;
+    do{
+        is_done = generate_next_layer();
+        cout << l << endl;
+    }
+    while (!is_done);
+    
     return mdd;
 }
 
 
+void MDDTSPConstructor::fix_state_map(){
+    // If the last layer is approximated update the states[iter]
+	if (states[iter].size() > mdd->layers[l].size())
+	{
+		states[iter].clear();
+		for (int k = 0; k < mdd->layers[l].size(); ++k)
+		{
+			states[iter][mdd->layers[l][k]] = mdd->layers[l][k];
+		}
+	}
+}

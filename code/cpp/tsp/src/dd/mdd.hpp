@@ -153,6 +153,9 @@ struct MDD
     void redirect_incoming(MDDNode *node, MDDArc *in_arc);
 
     // Repair node indices
+    void repair_node_indices(int l);
+
+    // Repair node indices
     void repair_node_indices();
 
     // Update MDD info
@@ -178,12 +181,14 @@ struct MDD
 
     // Remove nodes with zero incoming arcs
     void remove_dangling_incoming();
-
+    
     // Remove dangling nodes
     void remove_dangling();
 
     // Remove node
     void remove(MDDNode *node);
+
+    void remove_node_refs(MDDNode *node);
 };
 
 //
@@ -197,9 +202,62 @@ public:
     // Constructor
     MDDTSPConstructor(TSPInstance *_inst);
 
+    bool generate_next_layer();
+
     // Generate exact
     MDD *generate_exact();
 
+    void fix_state_map();
+
+    // MDD
+    MDD *mdd;
+    
 private:
+    // Equality functions for Nodes
+    struct bitset_equal_to : std::binary_function<MDDNode *, MDDNode *, bool>
+    {
+        bool operator()(const MDDNode *const x,
+                        const MDDNode *const y) const
+        {
+            return (x->S == y->S) && (x->last_city == y->last_city);
+        }
+    };
+
+    // Hash functions of dynamic_bitset pointer
+    struct bitset_hash : std::unary_function<MDDNode *, std::size_t>
+    {
+        std::size_t operator()(const MDDNode *const node) const
+        {
+            std::size_t hash_val = 0;
+            boost::hash_combine(hash_val, boost::hash_value(node->S));
+            boost::hash_combine(hash_val, node->last_city);
+
+            return hash_val;
+        }
+    };
+
+
     TSPInstance *inst;
+
+    // State map
+    typedef boost::unordered_map<MDDNode *, MDDNode *, bitset_hash, bitset_equal_to> StateNodeMap;
+    // array of cities to visit
+    vector<int> exact_vals;
+    // Values that have to be fixed.
+    vector<int> fixed_vals;
+
+    bool *is_fixed;
+    bool *is_city_exact;
+    // Map between exact values and their positions in the bitset
+    vector<int> map;
+    
+    StateNodeMap states[2];
+    StateNodeMap::iterator it;
+    int iter, next;
+
+    MDDNode* root_node;
+    MDDNode* node_buffer;
+
+    int l;
+
 };

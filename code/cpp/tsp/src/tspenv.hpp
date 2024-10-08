@@ -44,33 +44,27 @@ public:
     TSPEnv();
     ~TSPEnv();
 
-    void reset(int method);
+    void reset();
 
     int set_inst(int n_cities,
                  int n_objs,
                  vector<vector<vector<int>>> objs);
-
     int initialize_dd_constructor();
 
-
+    bool generate_next_layer();
     int generate_dd();
 
-    // int generate_next_layer();
 
-    // int approximate_layer(int layer,
-    //                       int approx_type = 1,
-    //                       int method = 1,
-    //                       vector<int> states_to_process = {});
+    int approximate_layer(int layer,
+                          int approx_type,
+                          vector<int> states_to_process);
 
     // void calculate_bdd_topology_stats(bool is_non_reduced);
 
 
     int compute_pareto_frontier();
-
     vector<vector<int>> get_layer(int);
-
     vector<vector<vector<int>>> get_dd();
-
     map<string, vector<vector<int>>> get_frontier();
 
     // double get_time(int);
@@ -82,6 +76,7 @@ public:
 private:
     void initialize();
     void clean_memory();
+    int restrict_layer(int layer, vector<int> states_to_process);
     // int restrict_layer(int layer, int method, vector<int> states_to_remove);
     // int relax_layer(int layer, int method, vector<int> states_to_merge);
 
