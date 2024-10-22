@@ -11,20 +11,22 @@ from torch.utils.data import Dataset, DataLoader
 from morbdd import ResourcePaths as path
 
 # Hyperparams
-batch_size=64
+# 4096 ~ 2.5G
+batch_size = 16384
 epochs = 10
 initial_lr = 1e-2
 # Linear warm-up
 warmup_steps = 5
 # LR Scheduler
-factor=0.9
-patience=5
+factor = 0.9
+patience = 5
 # AdamW
 weight_decay = 1e-3
 grad_clip = 1.0
 
+
 class TSPDataset(Dataset):
-    def __init__(self, size, split):
+    def __init__(self, size, split, device):
         self.size = size
         self.split = split
         self.inst_path = path.inst / f"tsp/{size}/{split}"
@@ -35,8 +37,18 @@ class TSPDataset(Dataset):
         for p in self.dataset_path.rglob('*.npz'):
             pid = int(p.stem.split('_')[-1])
             d = np.load(p)['arr_0']
-            d = np.hstack((np.array([pid]*d.shape[0]).reshape(-1, 1), d))
+            d = np.hstack((np.array([pid] * d.shape[0]).reshape(-1, 1), d))
             self.D = np.vstack((self.D, d))
+        self.D = torch.from_numpy(self.D).float().to(device)
+
+        n_items = 1000 if split == "train" else 100
+        self.coords = torch.zeros((n_items, 3, 10, 2))
+        self.dists = torch.zeros((n_items, 3, 10, 10))
+        for p in self.inst_path.rglob("*.npz"):
+            pid = int(p.stem.split('_')[-1])
+            d = np.load(p)
+            self.coords[pid] = torch.from_numpy(d['coords']).float().to(device)
+            self.dists[pid] = torch.from_numpy(d['dists']).float().to(device)
 
     @staticmethod
     def get_layer_weights_exponential(lid):
@@ -46,14 +58,14 @@ class TSPDataset(Dataset):
         return self.D.shape[0]
 
     def __getitem__(self, idx):
-        pid, lid, nid, score = int(self.D[idx][0]), int(self.D[idx][1]), int(self.D[idx][2]), self.D[idx][3]
+        pid, lid, nid, score = self.D[idx][0].long(), self.D[idx][1].long(), self.D[idx][2], self.D[idx][3]
         label = 0 if score == 0 else 1
-        d = np.load(self.inst_path / f"tsp_7_{self.size}_{pid}.npz")
-        state = self.dd[lid][nid]
+        # d = np.load(self.inst_path / f"tsp_7_{self.size}_{pid}.npz")
+        state = self.dd[lid][int(nid.cpu().numpy())]
 
-        return (torch.from_numpy(d['coords']).float(),
-                torch.from_numpy(d['dists']).float(),
-                torch.tensor(lid).float(),
+        return (self.coords[pid],
+                self.dists[pid],
+                lid,
                 torch.tensor(state).float(),
                 torch.tensor(self.get_layer_weights_exponential(lid)).float(),
                 torch.tensor(score).float(),
@@ -162,6 +174,7 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
 
         return n, e
 
+
 class GTEncoderLayer(nn.Module):
     def __init__(self,
                  d_emb=32,
@@ -239,7 +252,6 @@ class GTEncoder(nn.Module):
         return n
 
 
-
 class TokenEmbedGraph(nn.Module):
     """
     DeepSet-based node and edge embeddings
@@ -253,24 +265,34 @@ class TokenEmbedGraph(nn.Module):
         self.linear4 = nn.Linear(d_emb, d_emb)
 
     def forward(self, n, e):
-        n = F.relu(self.linear1(n)) # B x n_objs x n_vars x (2 * d_emb)
-        n = n.sum(1)                # B x n_vars x (2 * d_emb)
-        n = F.relu(self.linear2(n)) # B x n_vars x d_emb
+        n = F.relu(self.linear1(n))  # B x n_objs x n_vars x (2 * d_emb)
+        n = n.sum(1)  # B x n_vars x (2 * d_emb)
+        n = F.relu(self.linear2(n))  # B x n_vars x d_emb
 
         e = e.unsqueeze(-1)
-        e = F.relu(self.linear3(e)) # B x n_objs x n_vars x n_vars x d_emb
-        e = e.sum(1)                # B x n_vars x n_vars x d_emb
-        e = F.relu(self.linear4(e)) # B x n_vars x n_vars x d_emb
+        e = F.relu(self.linear3(e))  # B x n_objs x n_vars x n_vars x d_emb
+        e = e.sum(1)  # B x n_vars x n_vars x d_emb
+        e = F.relu(self.linear4(e))  # B x n_vars x n_vars x d_emb
 
         return n, e
 
+
 class ParetoNodePredictor(nn.Module):
-    def __init__(self, d_emb=32):
+    def __init__(self,
+                 d_emb=32,
+                 n_layers=2,
+                 n_heads=8,
+                 bias_mha=False,
+                 dropout_attn=0.1,
+                 dropout_proj=0.1,
+                 bias_mlp=False,
+                 dropout_mlp=0.1,
+                 h2i_ratio=2):
         super(ParetoNodePredictor, self).__init__()
         self.token_encoder = TokenEmbedGraph(d_emb=d_emb)
-        self.graph_encoder = GTEncoder(d_emb=32,
-                                       n_layers=2,
-                                       n_heads=8,
+        self.graph_encoder = GTEncoder(d_emb=d_emb,
+                                       n_layers=n_layers,
+                                       n_heads=n_heads,
                                        bias_mha=False,
                                        dropout_attn=0.1,
                                        dropout_proj=0.1,
@@ -283,19 +305,19 @@ class ParetoNodePredictor(nn.Module):
             nn.ReLU(),
         )
         self.node_encoder = nn.Sequential(
-            nn.Linear(d_emb, 2*d_emb),
+            nn.Linear(d_emb, 2 * d_emb),
             nn.ReLU(),
-            nn.Linear(2*d_emb, 2),
+            nn.Linear(2 * d_emb, 2),
         )
 
     def forward(self, n, e, l, s):
         n, e = self.token_encoder(n, e)
-        n = self.graph_encoder(n, e)                                    # B x n_vars x d_emb
+        n = self.graph_encoder(n, e)  # B x n_vars x d_emb
         B, n_vars, d_emb = n.shape
 
-        l = self.layer_encoder(((n_vars-l)/n_vars).unsqueeze(-1))       # B x d_emb
-        l = l.reshape(B, 1, d_emb)                                      # B x 1 x d_emb
-        last_visit = s[:,-1]
+        l = self.layer_encoder(((n_vars - l) / n_vars).unsqueeze(-1))  # B x d_emb
+        l = l.reshape(B, 1, d_emb)  # B x 1 x d_emb
+        last_visit = s[:, -1]
         s_ = s[:, :-1]
         s_[torch.arange(s_.shape[0]), last_visit.long()] = 2
         s_ = self.state_encoder(s_.long())
@@ -310,22 +332,24 @@ def train(model, dataloader, loss_fn, optimizer, device):
 
     running_loss = 0.0
     n_items = 0.0
-    for batch in dataloader:
-        batch = [i.to(device) for i in batch]
+    for i, batch in enumerate(dataloader):
+        print(i, len(dataloader))
+        batch = [i.to(device, non_blocking=True) for i in batch]
         c, d, l, s, lw, sw, labels = batch
 
         model.zero_grad()
-        preds = model(c, d, l, s)
-        loss = loss_fn(preds, labels)
+        logits = model(c, d, l, s)
+        loss = loss_fn(logits, labels.long())
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
 
-        running_loss += loss.item() * c.shape[0]
+        running_loss += loss.cpu().item() * c.shape[0]
         n_items += c.shape[0]
 
     epoch_loss = running_loss / n_items
+    print("Epoch loss training: ", epoch_loss)
 
     return epoch_loss
 
@@ -336,19 +360,20 @@ def test(model, dataloader, loss_fn, device):
     tn, fp, fn, tp = 0, 0, 0, 0
     running_loss = 0.0
     n_items = 0.0
-    for batch in dataloader:
-        batch = [i.to(device) for i in batch]
+    for i, batch in enumerate(dataloader):
+        print(i, len(dataloader))
+        batch = [i.to(device, non_blocking=True) for i in batch]
         c, d, l, s, lw, sw, labels = batch
 
         model.zero_grad(set_to_none=True)
         logits = model(c, d, l, s)
         loss = loss_fn(logits, labels.long().view(-1))
-        running_loss += loss.item() * c.shape[0]
+        running_loss += loss.cpu().item() * c.shape[0]
         n_items += c.shape[0]
 
-        pred_probs = F.softmax(logits, dim=-1)
+        pred_probs = F.softmax(logits.cpu(), dim=-1)
         pred_classes = pred_probs.argmax(dim=-1)
-        tn_, fp_, fn_, tp_ = confusion_matrix(labels, pred_classes).ravel()
+        tn_, fp_, fn_, tp_ = confusion_matrix(labels.cpu().numpy(), pred_classes.cpu().numpy()).ravel()
         tn += tn_
         fp += fp_
         fn += fn_
@@ -363,8 +388,9 @@ def test(model, dataloader, loss_fn, device):
               'recall': tp / (tp + fn),
               'f1': 2 * tp / ((2 * tp) + fp + fn),
               'accuracy': (tp + tn) / (tp + fn + fp + tn)}
-
+    print(result)
     return result
+
 
 def is_better(prev_best, new_result, metric):
     if metric == 'f1' or \
@@ -380,6 +406,7 @@ def is_better(prev_best, new_result, metric):
 
     return False
 
+
 def initialize_eval_metric(metric):
     if metric == 'f1' or \
             metric == 'accuracy' or \
@@ -390,6 +417,7 @@ def initialize_eval_metric(metric):
     elif metric == 'loss':
         return np.infty
 
+
 def adjust_learning_rate(epoch, optimizer, scheduler, val_metric):
     """Warmup logic: Gradually increase learning rate."""
     if epoch < warmup_steps:
@@ -398,6 +426,7 @@ def adjust_learning_rate(epoch, optimizer, scheduler, val_metric):
             param_group['lr'] = lr
     else:
         scheduler.step(val_metric)
+
 
 def training_loop(model,
                   optimizer,
@@ -412,16 +441,15 @@ def training_loop(model,
     best_epoch = -1
     val_metric = 0
 
-    # Set up epoch -1 training performance baseline
-    train_result = test(model, train_dataloader, loss_fn, device)
-    print('Epoch: {}, Split: Train, F1: {}, Recall: {}, Precision: {}'.format(0,
-                                                                              train_result['f1'],
-                                                                              train_result['recall'],
-                                                                              train_result['precision']))
+    # # Set up epoch -1 training performance baseline
+    # train_result = test(model, train_dataloader, loss_fn, device)
+    # print('Epoch: {}, Split: Train, F1: {}, Recall: {}, Precision: {}'.format(0,
+    #                                                                           train_result['f1'],
+    #                                                                           train_result['recall'],
+    #                                                                           train_result['precision']))
 
     # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
     scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
-
 
     for ep in range(epochs):
         adjust_learning_rate(ep, optimizer, scheduler, val_metric)
@@ -460,14 +488,32 @@ def training_loop(model,
 
 def main():
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print("Training on :", device)
 
     # Construct dataset and dataloader
     train_dataset = TSPDataset("3_10", "train")
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_dataloader = DataLoader(train_dataset,
+                                  batch_size=batch_size,
+                                  num_workers=8,
+                                  pin_memory=True,
+                                  prefetch_factor=4,
+                                  shuffle=True)
     val_dataset = TSPDataset("3_10", "val")
-    val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    val_dataloader = DataLoader(val_dataset,
+                                batch_size=batch_size,
+                                num_workers=8,
+                                prefetch_factor=4,
+                                shuffle=False)
 
-    model = ParetoNodePredictor()
+    model = ParetoNodePredictor(d_emb=32,
+                                n_layers=2,
+                                n_heads=8,
+                                bias_mha=False,
+                                dropout_attn=0.0,
+                                dropout_proj=0.0,
+                                bias_mlp=False,
+                                dropout_mlp=0.0,
+                                h2i_ratio=2).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
 
     loss_fn = F.cross_entropy
@@ -478,6 +524,7 @@ def main():
                   val_dataloader,
                   metric_type='f1',
                   device=device)
+
 
 if __name__ == '__main__':
     main()
