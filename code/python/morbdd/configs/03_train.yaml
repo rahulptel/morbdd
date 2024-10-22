@@ -29,14 +29,23 @@ dataset:
   version: 1
   train:
     from_pid: 0
-    to_pid: 10
+    to_pid: 1000
   val:
     from_pid: 1000
-    to_pid: 1010
+    to_pid: 1100
   test:
     from_pid: 1100
     to_pid: 1200
 #################
+
+#################
+# Training config XGBoost
+use_iterator: false
+
+
+
+#################
+
 
 #################
 # Training config

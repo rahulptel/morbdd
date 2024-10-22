@@ -101,7 +101,7 @@ class DataManager(ABC):
                                    "pareto"])
         df.to_csv(file_path.parent / f"dm_stats_{pid}.csv", index=False)
 
-    def _generate_bdd_data_worker(self, rank):
+    def _generate_dd_data_worker(self, rank):
         env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
@@ -146,6 +146,7 @@ class DataManager(ABC):
             if len(dynamic_order):
                 self._save_order(pid, dynamic_order)
                 order_type = "dynamic"
+            order = static_order if order_type == "static" else dynamic_order
 
             print(f"{rank}/7/10: Computing Pareto Frontier...")
             try:
@@ -165,15 +166,15 @@ class DataManager(ABC):
             print(f"{rank}/8/10: Fetching Pareto Frontier...")
             frontier = env.get_frontier()
             print(f"{pid}: |Z| = {len(frontier['z'])}")
+
             print(f"{rank}/9/10: Marking Pareto nodes...")
-            pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"], order=dynamic_order)
+            pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"], order=order)
             exact_dd = self._tag_dd_nodes(exact_dd, pareto_state_scores)
 
             print(f"{rank}/10/10: Saving data...")
             # Save dd, solution and stats
-            sol_var_order = static_order if order_type == "static" else dynamic_order
             self._save_dd(pid, exact_dd)
-            self._save_solution(pid, frontier, sol_var_order)
+            self._save_solution(pid, frontier, order)
             self._save_dm_stats(pid, frontier, env, -1, time_compile, time_pareto)
 
     @abstractmethod
@@ -228,15 +229,15 @@ class DataManager(ABC):
                 zipdir(inst_path.parent.parent, zf)
             shutil.rmtree(inst_path.parent.parent)
 
-    def generate_bdd_data(self):
+    def generate_dd_data(self):
         if self.cfg.n_processes == 1:
-            self._generate_bdd_data_worker(0)
+            self._generate_dd_data_worker(0)
         else:
             pool = mp.Pool(processes=self.cfg.n_processes)
             results = []
 
             for rank in range(self.cfg.n_processes):
-                results.append(pool.apply_async(self._generate_bdd_data_worker, args=(rank,)))
+                results.append(pool.apply_async(self._generate_dd_data_worker, args=(rank,)))
 
             for r in results:
                 r.get()

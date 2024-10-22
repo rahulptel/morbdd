@@ -81,7 +81,8 @@ class KnapsackDataManager(DataManager):
         return []
 
     def _get_pareto_state_scores(self, data, x, order=None):
-        weight = np.array(data["weight"])
+        assert order is not None
+        weight = np.array(data["weight"])[order]
         x = np.array(x)
         pareto_state_scores = []
         for i in range(1, x.shape[1]):
@@ -94,13 +95,13 @@ class KnapsackDataManager(DataManager):
 
         return pareto_state_scores
 
-    def _tag_dd_nodes(self, bdd, pareto_state_scores):
-        assert len(pareto_state_scores) == len(bdd)
+    def _tag_dd_nodes(self, dd, pareto_state_scores):
+        assert len(pareto_state_scores) == len(dd)
 
-        for l in range(len(bdd)):
+        for l in range(len(dd)):
             pareto_states, pareto_scores = pareto_state_scores[l]
 
-            for n in bdd[l]:
+            for n in dd[l]:
                 node_state = n["s"][0]
                 index = np.where(pareto_states == node_state)[0]
                 if len(index):
@@ -110,7 +111,7 @@ class KnapsackDataManager(DataManager):
                     n["pareto"] = 0
                     n["score"] = 0
 
-        return bdd
+        return dd
 
     def _get_bdd_node_dataset_tf(self, pid, inst_data, order, bdd, rng):
         features_lst, labels_lst, weights_lst = [], [], []
@@ -228,12 +229,16 @@ class KnapsackDataManager(DataManager):
             # Get labels
             scores = np.array([layer[node_id]["score"] for node_id in node_ids])
             labels = np.zeros(len(node_ids))
+            # labels[scores > 0] = 2
+            # labels[scores > np.percentile(scores, 0.2)] = 4
+            # labels[scores > np.percentile(scores, 0.4)] = 6
+            # labels[scores > np.percentile(scores, 0.6)] = 8
+            # labels[scores > np.percentile(scores, 0.8)] = 10
             labels[scores > 0] = 2
             labels[scores > 1.25 * threshold] = 3
             labels[scores > 1.5 * threshold] = 4
             labels[scores > 2 * threshold] = 5
             labels[scores > 4 * threshold] = 10
-            # labels = rankdata(scores, method="max")
 
             # print(inst_features.shape, var_feat.shape, node_feat.shape, node["score"])
             for i, node_id in enumerate(node_ids):
@@ -265,6 +270,8 @@ class KnapsackDataManager(DataManager):
                 np.save(dataset_path / f"{pid}.npy", dataset)
 
         elif self.cfg.model.type == "gbt_rank":
+            print("Pid: ", pid)
             dataset = self._get_bdd_node_dataset_gbt_rank(data, order, bdd, rng)
             dataset = np.hstack(((np.ones(dataset.shape[0]) * pid).reshape(-1, 1), dataset))
-            return dataset
+            if dataset is not None:
+                np.save(dataset_path / f"{pid}.npy", dataset)

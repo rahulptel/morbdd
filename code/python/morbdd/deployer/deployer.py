@@ -93,7 +93,7 @@ class Deployer(ABC):
         elif self.cfg.deploy.node_select.strategy == "width":
             method += "-" + str(self.cfg.deploy.node_select.width)
 
-        run_path = path.resource / "sols_pred" / self.cfg.prob.name / self.cfg.prob.size / self.cfg.deploy.split / model_name / method
+        run_path = path.resource / "sols_pred" / self.cfg.prob.name / self.cfg.model.type / self.cfg.prob.size / self.cfg.deploy.split / model_name / method
         return run_path
 
     def post_process(self, env, pid):

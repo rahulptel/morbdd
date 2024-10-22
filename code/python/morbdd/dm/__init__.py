@@ -6,3 +6,7 @@ def dm_factory(cfg):
     elif cfg.prob.name == "indepset":
         from .ind import IndepsetDataManager
         return IndepsetDataManager(cfg)
+
+    elif cfg.prob.name == "tsp":
+        from .tsp import TSPDataManager
+        return TSPDataManager(cfg)
