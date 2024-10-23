@@ -14,24 +14,32 @@ from morbdd import ResourcePaths as path
 # 4096 ~ 2.5G
 batch_size = 16384
 epochs = 10
-initial_lr = 1e-2
+max_lr = 1e-2
 # Linear warm-up
-warmup_steps = 5
+warmup_steps_percent = 5
 # LR Scheduler
 factor = 0.9
-patience = 5
+patience = 10
 # AdamW
-weight_decay = 1e-3
+weight_decay = 1e-4
 grad_clip = 1.0
+eval_every = 10
 
 
 class TSPDataset(Dataset):
-    insts_per_split = {
+    GRID_DIM = 1000
+    MAX_DIST_ON_GRID = ((GRID_DIM ** 2) + (GRID_DIM ** 2)) ** (1 / 2)
+    INSTS_PER_SPLIT = {
         'train': 1000,
         'val': 100,
         'test': 100
     }
-    n_feat = 2
+    PID_OFFSET = {
+        'train': 0,
+        'val': 1000,
+        'test': 1100
+    }
+    COORD_DIM = 2
 
     def __init__(self, n_objs, n_vars, split, device):
         self.size = f'{n_objs}_{n_vars}'
@@ -41,9 +49,9 @@ class TSPDataset(Dataset):
 
         # Send dd to GPU. The nodes in the DD do not change. Only the edge information changes.
         self.dd = json.load(open(path.bdd / f"tsp/{self.size}/tsp_dd.json", "r"))
-        for l in self.dd:
-            for n in l:
-                self.dd[l][n] = torch.tensor(self.dd[l][n]).float().to(device)
+        for lid, layer in enumerate(self.dd):
+            for nid, node in enumerate(layer):
+                self.dd[lid][nid] = torch.tensor(node).float().to(device)
 
         # Send dataset containing tuples of (inst, layer, node, node_score, label) to GPU
         self.dataset = np.array([]).reshape(-1, 5)
@@ -54,17 +62,28 @@ class TSPDataset(Dataset):
         # Compute layer weights
         self.lw = self.get_layer_weights_exponential(self.dataset[:, 1]).to(device)
 
-        n_samples = self.insts_per_split.get(split, None)
+        # Load coordinates and distance matrix to GPU
+        n_samples = self.INSTS_PER_SPLIT.get(split, None)
         assert n_samples is not None
-        self.coords = torch.zeros((n_samples, n_objs, n_vars, self.n_feat))
+        self.coords = torch.zeros((n_samples, n_objs, n_vars, self.COORD_DIM))
         self.dists = torch.zeros((n_samples, n_objs, n_vars, n_vars))
         for p in self.inst_path.rglob("*.npz"):
             pid = int(p.stem.split('_')[-1])
             d = np.load(p)
-            self.coords[pid] = torch.from_numpy(d['coords'])
-            self.dists[pid] = torch.from_numpy(d['dists'])
-        self.coords = self.coords.float().to(device)
-        self.dists = self.dists.float().to(device)
+            self.coords[pid - self.PID_OFFSET[self.split]] = torch.from_numpy(d['coords'])
+            self.dists[pid - self.PID_OFFSET[self.split]] = torch.from_numpy(d['dists'])
+        self.dists = self.dists.float().to(device) / self.MAX_DIST_ON_GRID
+        self.coords = self.coords.float().to(device) / self.GRID_DIM
+        self.coords = torch.cat((self.coords, self.compute_stat_features()), dim=-1)
+
+    def compute_stat_features(self):
+        return torch.cat((self.dists.max(dim=-1, keepdim=True)[0],
+                          self.dists.min(dim=-1, keepdim=True)[0],
+                          self.dists.std(dim=-1, keepdim=True),
+                          self.dists.median(dim=-1, keepdim=True)[0],
+                          self.dists.quantile(0.75, dim=-1, keepdim=True) - self.dists.quantile(0.25, dim=-1,
+                                                                                                keepdim=True),
+                          ), dim=-1)
 
     @staticmethod
     def get_layer_weights_exponential(lid):
@@ -74,13 +93,14 @@ class TSPDataset(Dataset):
         return self.dataset.shape[0]
 
     def __getitem__(self, idx):
-        pid, lid, nid, ns, label = (self.dataset[idx][0].long(),
-                                    self.dataset[idx][1].long(),
-                                    self.dataset[idx][2].long(),
-                                    self.dataset[idx][3].float(),
-                                    self.dataset[idx][3].long())
-        return (self.coords[pid],
-                self.dists[pid],
+        pid, lid, nid, ns, label = (self.dataset[idx][0],
+                                    self.dataset[idx][1],
+                                    self.dataset[idx][2],
+                                    self.dataset[idx][3],
+                                    self.dataset[idx][4])
+        pid, lid, nid, label = pid.long(), lid.long(), nid.long(), label.long()
+        return (self.coords[pid - self.PID_OFFSET[self.split]],
+                self.dists[pid - self.PID_OFFSET[self.split]],
                 lid,
                 self.dd[lid][nid],
                 self.lw[idx],
@@ -273,7 +293,7 @@ class TokenEmbedGraph(nn.Module):
     DeepSet-based node and edge embeddings
     """
 
-    def __init__(self, n_node_feat=2, d_emb=32):
+    def __init__(self, n_node_feat=7, d_emb=32):
         super(TokenEmbedGraph, self).__init__()
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
@@ -294,6 +314,12 @@ class TokenEmbedGraph(nn.Module):
 
 
 class ParetoNodePredictor(nn.Module):
+    # NOT_VISITED = 0
+    # VISITED = 1
+    # LAST_VISITED = 2
+    NODE_TYPES = 3
+    N_LAYER_INDEX = 1
+
     def __init__(self,
                  d_emb=32,
                  n_layers=2,
@@ -309,15 +335,15 @@ class ParetoNodePredictor(nn.Module):
         self.graph_encoder = GTEncoder(d_emb=d_emb,
                                        n_layers=n_layers,
                                        n_heads=n_heads,
-                                       bias_mha=False,
-                                       dropout_attn=0.1,
-                                       dropout_proj=0.1,
-                                       bias_mlp=False,
-                                       dropout_mlp=0.1,
-                                       h2i_ratio=2)
-        self.state_encoder = nn.Embedding(3, d_emb)
+                                       bias_mha=bias_mha,
+                                       dropout_attn=dropout_attn,
+                                       dropout_proj=dropout_proj,
+                                       bias_mlp=bias_mlp,
+                                       dropout_mlp=dropout_mlp,
+                                       h2i_ratio=h2i_ratio)
+        self.state_encoder = nn.Embedding(self.NODE_TYPES, d_emb)
         self.layer_encoder = nn.Sequential(
-            nn.Linear(1, d_emb),
+            nn.Linear(self.N_LAYER_INDEX, d_emb),
             nn.ReLU(),
         )
         self.node_encoder = nn.Sequential(
@@ -338,54 +364,22 @@ class ParetoNodePredictor(nn.Module):
         s_[torch.arange(s_.shape[0]), last_visit.long()] = 2
         s_ = self.state_encoder(s_.long())
 
-        dd_node = n + l + s_
-        logits = self.node_encoder(dd_node.sum(1))
-        return logits
-
-
-def train(model, dataloader, loss_fn, optimizer, device):
-    model.train()
-
-    running_loss = 0.0
-    n_items = 0.0
-    for i, batch in enumerate(dataloader):
-        print(i, len(dataloader))
-        batch = [i.to(device, non_blocking=True) for i in batch]
-        c, d, l, s, lw, sw, labels = batch
-
-        model.zero_grad()
-        logits = model(c, d, l, s)
-        loss = loss_fn(logits, labels.long())
-        loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
-
-        running_loss += loss.cpu().item() * c.shape[0]
-        n_items += c.shape[0]
-
-    epoch_loss = running_loss / n_items
-    print("Epoch loss training: ", epoch_loss)
-
-    return epoch_loss
+        return self.node_encoder((n + l + s_).sum(1))
 
 
 @torch.no_grad()
-def test(model, dataloader, loss_fn, device):
+def test(model, dataloader, loss_fn):
     model.eval()
     tn, fp, fn, tp = 0, 0, 0, 0
     running_loss = 0.0
     n_items = 0.0
     for i, batch in enumerate(dataloader):
-        print(i, len(dataloader))
-        batch = [i.to(device, non_blocking=True) for i in batch]
-        c, d, l, s, lw, sw, labels = batch
+        coords, dists, lids, states, lw, sw, labels = batch
 
-        model.zero_grad(set_to_none=True)
-        logits = model(c, d, l, s)
+        logits = model(coords, dists, lids, states)
         loss = loss_fn(logits, labels.long().view(-1))
-        running_loss += loss.cpu().item() * c.shape[0]
-        n_items += c.shape[0]
+        running_loss += loss.cpu().item() * coords.shape[0]
+        n_items += coords.shape[0]
 
         pred_probs = F.softmax(logits.cpu(), dim=-1)
         pred_classes = pred_probs.argmax(dim=-1)
@@ -395,17 +389,15 @@ def test(model, dataloader, loss_fn, device):
         fn += fn_
         tp += tp_
 
-    result = {'loss': running_loss / n_items,
-              'tn': tn,
-              'fp': fp,
-              'fn': fn,
-              'tp': tp,
-              'precision': tp / (tp + fp),
-              'recall': tp / (tp + fn),
-              'f1': 2 * tp / ((2 * tp) + fp + fn),
-              'accuracy': (tp + tn) / (tp + fn + fp + tn)}
-    print(result)
-    return result
+    return {'loss': running_loss / n_items,
+            'tn': tn,
+            'fp': fp,
+            'fn': fn,
+            'tp': tp,
+            'precision': tp / (tp + fp),
+            'recall': tp / (tp + fn),
+            'f1': (2 * tp) / ((2 * tp) + fp + fn),
+            'accuracy': (tp + tn) / (tp + fn + fp + tn)}
 
 
 def is_better(prev_best, new_result, metric):
@@ -434,14 +426,22 @@ def initialize_eval_metric(metric):
         return np.infty
 
 
-def adjust_learning_rate(epoch, optimizer, scheduler, val_metric):
-    """Warmup logic: Gradually increase learning rate."""
-    if epoch < warmup_steps:
-        lr = initial_lr * (epoch + 1) / warmup_steps
+def adjust_learning_rate(step, optimizer, scheduler, val_metric, warmup_steps):
+    """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
+    if step < warmup_steps:
+        lr = max_lr * (step + 1) / warmup_steps
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
-    else:
-        scheduler.step(val_metric)
+    # else:
+    #     scheduler.step(val_metric)
+
+
+def print_eval_result(split, ep, global_step, max_steps, result):
+    print('Epoch {}/{}, Step {}/{}, Split: {}'.format(ep, epochs, global_step, max_steps, split))
+    print('\tF1: {}, Recall: {}, Precision: {}, Loss: {}'.format(result['f1'],
+                                                                 result['recall'],
+                                                                 result['precision'],
+                                                                 result['loss']))
 
 
 def training_loop(model,
@@ -449,57 +449,70 @@ def training_loop(model,
                   loss_fn,
                   train_dataloader,
                   val_dataloader,
-                  metric_type,
-                  device):
-    train_results = []
-    val_results = []
-    best_metric = initialize_eval_metric(metric_type)
-    best_epoch = -1
-    val_metric = 0
-
-    # # Set up epoch -1 training performance baseline
-    # train_result = test(model, train_dataloader, loss_fn, device)
-    # print('Epoch: {}, Split: Train, F1: {}, Recall: {}, Precision: {}'.format(0,
-    #                                                                           train_result['f1'],
-    #                                                                           train_result['recall'],
-    #                                                                           train_result['precision']))
-
+                  metric_type):
     # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
+    # scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
+    max_steps = len(train_dataloader) * epochs
+    # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
+    # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
 
+    train_results, val_results = [], []
+
+    # Set up epoch -1 training performance baseline
+    train_result = test(model, train_dataloader, loss_fn)
+    train_result.update({'epoch': -1, 'global_step': -1})
+    train_results.append(train_result)
+    print_eval_result('Train', -1, -1, max_steps, train_result)
+
+    val_result = test(model, val_dataloader, loss_fn)
+    val_result.update({'epoch': -1, 'global_step': -1})
+    val_results.append(val_result)
+    print_eval_result('Val', -1, -1, max_steps, val_result)
+
+    global_step, val_metric, best_epoch, best_step, best_metric = -1, 0, -1, -1, initialize_eval_metric(metric_type)
     for ep in range(epochs):
-        adjust_learning_rate(ep, optimizer, scheduler, val_metric)
+        for i, batch in enumerate(train_dataloader):
+            model.train()
+            global_step += 1
+            # adjust_learning_rate(global_step, optimizer, scheduler, val_metric, warmup_steps)
 
-        train(model,
-              train_dataloader,
-              loss_fn,
-              optimizer,
-              device)
+            optimizer.zero_grad(set_to_none=True)
+            coords, dists, lids, states, lw, sw, labels = batch
+            logits = model(coords, dists, lids, states)
+            loss = loss_fn(logits, labels)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
 
-        train_result = test(model, train_dataloader, loss_fn, device)
-        train_results.append(train_result)
-        print('Epoch: {}, Split: Train, F1: {}, Recall: {}, Precision: {}'.format(ep + 1,
-                                                                                  train_result['f1'],
-                                                                                  train_result['recall'],
-                                                                                  train_result['precision']))
+            if (global_step + 1) % eval_every == 0:
+                train_result = test(model, train_dataloader, loss_fn)
+                train_result.update({'epoch': ep, 'global_step': global_step})
+                train_results.append(train_result)
+                print_eval_result('Train', ep, global_step, max_steps, train_result)
 
-        val_result = test(model,
-                          val_dataloader,
-                          loss_fn,
-                          device)
-        val_metric = val_result[metric_type]
-        val_results.append(val_result)
-        print('Epoch: {}, Split: Train, F1: {}, Recall: {}, Precision: {}'.format(ep + 1,
-                                                                                  val_result['f1'],
-                                                                                  val_result['recall'],
-                                                                                  val_result['precision']))
-        if is_better(best_metric, val_result[metric_type], metric_type):
-            best_metric = val_result[metric_type]
-            best_epoch = ep
+                val_result = test(model, val_dataloader, loss_fn)
+                val_metric = val_result[metric_type]
+                val_result.update({'epoch': ep, 'global_step': global_step})
+                val_results.append(val_result)
+                print_eval_result('Val', ep, global_step, max_steps, val_result)
 
-        print('Best epoch: {}, Best {}: {}'.format(best_epoch,
-                                                   metric_type,
-                                                   val_results[best_epoch][metric_type]))
+                if is_better(best_metric, val_result[metric_type], metric_type):
+                    best_metric = val_result[metric_type]
+                    best_epoch = ep
+                    best_step = global_step
+                    torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict()
+                    }, f'{path.resource}/checkpoint/tsp/best_model.pt')
+
+                print('\tBest epoch:step={}:{}, Best {}: {}'.format(best_epoch,
+                                                                    best_step,
+                                                                    metric_type,
+                                                                    best_metric))
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict()
+        }, f'{path.resource}/checkpoint/tsp/model_{ep}.pt')
 
 
 def main():
@@ -507,19 +520,16 @@ def main():
     print("Training on :", device)
 
     # Construct dataset and dataloader
-    train_dataset = TSPDataset("3_10", "train")
+    train_dataset = TSPDataset(3, 10, "train", device)
     train_dataloader = DataLoader(train_dataset,
                                   batch_size=batch_size,
-                                  num_workers=8,
-                                  pin_memory=True,
-                                  prefetch_factor=4,
-                                  shuffle=True)
-    val_dataset = TSPDataset("3_10", "val")
+                                  shuffle=True,
+                                  drop_last=True)
+
+    val_dataset = TSPDataset(3, 10, "val", device)
     val_dataloader = DataLoader(val_dataset,
                                 batch_size=batch_size,
-                                num_workers=8,
-                                prefetch_factor=4,
-                                shuffle=False)
+                                shuffle=True)
 
     model = ParetoNodePredictor(d_emb=32,
                                 n_layers=2,
@@ -530,7 +540,7 @@ def main():
                                 bias_mlp=False,
                                 dropout_mlp=0.0,
                                 h2i_ratio=2).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=initial_lr, weight_decay=weight_decay)
+    opt = torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=weight_decay)
 
     loss_fn = F.cross_entropy
     training_loop(model,
@@ -538,8 +548,7 @@ def main():
                   loss_fn,
                   train_dataloader,
                   val_dataloader,
-                  metric_type='f1',
-                  device=device)
+                  metric_type='f1')
 
 
 if __name__ == '__main__':
