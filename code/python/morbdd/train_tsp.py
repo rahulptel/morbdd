@@ -26,50 +26,66 @@ grad_clip = 1.0
 
 
 class TSPDataset(Dataset):
-    def __init__(self, size, split, device):
-        self.size = size
+    insts_per_split = {
+        'train': 1000,
+        'val': 100,
+        'test': 100
+    }
+    n_feat = 2
+
+    def __init__(self, n_objs, n_vars, split, device):
+        self.size = f'{n_objs}_{n_vars}'
         self.split = split
-        self.inst_path = path.inst / f"tsp/{size}/{split}"
-        self.dataset_path = path.dataset / f"tsp/{size}/{split}"
-        self.dd = json.load(open(path.bdd / f"tsp/{size}/tsp_dd.json", "r"))
-        self.D = np.array([]).reshape(-1, 4)
+        self.inst_path = path.inst / f"tsp/{self.size}/{split}"
+        self.dataset_path = path.dataset / f"tsp/{self.size}/{split}"
 
+        # Send dd to GPU. The nodes in the DD do not change. Only the edge information changes.
+        self.dd = json.load(open(path.bdd / f"tsp/{self.size}/tsp_dd.json", "r"))
+        for l in self.dd:
+            for n in l:
+                self.dd[l][n] = torch.tensor(self.dd[l][n]).float().to(device)
+
+        # Send dataset containing tuples of (inst, layer, node, node_score, label) to GPU
+        self.dataset = np.array([]).reshape(-1, 5)
         for p in self.dataset_path.rglob('*.npz'):
-            pid = int(p.stem.split('_')[-1])
             d = np.load(p)['arr_0']
-            d = np.hstack((np.array([pid] * d.shape[0]).reshape(-1, 1), d))
-            self.D = np.vstack((self.D, d))
-        self.D = torch.from_numpy(self.D).float().to(device)
+            self.dataset = np.vstack((self.dataset, d))
+        self.dataset = torch.from_numpy(self.dataset).float().to(device)
+        # Compute layer weights
+        self.lw = self.get_layer_weights_exponential(self.dataset[:, 1]).to(device)
 
-        n_items = 1000 if split == "train" else 100
-        self.coords = torch.zeros((n_items, 3, 10, 2))
-        self.dists = torch.zeros((n_items, 3, 10, 10))
+        n_samples = self.insts_per_split.get(split, None)
+        assert n_samples is not None
+        self.coords = torch.zeros((n_samples, n_objs, n_vars, self.n_feat))
+        self.dists = torch.zeros((n_samples, n_objs, n_vars, n_vars))
         for p in self.inst_path.rglob("*.npz"):
             pid = int(p.stem.split('_')[-1])
             d = np.load(p)
-            self.coords[pid] = torch.from_numpy(d['coords']).float().to(device)
-            self.dists[pid] = torch.from_numpy(d['dists']).float().to(device)
+            self.coords[pid] = torch.from_numpy(d['coords'])
+            self.dists[pid] = torch.from_numpy(d['dists'])
+        self.coords = self.coords.float().to(device)
+        self.dists = self.dists.float().to(device)
 
     @staticmethod
     def get_layer_weights_exponential(lid):
-        return float(np.exp(-0.5 * lid))
+        return torch.exp(-0.5 * lid)
 
     def __len__(self):
-        return self.D.shape[0]
+        return self.dataset.shape[0]
 
     def __getitem__(self, idx):
-        pid, lid, nid, score = self.D[idx][0].long(), self.D[idx][1].long(), self.D[idx][2], self.D[idx][3]
-        label = 0 if score == 0 else 1
-        # d = np.load(self.inst_path / f"tsp_7_{self.size}_{pid}.npz")
-        state = self.dd[lid][int(nid.cpu().numpy())]
-
+        pid, lid, nid, ns, label = (self.dataset[idx][0].long(),
+                                    self.dataset[idx][1].long(),
+                                    self.dataset[idx][2].long(),
+                                    self.dataset[idx][3].float(),
+                                    self.dataset[idx][3].long())
         return (self.coords[pid],
                 self.dists[pid],
                 lid,
-                torch.tensor(state).float(),
-                torch.tensor(self.get_layer_weights_exponential(lid)).float(),
-                torch.tensor(score).float(),
-                torch.tensor(label).float())
+                self.dd[lid][nid],
+                self.lw[idx],
+                ns,
+                label)
 
 
 class MLP(nn.Module):

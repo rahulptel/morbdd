@@ -13,6 +13,7 @@ from .dm import DataManager
 
 random.seed(7)
 
+
 class TSPDataManager(DataManager):
     def _save_states_dataset(self, pid, pareto_states):
         parent = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
@@ -89,7 +90,7 @@ class TSPDataManager(DataManager):
 
         return pareto_state_scores
 
-    def _tag_dd_nodes(self, dd, pareto_state_scores, save_all_neg=False):
+    def _tag_dd_nodes(self, pid, dd, pareto_state_scores, save_all_neg=False):
         assert len(pareto_state_scores) == len(dd)
 
         result = []
@@ -100,12 +101,12 @@ class TSPDataManager(DataManager):
                 is_pos = False
                 for pareto_state, score in zip(pareto_states, pareto_scores):
                     if np.array_equal(pareto_state, n):
-                        pos.append([l, nid, float(score)])
-                        is_pos=True
+                        pos.append([pid, l, nid, float(score), 1])
+                        is_pos = True
                         break
 
                 if not is_pos:
-                    neg.append([l, nid, 0])
+                    neg.append([pid, l, nid, 0, 0])
 
             result.extend(pos)
             random.shuffle(neg)
@@ -114,7 +115,6 @@ class TSPDataManager(DataManager):
                 result.extend(neg[:neg_upto])
 
         return result
-
 
     def _generate_dd_data_worker(self, rank):
         env = get_env(n_objs=self.cfg.prob.n_objs)
@@ -152,7 +152,7 @@ class TSPDataManager(DataManager):
             print(f"{rank}/9/10: Marking Pareto nodes...")
             pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"])
             save_all_neg = True if self.cfg.split != "train" else False
-            dataset = self._tag_dd_nodes(exact_dd, pareto_state_scores, save_all_neg=save_all_neg)
+            dataset = self._tag_dd_nodes(pid, exact_dd, pareto_state_scores, save_all_neg=save_all_neg)
 
             print(f"{rank}/10/10: Saving data...")
             # Save dd, solution and stats
