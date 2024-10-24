@@ -5,7 +5,7 @@ n_node_feat: 2
 n_edge_type: 2
 d_emb: 32
 top_k: 5
-n_layers: 2
+n_layers: 4
 n_heads: 8
 dropout_token: 0
 dropout: 0.0

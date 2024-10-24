@@ -11,8 +11,6 @@ import hydra
 from morbdd import ResourcePaths as path
 
 
-
-
 class TSPDataset(Dataset):
     GRID_DIM = 1000
     MAX_DIST_ON_GRID = ((GRID_DIM ** 2) + (GRID_DIM ** 2)) ** (1 / 2)
@@ -43,6 +41,7 @@ class TSPDataset(Dataset):
         # Send dataset containing tuples of (inst, layer, node, node_score, label) to GPU
         self.dataset = np.array([]).reshape(-1, 5)
         for p in self.dataset_path.rglob('*.npz'):
+            print("Loading: ", p)
             d = np.load(p)['arr_0']
             self.dataset = np.vstack((self.dataset, d))
         self.dataset = torch.from_numpy(self.dataset).float().to(device)
@@ -304,7 +303,7 @@ class ParetoNodePredictor(nn.Module):
     # NOT_VISITED = 0
     # VISITED = 1
     # LAST_VISITED = 2
-    NODE_VIST_TYPES = 3
+    NODE_VISIT_TYPES = 3
     N_LAYER_INDEX = 1
     N_CLASSES = 2
 
@@ -475,13 +474,13 @@ def training_loop(cfg,
             model.train()
             global_step += 1
             # adjust_learning_rate(global_step, optimizer, scheduler, val_metric, warmup_steps)
-
-            optimizer.zero_grad(set_to_none=True)
             coords, dists, lids, states, lw, sw, labels = batch
             logits = model(coords, dists, lids, states)
             loss = loss_fn(logits, labels)
+
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
             if (global_step + 1) % cfg.eval_every == 0:
@@ -514,6 +513,7 @@ def training_loop(cfg,
             'optimizer_state_dict': optimizer.state_dict()
         }, f'{path.resource}/checkpoint/tsp/model_{ep}.pt')
 
+
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
 def main(cfg):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -540,7 +540,8 @@ def main(cfg):
                                 bias_mlp=cfg.model.bias_mlp,
                                 dropout_mlp=cfg.model.dropout_mlp,
                                 h2i_ratio=cfg.model.h2i_ratio).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay)
+    # opt = torch.optim.AdamW(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg.max_lr)
 
     loss_fn = F.cross_entropy
     training_loop(cfg,
