@@ -7,23 +7,10 @@ import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import Dataset, DataLoader
-
+import hydra
 from morbdd import ResourcePaths as path
 
-# Hyperparams
-# 4096 ~ 2.5G
-batch_size = 16384
-epochs = 10
-max_lr = 1e-2
-# Linear warm-up
-warmup_steps_percent = 5
-# LR Scheduler
-factor = 0.9
-patience = 10
-# AdamW
-weight_decay = 1e-4
-grad_clip = 1.0
-eval_every = 10
+
 
 
 class TSPDataset(Dataset):
@@ -317,18 +304,19 @@ class ParetoNodePredictor(nn.Module):
     # NOT_VISITED = 0
     # VISITED = 1
     # LAST_VISITED = 2
-    NODE_TYPES = 3
+    NODE_VIST_TYPES = 3
     N_LAYER_INDEX = 1
+    N_CLASSES = 2
 
     def __init__(self,
                  d_emb=32,
                  n_layers=2,
                  n_heads=8,
                  bias_mha=False,
-                 dropout_attn=0.1,
-                 dropout_proj=0.1,
+                 dropout_attn=0.0,
+                 dropout_proj=0.0,
                  bias_mlp=False,
-                 dropout_mlp=0.1,
+                 dropout_mlp=0.0,
                  h2i_ratio=2):
         super(ParetoNodePredictor, self).__init__()
         self.token_encoder = TokenEmbedGraph(d_emb=d_emb)
@@ -341,15 +329,23 @@ class ParetoNodePredictor(nn.Module):
                                        bias_mlp=bias_mlp,
                                        dropout_mlp=dropout_mlp,
                                        h2i_ratio=h2i_ratio)
-        self.state_encoder = nn.Embedding(self.NODE_TYPES, d_emb)
+        self.visit_encoder = nn.Embedding(self.NODE_VISIT_TYPES, d_emb)
+        self.node_visit_encoder1 = nn.Sequential(
+            nn.Linear(d_emb, h2i_ratio * d_emb),
+            nn.ReLU(),
+        )
+        self.node_visit_encoder2 = nn.Sequential(
+            nn.Linear(h2i_ratio * d_emb, d_emb),
+            nn.ReLU(),
+        )
         self.layer_encoder = nn.Sequential(
             nn.Linear(self.N_LAYER_INDEX, d_emb),
             nn.ReLU(),
         )
-        self.node_encoder = nn.Sequential(
-            nn.Linear(d_emb, 2 * d_emb),
+        self.pareto_predictor = nn.Sequential(
+            nn.Linear(d_emb, h2i_ratio * d_emb),
             nn.ReLU(),
-            nn.Linear(2 * d_emb, 2),
+            nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
         )
 
     def forward(self, n, e, l, s):
@@ -357,14 +353,17 @@ class ParetoNodePredictor(nn.Module):
         n = self.graph_encoder(n, e)  # B x n_vars x d_emb
         B, n_vars, d_emb = n.shape
 
-        l = self.layer_encoder(((n_vars - l) / n_vars).unsqueeze(-1))  # B x d_emb
-        l = l.reshape(B, 1, d_emb)  # B x 1 x d_emb
         last_visit = s[:, -1]
-        s_ = s[:, :-1]
-        s_[torch.arange(s_.shape[0]), last_visit.long()] = 2
-        s_ = self.state_encoder(s_.long())
+        visit_mask = s[:, :-1]
+        visit_mask[torch.arange(B), last_visit.long()] = 2
+        visit_enc = self.visit_encoder(visit_mask.long())
 
-        return self.node_encoder((n + l + s_).sum(1))
+        # B x d_emb
+        node_visit = self.node_visit_encoder2(self.node_visit_encoder1((n + visit_enc)).sum(1))
+        customer_enc = n[torch.arange(B), last_visit.long()]
+        l_enc = self.layer_encoder(((n_vars - l) / n_vars).unsqueeze(-1))
+
+        return self.pareto_predictor(node_visit + customer_enc + l_enc)
 
 
 @torch.no_grad()
@@ -426,7 +425,7 @@ def initialize_eval_metric(metric):
         return np.infty
 
 
-def adjust_learning_rate(step, optimizer, scheduler, val_metric, warmup_steps):
+def adjust_learning_rate(step, optimizer, scheduler, val_metric, max_lr, warmup_steps):
     """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
     if step < warmup_steps:
         lr = max_lr * (step + 1) / warmup_steps
@@ -436,15 +435,16 @@ def adjust_learning_rate(step, optimizer, scheduler, val_metric, warmup_steps):
     #     scheduler.step(val_metric)
 
 
-def print_eval_result(split, ep, global_step, max_steps, result):
-    print('Epoch {}/{}, Step {}/{}, Split: {}'.format(ep, epochs, global_step, max_steps, split))
+def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
+    print('Epoch {}/{}, Step {}/{}, Split: {}'.format(ep, max_epochs, global_step, max_steps, split))
     print('\tF1: {}, Recall: {}, Precision: {}, Loss: {}'.format(result['f1'],
                                                                  result['recall'],
                                                                  result['precision'],
                                                                  result['loss']))
 
 
-def training_loop(model,
+def training_loop(cfg,
+                  model,
                   optimizer,
                   loss_fn,
                   train_dataloader,
@@ -452,7 +452,7 @@ def training_loop(model,
                   metric_type):
     # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
-    max_steps = len(train_dataloader) * epochs
+    max_steps = len(train_dataloader) * cfg.epochs
     # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
     # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
 
@@ -462,15 +462,15 @@ def training_loop(model,
     train_result = test(model, train_dataloader, loss_fn)
     train_result.update({'epoch': -1, 'global_step': -1})
     train_results.append(train_result)
-    print_eval_result('Train', -1, -1, max_steps, train_result)
+    print_eval_result('Train', -1, cfg.epochs, -1, max_steps, train_result)
 
     val_result = test(model, val_dataloader, loss_fn)
     val_result.update({'epoch': -1, 'global_step': -1})
     val_results.append(val_result)
-    print_eval_result('Val', -1, -1, max_steps, val_result)
+    print_eval_result('Val', -1, cfg.epochs, -1, max_steps, val_result)
 
     global_step, val_metric, best_epoch, best_step, best_metric = -1, 0, -1, -1, initialize_eval_metric(metric_type)
-    for ep in range(epochs):
+    for ep in range(cfg.epochs):
         for i, batch in enumerate(train_dataloader):
             model.train()
             global_step += 1
@@ -481,20 +481,20 @@ def training_loop(model,
             logits = model(coords, dists, lids, states)
             loss = loss_fn(logits, labels)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
-            if (global_step + 1) % eval_every == 0:
+            if (global_step + 1) % cfg.eval_every == 0:
                 train_result = test(model, train_dataloader, loss_fn)
                 train_result.update({'epoch': ep, 'global_step': global_step})
                 train_results.append(train_result)
-                print_eval_result('Train', ep, global_step, max_steps, train_result)
+                print_eval_result('Train', ep, cfg.epochs, global_step, max_steps, train_result)
 
                 val_result = test(model, val_dataloader, loss_fn)
                 val_metric = val_result[metric_type]
                 val_result.update({'epoch': ep, 'global_step': global_step})
                 val_results.append(val_result)
-                print_eval_result('Val', ep, global_step, max_steps, val_result)
+                print_eval_result('Val', ep, cfg.epochs, global_step, max_steps, val_result)
 
                 if is_better(best_metric, val_result[metric_type], metric_type):
                     best_metric = val_result[metric_type]
@@ -514,36 +514,37 @@ def training_loop(model,
             'optimizer_state_dict': optimizer.state_dict()
         }, f'{path.resource}/checkpoint/tsp/model_{ep}.pt')
 
-
-def main():
+@hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
+def main(cfg):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     print("Training on :", device)
 
     # Construct dataset and dataloader
-    train_dataset = TSPDataset(3, 10, "train", device)
+    train_dataset = TSPDataset(cfg.prob.n_objs, cfg.prob.n_vars, "train", device)
     train_dataloader = DataLoader(train_dataset,
-                                  batch_size=batch_size,
+                                  batch_size=cfg.batch_size,
                                   shuffle=True,
                                   drop_last=True)
 
-    val_dataset = TSPDataset(3, 10, "val", device)
+    val_dataset = TSPDataset(cfg.prob.n_objs, cfg.prob.n_vars, "val", device)
     val_dataloader = DataLoader(val_dataset,
-                                batch_size=batch_size,
+                                batch_size=cfg.batch_size,
                                 shuffle=True)
 
-    model = ParetoNodePredictor(d_emb=32,
-                                n_layers=2,
-                                n_heads=8,
-                                bias_mha=False,
-                                dropout_attn=0.0,
-                                dropout_proj=0.0,
-                                bias_mlp=False,
-                                dropout_mlp=0.0,
-                                h2i_ratio=2).to(device)
-    opt = torch.optim.AdamW(model.parameters(), lr=max_lr, weight_decay=weight_decay)
+    model = ParetoNodePredictor(d_emb=cfg.model.d_emb,
+                                n_layers=cfg.model.n_layers,
+                                n_heads=cfg.model.n_heads,
+                                bias_mha=cfg.model.bias_mha,
+                                dropout_attn=cfg.model.dropout_attn,
+                                dropout_proj=cfg.model.dropout_proj,
+                                bias_mlp=cfg.model.bias_mlp,
+                                dropout_mlp=cfg.model.dropout_mlp,
+                                h2i_ratio=cfg.model.h2i_ratio).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay)
 
     loss_fn = F.cross_entropy
-    training_loop(model,
+    training_loop(cfg,
+                  model,
                   opt,
                   loss_fn,
                   train_dataloader,

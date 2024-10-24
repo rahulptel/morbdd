@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+  - prob: tsp
+  - model: gtf
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+#initial_lr: 1e-5
+max_lr: 1e-3
+weight_decay: 1e-4
+## Linear warm-up
+#warmup_steps_percent = 5
+## LR Scheduler
+#factor = 0.9
+#patience = 10
+
+batch_size: 16384
+epochs: 10
+grad_clip: 1.0
+eval_every: 10
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
