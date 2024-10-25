@@ -5,19 +5,19 @@ defaults:
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
-#initial_lr: 1e-5
+initial_lr: 1e-5
 max_lr: 1e-3
-weight_decay: 1e-4
+weight_decay: 1e-2
 ## Linear warm-up
 #warmup_steps_percent = 5
 ## LR Scheduler
 #factor = 0.9
 #patience = 10
 
-batch_size: 16384
+batch_size: 512
 epochs: 10
 grad_clip: 1.0
-eval_every: 10
+eval_every: 150
 
 hydra:
   output_subdir: null
