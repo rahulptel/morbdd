@@ -44,7 +44,7 @@ class TSPDataManager(DataManager):
         # Generate p sets of coordinates
         for _ in range(n_objs):
             # Random integer coordinates for each city
-            coordinates = np.random.randint(0, self.cfg.prob.grid_size, size=(n_vars, 2))
+            coordinates = rng.randint(0, self.cfg.prob.grid_size + 1, size=(n_vars, 2))
             coordinate_matrices.append(coordinates)
 
             # Calculate the distance matrix (Euclidean distances between cities)
