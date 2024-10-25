@@ -1,14 +1,33 @@
 import json
+import pickle as pkl
 
+import hydra
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
 from torch.utils.data import Dataset, DataLoader
-import hydra
+
 from morbdd import ResourcePaths as path
+
+
+class FocalLoss(nn.Module):
+    def __init__(self, focal=True, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.focal = focal
+        self.gamma = gamma
+
+    def forward(self, logits, targets, alpha=None):
+        probs = F.sigmoid(logits)
+        pt = probs.gather(1, targets)
+        bce = F.cross_entropy(logits, targets, reduction='none')  # BCELoss
+        loss = ((1 - pt) ** self.gamma) * bce  # Focal loss
+        if alpha is not None:
+            loss *= alpha  # Class weighted focal loss
+
+        return loss.mean()
 
 
 class TSPDataset(Dataset):
@@ -365,6 +384,119 @@ class ParetoNodePredictor(nn.Module):
         return self.pareto_predictor(node_visit + customer_enc + l_enc)
 
 
+def get_model_str(cfg):
+    model_str = f"{cfg.model.type}-v{cfg.model.version}-"
+    if cfg.model.d_emb != 32:
+        model_str += f"-emb-{cfg.model.d_emb}"
+    if cfg.model.n_layers != 2:
+        model_str += f"-l-{cfg.model.n_layers}"
+    if cfg.model.n_heads != 8:
+        model_str += f"-h-{cfg.model.n_heads}"
+    if cfg.model.dropout_token != 0.0:
+        model_str += f"-dptk-{cfg.model.dropout_token}"
+    if cfg.model.dropout_attn != 0.0:
+        model_str += f"-dpa-{cfg.model.dropout_attn}"
+    if cfg.model.dropout_proj != 0.0:
+        model_str += f"-dpp-{cfg.model.dropout_proj}"
+    if cfg.model.dropout_mlp != 0.0:
+        model_str += f"-dpm-{cfg.model.dropout_mlp}"
+    if cfg.model.bias_mha:
+        model_str += f"-ba-{cfg.model.bias_mha}"
+    if cfg.model.bias_mha:
+        model_str += f"-bm-{cfg.model.bias_mlp}"
+    if cfg.model.h2i_ratio != 2:
+        model_str += f"-h2i-{cfg.model.h2i_ratio}"
+
+    return model_str
+
+
+def get_optimizer_str(cfg):
+    opt_str = "opt"
+    if cfg.optimizer != "Adam":
+        opt_str += f"-{cfg.optimizer}"
+    if cfg.weight_decay != 1e-3:
+        opt_str += f"-wd{cfg.weight_decay}"
+    opt_str += f"-lr-{cfg.max_lr}-{cfg.warmup_steps}"
+    if cfg.decay is not None and cfg.decay != "Cosine":
+        opt_str += f"-{cfg.decay}"
+    if cfg.batch_size != 512:
+        opt_str += f"-bs-{cfg.batch_size}"
+    if cfg.grad_clip != 1.0:
+        opt_str += f"-gcl-{cfg.grad_clip}"
+
+    return opt_str
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+def is_better(prev_best, new_result, metric):
+    if metric == 'f1' or \
+            metric == 'accuracy' or \
+            metric == 'precision' or \
+            metric == 'recall':
+        if new_result > prev_best:
+            return True
+
+    elif metric == 'loss':
+        if new_result < prev_best:
+            return True
+
+    return False
+
+
+def initialize_eval_metric(metric):
+    if metric == 'f1' or \
+            metric == 'accuracy' or \
+            metric == 'precision' or \
+            metric == 'recall':
+        return 0
+
+    elif metric == 'loss':
+        return np.infty
+
+
+def print_eval_result(split, ep, max_epochs, global_step, max_steps, result, verbose=True):
+    print('Epoch {}/{}, Step {}/{}, Split: {}'.format(ep, max_epochs, global_step, max_steps, split))
+    print('\tF1: {}, Recall: {}, Precision: {}, Loss: {}'.format(result['f1'],
+                                                                 result['recall'],
+                                                                 result['precision'],
+                                                                 result['loss']))
+    if verbose:
+        print('\t\tTP: {}, FP: {}, TN: {}, FN: {}'.format(result['tp'],
+                                                          result['fp'],
+                                                          result['tn'],
+                                                          result['fn']))
+
+
+def save_model(save_path, model, optimizer):
+    torch.save({
+        'model_state_dict': model.cpu().state_dict(),
+        'optimizer_state_dict': optimizer.state_dict()
+    }, save_path)
+
+
+def save_result(save_path, ep, global_step, train_result, val_result):
+    pkl.dump({
+        'epoch': ep,
+        'global_step': global_step,
+        'train_result': train_result,
+        'val_result': val_result
+    }, save_path)
+
+
+def adjust_learning_rate(step, optimizer, scheduler, val_metric, max_lr, warmup_steps):
+    """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
+    if step <= warmup_steps:
+        lr = max_lr * (step / warmup_steps)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+    else:
+        if scheduler is not None:
+            scheduler.step(val_metric)
+
+
 @torch.no_grad()
 def test(model, dataloader, loss_fn):
     model.eval()
@@ -398,50 +530,6 @@ def test(model, dataloader, loss_fn):
             'accuracy': (tp + tn) / (tp + fn + fp + tn)}
 
 
-def is_better(prev_best, new_result, metric):
-    if metric == 'f1' or \
-            metric == 'accuracy' or \
-            metric == 'precision' or \
-            metric == 'recall':
-        if new_result > prev_best:
-            return True
-
-    elif metric == 'loss':
-        if new_result < prev_best:
-            return True
-
-    return False
-
-
-def initialize_eval_metric(metric):
-    if metric == 'f1' or \
-            metric == 'accuracy' or \
-            metric == 'precision' or \
-            metric == 'recall':
-        return 0
-
-    elif metric == 'loss':
-        return np.infty
-
-
-def adjust_learning_rate(step, optimizer, scheduler, val_metric, max_lr, warmup_steps):
-    """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
-    if step < warmup_steps:
-        lr = max_lr * (step + 1) / warmup_steps
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = lr
-    # else:
-    #     scheduler.step(val_metric)
-
-
-def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
-    print('Epoch {}/{}, Step {}/{}, Split: {}'.format(ep, max_epochs, global_step, max_steps, split))
-    print('\tF1: {}, Recall: {}, Precision: {}, Loss: {}'.format(result['f1'],
-                                                                 result['recall'],
-                                                                 result['precision'],
-                                                                 result['loss']))
-
-
 def training_loop(cfg,
                   model,
                   optimizer,
@@ -449,15 +537,25 @@ def training_loop(cfg,
                   train_dataloader,
                   val_dataloader,
                   metric_type):
-    # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
-    # scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
+    exp_str = get_model_str(cfg) + "-" + get_optimizer_str(cfg)
+    exp_path = path.checkpoint / "tsp" / cfg.prob.size / exp_str
+    exp_path.mkdir(exist_ok=True, parents=True)
+
     max_steps = len(train_dataloader) * cfg.epochs
-    # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
-    # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
+    max_steps = (max_steps // cfg.eval_every) * cfg.eval_every
+    warmup_steps = int((cfg.warmup_steps / 100) * max_steps)
+    scheduler = None
+    if cfg.decay == "cosine":
+        scheduler = CosineAnnealingLR(optimizer, max_steps - warmup_steps, cfg.max_lr / 10)
+    elif cfg.decay == "ReduceLROnPlateau":
+        scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=cfg.patience, factor=cfg.factor)
+    print('Training epochs: {}, max steps: {}, warm-up steps: {}/{:.2f}'.format(cfg.epochs,
+                                                                                max_steps,
+                                                                                warmup_steps,
+                                                                                warmup_steps / max_steps))
+    print('Decay: {}'.format(cfg.decay))
 
     train_results, val_results = [], []
-
-    # Set up epoch -1 training performance baseline
     train_result = test(model, train_dataloader, loss_fn)
     train_result.update({'epoch': -1, 'global_step': -1})
     train_results.append(train_result)
@@ -471,16 +569,17 @@ def training_loop(cfg,
     global_step, val_metric, best_epoch, best_step, best_metric = -1, 0, -1, -1, initialize_eval_metric(metric_type)
     for ep in range(cfg.epochs):
         for i, batch in enumerate(train_dataloader):
-            model.train()
             global_step += 1
-            # adjust_learning_rate(global_step, optimizer, scheduler, val_metric, warmup_steps)
+            adjust_learning_rate(global_step, optimizer, scheduler, val_metric, cfg.max_lr, warmup_steps)
+
+            model.train()
             coords, dists, lids, states, lw, sw, labels = batch
             logits = model(coords, dists, lids, states)
             loss = loss_fn(logits, labels)
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
             if (global_step + 1) % cfg.eval_every == 0:
@@ -495,23 +594,30 @@ def training_loop(cfg,
                 val_results.append(val_result)
                 print_eval_result('Val', ep, cfg.epochs, global_step, max_steps, val_result)
 
+                save_path = exp_path / f'model_{ep}_{global_step}.pt'
+                save_model(save_path, model, optimizer)
+                save_path = open(str(exp_path / f'result_{ep}_{global_step}.pkl'), 'w')
+                save_result(save_path, ep, global_step, train_result, val_result)
+
                 if is_better(best_metric, val_result[metric_type], metric_type):
                     best_metric = val_result[metric_type]
                     best_epoch = ep
                     best_step = global_step
-                    torch.save({
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict()
-                    }, f'{path.resource}/checkpoint/tsp/best_model.pt')
 
-                print('\tBest epoch:step={}:{}, Best {}: {}'.format(best_epoch,
-                                                                    best_step,
-                                                                    metric_type,
-                                                                    best_metric))
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict()
-        }, f'{path.resource}/checkpoint/tsp/model_{ep}.pt')
+                    save_path = exp_path / 'best_model.pt'
+                    save_model(save_path, model, optimizer)
+
+                    save_path = open(str(exp_path / f'best_result.pkl'), 'w')
+                    save_result(save_path, ep, global_step, train_result, val_result)
+
+                print('\t{}Best epoch:step={}:{}, Best {}: {}'.format('* ' if best_step == global_step \
+                                                                          else '',
+                                                                      best_epoch,
+                                                                      best_step,
+                                                                      metric_type,
+                                                                      best_metric))
+            if global_step == max_steps:
+                return
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
@@ -540,10 +646,18 @@ def main(cfg):
                                 bias_mlp=cfg.model.bias_mlp,
                                 dropout_mlp=cfg.model.dropout_mlp,
                                 h2i_ratio=cfg.model.h2i_ratio).to(device)
-    # opt = torch.optim.AdamW(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay)
-    opt = torch.optim.Adam(model.parameters(), lr=cfg.max_lr)
+    print(model)
+    print(f"The model has {count_parameters(model)} parameters!")
+    Opt = getattr(torch.optim, cfg.optimizer)
+    opt = Opt(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay, betas=(cfg.beta1, cfg.beta2))
 
-    loss_fn = F.cross_entropy
+    loss_fn = None
+    if cfg.loss == "ce":
+        loss_fn = F.cross_entropy
+    elif cfg.loss == "fce":
+        loss_fn = FocalLoss()
+    assert loss_fn is not None
+
     training_loop(cfg,
                   model,
                   opt,
