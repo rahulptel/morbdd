@@ -5,26 +5,29 @@ defaults:
   - override hydra/hydra_logging: disabled
   - override hydra/job_logging: disabled
 
-optimizer: AdamW
-max_lr: 0.015
+optimizer: Adam
+max_lr: 0.001
 # Adam default: 0
 # AdamW default: 0.01
-weight_decay: 1e-2
+weight_decay: 0
 # Default: 0.9
 beta1: 0.9
 # Default: 0.999
 beta2: 0.999
 ## Linear warm-up
-warmup_steps: 5
-decay:
+warmup_steps: 0
+# No,
+# Cosine
+# ReduceOnPlateau
+decay: No
 ## LR Scheduler
 factor: 0.9
 patience: 25
 
-batch_size: 8192
+batch_size: 512
 epochs: 10
-grad_clip: 5.0
-eval_every: 25
+grad_clip: 0.0
+eval_every: 250
 
 # ce: cross entropy
 # fce: focal loss
