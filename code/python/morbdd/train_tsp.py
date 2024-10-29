@@ -13,8 +13,9 @@ from morbdd import ResourcePaths as path
 
 
 class TSPDataset(Dataset):
-    GRID_DIM = 1000
-    MAX_DIST_ON_GRID = ((GRID_DIM**2) + (GRID_DIM**2)) ** (1 / 2)
+    # GRID_DIM = 1000
+    # MAX_DIST_ON_GRID = ((GRID_DIM**2) + (GRID_DIM**2)) ** (1 / 2)
+    GRID_DIM, MAX_DIST_ON_GRID = 1, 1
     INSTS_PER_SPLIT = {"train": 1000, "val": 100, "test": 100}
     PID_OFFSET = {"train": 0, "val": 1000, "test": 1100}
     COORD_DIM = 2
@@ -505,17 +506,28 @@ def test(model, dataloader, loss_fn):
         fn += fn_
         tp += tp_
 
-    return {
-        "loss": running_loss / n_items,
-        "tn": tn,
-        "fp": fp,
-        "fn": fn,
-        "tp": tp,
-        "precision": tp / (tp + fp),
-        "recall": tp / (tp + fn),
-        "f1": (2 * tp) / ((2 * tp) + fp + fn),
-        "accuracy": (tp + tn) / (tp + fn + fp + tn),
-    }
+        result = {
+            "loss": running_loss / n_items,
+            "tn": tn,
+            "fp": fp,
+            "fn": fn,
+            "tp": tp,
+            "accuracy": (tp + tn) / (tp + fn + fp + tn),
+            "precision": 0,
+            "recall": 0,
+            "f1": 0,
+        }
+
+        if tp + fp > 0:
+            result["precision"] = tp / (tp + fp)
+
+        if tp + fn > 0:
+            result["recall"] = tp / (tp + fn)
+
+        if result["precision"] > 0 and result["recall"] > 0:
+            result["f1"] = (2 * tp) / ((2 * tp) + fp + fn)
+
+        return result
 
 
 def is_better(prev_best, new_result, metric):
