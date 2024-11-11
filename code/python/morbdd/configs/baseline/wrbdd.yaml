@@ -12,4 +12,5 @@ max_width: 20
 #    - min_items
 node_selection: ${prob.node_selection}
 
-
+edge_agg: mean
+next_node: min
