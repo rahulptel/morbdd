@@ -16,25 +16,42 @@ random.seed(7)
 
 class TSPDataManager(DataManager):
     def _save_states_dataset(self, pid, pareto_states):
-        parent = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        parent = (
+            path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        )
         parent.mkdir(parents=True, exist_ok=True)
         np.savez(f"{parent}/ps_{pid}.npz", pareto_states)
 
     def _save_solution(self, pid, frontier):
-        parent = path.sol / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        parent = (
+            path.sol / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        )
         parent.mkdir(parents=True, exist_ok=True)
-        np.savez(f"{parent}/sol_{pid}.npz", x=frontier['x'], z=frontier['z'])
+        np.savez(f"{parent}/sol_{pid}.npz", x=frontier["x"], z=frontier["z"])
 
     def _save_dm_stats(self, pid, frontier, env, time_fetch, time_compile, time_pareto):
-        file_path = path.sol / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        file_path = (
+            path.sol / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        )
         file_path.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.split, pid, len(frontier["z"]), time_compile, time_pareto]],
-                          columns=["size", "split", "pid", "nnds", "compilation", "pareto"])
+        df = pd.DataFrame(
+            [
+                [
+                    self.cfg.prob.size,
+                    self.cfg.split,
+                    pid,
+                    len(frontier["z"]),
+                    time_compile,
+                    time_pareto,
+                ]
+            ],
+            columns=["size", "split", "pid", "nnds", "compilation", "pareto"],
+        )
         df.to_csv(file_path.parent / f"dm_stats_{pid}.csv", index=False)
 
     def _get_instance_path(self, seed, n_objs, n_vars, split, pid):
-        size = f'{n_objs}_{n_vars}'
-        return path.inst / f'tsp/{size}/{split}/tsp_{seed}_{size}_{pid}.npz'
+        size = f"{n_objs}_{n_vars}"
+        return path.inst / f"tsp/{size}/{split}/tsp_{seed}_{size}_{pid}.npz"
 
     def _generate_instance(self, rng, n_vars, n_objs):
         # List to store distance matrices
@@ -44,7 +61,9 @@ class TSPDataManager(DataManager):
         # Generate p sets of coordinates
         for _ in range(n_objs):
             # Random integer coordinates for each city
-            coordinates = np.random.randint(0, self.cfg.prob.grid_size, size=(n_vars, 2))
+            coordinates = np.random.randint(
+                0, self.cfg.prob.grid_size, size=(n_vars, 2)
+            )
             coordinate_matrices.append(coordinates)
 
             # Calculate the distance matrix (Euclidean distances between cities)
@@ -58,14 +77,14 @@ class TSPDataManager(DataManager):
             # Append the distance matrix to the list
             distance_matrices.append(distances)
 
-        return {'coords': coordinate_matrices, 'dists': distance_matrices}
+        return {"coords": coordinate_matrices, "dists": distance_matrices}
 
     def _save_instance(self, inst_path, data):
-        np.savez(str(inst_path), coords=data['coords'], dists=data['dists'])
+        np.savez(str(inst_path), coords=data["coords"], dists=data["dists"])
 
     def _get_instance_data(self, pid):
-        size = f'{self.cfg.prob.n_objs}_{self.cfg.prob.n_vars}'
-        data = get_instance_data(path, size, self.cfg.split, pid)
+        size = f"{self.cfg.prob.n_objs}_{self.cfg.prob.n_vars}"
+        data = get_instance_data(size, self.cfg.split, pid)
 
         return data
 
@@ -120,12 +139,18 @@ class TSPDataManager(DataManager):
         env = get_env(n_objs=self.cfg.prob.n_objs)
         signal.signal(signal.SIGALRM, handle_timeout)
 
-        for pid in range(self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes):
+        for pid in range(
+            self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes
+        ):
             print(f"{rank}/1/10: Fetching instance data and order...")
             data = self._get_instance_data(pid)
 
             env.reset()
-            env.set_inst(self.cfg.prob.n_vars, self.cfg.prob.n_objs, data['dists'].astype(int).tolist())
+            env.set_inst(
+                self.cfg.prob.n_vars,
+                self.cfg.prob.n_objs,
+                data["dists"].astype(int).tolist(),
+            )
             env.initialize_dd_constructor()
             env.generate_dd()
             exact_dd = env.get_dd()
@@ -136,7 +161,9 @@ class TSPDataManager(DataManager):
                 env.compute_pareto_frontier()
             except TimeoutError:
                 is_pf_computed = False
-                print(f"PF not computed within {self.cfg.prob.time_limit} for pid {pid}")
+                print(
+                    f"PF not computed within {self.cfg.prob.time_limit} for pid {pid}"
+                )
             else:
                 is_pf_computed = True
                 print(f"PF computed successfully for pid {pid}")
@@ -152,7 +179,9 @@ class TSPDataManager(DataManager):
             print(f"{rank}/9/10: Marking Pareto nodes...")
             pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"])
             save_all_neg = True if self.cfg.split != "train" else False
-            dataset = self._tag_dd_nodes(pid, exact_dd, pareto_state_scores, save_all_neg=save_all_neg)
+            dataset = self._tag_dd_nodes(
+                pid, exact_dd, pareto_state_scores, save_all_neg=save_all_neg
+            )
 
             print(f"{rank}/10/10: Saving data...")
             # Save dd, solution and stats
@@ -172,7 +201,9 @@ class TSPDataManager(DataManager):
             results = []
 
             for rank in range(self.cfg.n_processes):
-                results.append(pool.apply_async(self._generate_dd_data_worker, args=(rank,)))
+                results.append(
+                    pool.apply_async(self._generate_dd_data_worker, args=(rank,))
+                )
 
             for r in results:
                 r.get()
