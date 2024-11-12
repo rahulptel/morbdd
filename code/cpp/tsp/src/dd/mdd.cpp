@@ -723,8 +723,9 @@ bool MDDTSPConstructor::generate_next_layer(){
                 arc->weights[o] = (-1) * inst->objs[o][node->last_city][0];
             }
         }
-        ++l;        
-        mdd->update();
+        ++l;                
+        mdd->remove_dangling();
+        mdd->update();        
         assert(mdd->check_consistency());
 
         return true;

@@ -70,7 +70,6 @@ bool TSPEnv::generate_next_layer(){
 }
 
 int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){    
-    cout << mdd->layers[layer].size() << endl;
     if (states_to_remove.size() >= mdd->layers[layer].size())
     {
         return -1;
@@ -110,7 +109,7 @@ int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
                 ++i;
             }
         }
-    
+        
         mdd->repair_node_indices(layer);
         tsp_mdd_constructor.fix_state_map();
         
