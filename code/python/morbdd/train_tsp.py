@@ -592,7 +592,7 @@ def test(cfg, model, dataset, dataloader, loss_fn, class_weights):
         logits = model(coords, dists, lids, states)
         loss = loss_fn(logits, labels, reduction="none")
         if cfg.weighted_loss:
-            loss *= (lw + sw)  # Add layer weight and pareto-score weights
+            loss *= lw + sw  # Add layer weight and pareto-score weights
         loss = loss.mean()
         running_loss += loss.cpu().item() * coords.shape[0]
         n_items += coords.shape[0]
@@ -607,28 +607,28 @@ def test(cfg, model, dataset, dataloader, loss_fn, class_weights):
         fn += fn_
         tp += tp_
 
-        result = {
-            "loss": running_loss / n_items,
-            "tn": tn,
-            "fp": fp,
-            "fn": fn,
-            "tp": tp,
-            "accuracy": (tp + tn) / (tp + fn + fp + tn),
-            "precision": 0,
-            "recall": 0,
-            "f1": 0,
-        }
+    result = {
+        "loss": running_loss / n_items,
+        "tn": tn,
+        "fp": fp,
+        "fn": fn,
+        "tp": tp,
+        "accuracy": (tp + tn) / (tp + fn + fp + tn),
+        "precision": 0,
+        "recall": 0,
+        "f1": 0,
+    }
 
-        if tp + fp > 0:
-            result["precision"] = tp / (tp + fp)
+    if tp + fp > 0:
+        result["precision"] = tp / (tp + fp)
 
-        if tp + fn > 0:
-            result["recall"] = tp / (tp + fn)
+    if tp + fn > 0:
+        result["recall"] = tp / (tp + fn)
 
-        if result["precision"] > 0 and result["recall"] > 0:
-            result["f1"] = (2 * tp) / ((2 * tp) + fp + fn)
+    if result["precision"] > 0 and result["recall"] > 0:
+        result["f1"] = (2 * tp) / ((2 * tp) + fp + fn)
 
-        return result
+    return result
 
 
 def is_better(prev_best, new_result, metric):
@@ -735,7 +735,7 @@ def training_loop(
             logits = model(coords, dists, lids, states)
             loss = loss_fn(logits, labels, reduction="none")
             if cfg.weighted_loss:
-                loss *= (lw + sw)  # Add layer weight and pareto-score weights
+                loss *= lw + sw  # Add layer weight and pareto-score weights
             loss = loss.mean()
 
             optimizer.zero_grad(set_to_none=True)
