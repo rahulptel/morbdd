@@ -7,56 +7,110 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Subset, TensorDataset
 
 from morbdd import ResourcePaths as path
 
 
-class TSPDataset(Dataset):
-    # GRID_DIM = 1000
-    # MAX_DIST_ON_GRID = ((GRID_DIM**2) + (GRID_DIM**2)) ** (1 / 2)
-    GRID_DIM, MAX_DIST_ON_GRID = 1, 1
+class TSPNodeDataset:
+    GRID_DIM = 1000
+    MAX_DIST_ON_GRID = ((GRID_DIM**2) + (GRID_DIM**2)) ** (1 / 2)
     INSTS_PER_SPLIT = {"train": 1000, "val": 100, "test": 100}
     PID_OFFSET = {"train": 0, "val": 1000, "test": 1100}
     COORD_DIM = 2
+    generator = torch.Generator()
+    generator.manual_seed(1337)
 
-    def __init__(self, n_objs, n_vars, split, device):
+    def __init__(
+        self,
+        n_objs,
+        n_vars,
+        split,
+        device,
+        resample,
+        subsample,
+    ):
+        self.n_objs = n_objs
+        self.n_vars = n_vars
+        self.split = split
+        self.device = device
+        self.resample = resample
+        self.subsample = subsample
+
         self.size = f"{n_objs}_{n_vars}"
         self.split = split
         self.inst_path = path.inst / f"tsp/{self.size}/{split}"
-        self.dataset_path = path.dataset / f"tsp/{self.size}/{split}"
+        self.dataset_path = path.dataset / f"tsp/{self.size}"
 
         # Send dd to GPU. The nodes in the DD do not change. Only the edge information changes.
-        self.dd = json.load(open(path.bdd / f"tsp/{self.size}/tsp_dd.json", "r"))
-        for lid, layer in enumerate(self.dd):
-            for nid, node in enumerate(layer):
-                self.dd[lid][nid] = torch.tensor(node).float().to(device)
+        self.dd_flat = None
+        # Used to access the dd node from flattened dd. For example, a node in layer lid and an
+        # index nid can be obtained as dd_flat_node_idx = self.nodes_in_layer_prefix[lid] + nid
+        self.nodes_in_layer_prefix = None
+        self.set_dd_flat()
+        print("DD flat shape: ", self.dd_flat.shape)
 
-        # Send dataset containing tuples of (inst, layer, node, node_score, label) to GPU
-        self.dataset = np.array([]).reshape(-1, 5)
-        for p in self.dataset_path.rglob("*.npz"):
-            print("Loading: ", p)
-            d = np.load(p)["arr_0"]
-            self.dataset = np.vstack((self.dataset, d))
-        self.dataset = torch.from_numpy(self.dataset).float().to(device)
-        # Compute layer weights
-        self.lw = self.get_layer_weights_exponential(self.dataset[:, 1]).to(device)
+        # Instance data
+        self.coords, self.dists = None, None
+        self.set_instance_data()
+        print("Coords: ", self.coords.shape)
+        print("Dists: ", self.dists.shape)
 
-        # Load coordinates and distance matrix to GPU
-        n_samples = self.INSTS_PER_SPLIT.get(split, None)
-        assert n_samples is not None
-        self.coords = torch.zeros((n_samples, n_objs, n_vars, self.COORD_DIM))
-        self.dists = torch.zeros((n_samples, n_objs, n_vars, n_vars))
-        for p in self.inst_path.rglob("*.npz"):
-            pid = int(p.stem.split("_")[-1])
-            d = np.load(p)
-            self.coords[pid - self.PID_OFFSET[self.split]] = torch.from_numpy(
-                d["coords"]
+        # Node data
+        node_np = np.load(self.dataset_path / f"{split}.npz")["arr_0"]
+        self.node_data = torch.from_numpy(node_np).float().to(device)
+        n_nodes = self.node_data.shape[0]
+        self.ids = torch.arange(n_nodes).to(device)
+        self.pos_ids = self.ids[self.node_data[:, -1] == 1]
+        self.neg_ids = self.ids[self.node_data[:, -1] != 1]
+        # Index 0: negative class weight
+        # Index 1: positive class weight
+        self.sample_weight = (
+            torch.from_numpy(
+                np.array(
+                    [
+                        self.pos_ids.shape[0] / self.node_data.shape[0],
+                        self.neg_ids.shape[0] / self.node_data.shape[0],
+                    ]
+                )
             )
-            self.dists[pid - self.PID_OFFSET[self.split]] = torch.from_numpy(d["dists"])
-        self.dists = self.dists.float().to(device) / self.MAX_DIST_ON_GRID
-        self.coords = self.coords.float().to(device) / self.GRID_DIM
-        self.coords = torch.cat((self.coords, self.compute_stat_features()), dim=-1)
+            .float()
+            .to(device)
+        )
+
+        self.epoch_ids = None
+        print("Pos ids: ", self.pos_ids.shape)
+        print("Neg ids: ", self.neg_ids.shape)
+        self.node_dataset = TensorDataset(
+            self.node_data[:, 0:-1], self.node_data[:, -1]
+        )
+
+        # Compute layer weights
+        # self.lw = self.get_layer_weights_exponential(self.node_data[:, 1]).to(device)
+
+    @staticmethod
+    def get_layer_weights_exponential(lid):
+        return torch.exp(-0.5 * lid)
+
+    def set_dd_flat(self):
+        dd = json.load(open(path.bdd / f"tsp/{self.size}/tsp_dd.json", "r"))
+        # Count and prefix
+        nodes_in_layer = [len(layer) for layer in dd]
+        self.nodes_in_layer_prefix = [0] * len(nodes_in_layer)
+        for i in range(1, len(nodes_in_layer)):
+            self.nodes_in_layer_prefix[i] = sum(nodes_in_layer[0:i])
+        # To-tensor and GPU
+        self.nodes_in_layer_prefix = (
+            torch.from_numpy(np.array(self.nodes_in_layer_prefix))
+            .long()
+            .to(self.device)
+        )
+
+        self.dd_flat = []
+        for lid, layer in enumerate(dd):
+            for nid, node in enumerate(layer):
+                self.dd_flat.append(node)
+        self.dd_flat = torch.from_numpy(np.array(self.dd_flat)).float().to(self.device)
 
     def compute_stat_features(self):
         return torch.cat(
@@ -71,31 +125,53 @@ class TSPDataset(Dataset):
             dim=-1,
         )
 
-    @staticmethod
-    def get_layer_weights_exponential(lid):
-        return torch.exp(-0.5 * lid)
+    def set_instance_data(self):
+        # Load coordinates and distance matrix to GPU
+        n_samples = self.INSTS_PER_SPLIT.get(self.split, None)
+        assert n_samples is not None
+        self.coords = torch.zeros((n_samples, self.n_objs, self.n_vars, self.COORD_DIM))
+        self.dists = torch.zeros((n_samples, self.n_objs, self.n_vars, self.n_vars))
+        for p in self.inst_path.rglob("*.npz"):
+            pid = int(p.stem.split("_")[-1])
+            d = np.load(p)
+            idx = pid - self.PID_OFFSET[self.split]
+            self.coords[idx] = torch.from_numpy(d["coords"])
+            self.dists[idx] = torch.from_numpy(d["dists"])
+        self.dists = self.dists.float().to(self.device) / self.MAX_DIST_ON_GRID
+        self.coords = self.coords.float().to(self.device) / self.GRID_DIM
+        self.coords = torch.cat((self.coords, self.compute_stat_features()), dim=-1)
+
+    def get_instance_data(self, pids):
+        idxs = pids - self.PID_OFFSET[self.split]
+        return self.coords[idxs], self.dists[idxs]
+
+    def set_epoch_node_ids(self):
+        pos = self.pos_ids
+        # Set neg ids
+        neg = self.neg_ids[
+            torch.randperm(self.neg_ids.shape[0], generator=self.generator)
+        ]
+        if self.subsample == 0:
+            neg_idx = self.neg_ids.shape[0]
+        else:
+            neg_idx = self.subsample * self.pos_ids.shape[0]
+        neg = neg[:neg_idx]
+        # Set epoch ids
+        self.epoch_ids = torch.cat((pos, neg))
+        self.epoch_ids = self.epoch_ids[
+            torch.randperm(self.epoch_ids.shape[0], generator=self.generator)
+        ]
+
+    def get_epoch_node_dataset(self):
+        if self.resample:
+            print(f"Sampling new {self.split} dataset")
+            self.set_epoch_node_ids()
+            return Subset(self.node_dataset, self.epoch_ids)
+        else:
+            return self.node_dataset
 
     def __len__(self):
-        return self.dataset.shape[0]
-
-    def __getitem__(self, idx):
-        pid, lid, nid, ns, label = (
-            self.dataset[idx][0],
-            self.dataset[idx][1],
-            self.dataset[idx][2],
-            self.dataset[idx][3],
-            self.dataset[idx][4],
-        )
-        pid, lid, nid, label = pid.long(), lid.long(), nid.long(), label.long()
-        return (
-            self.coords[pid - self.PID_OFFSET[self.split]],
-            self.dists[pid - self.PID_OFFSET[self.split]],
-            lid,
-            self.dd[lid][nid],
-            self.lw[idx],
-            ns,
-            label,
-        )
+        return len(self.node_dataset)
 
 
 class MLP(nn.Module):
@@ -467,7 +543,7 @@ def get_model_str(cfg):
 def get_optimizer_str(cfg):
     opt_str = "opt"
     # if cfg.optimizer != "Adam":
-    opt_str += f"-Adam"
+    opt_str += f"-{cfg.optimizer}"
     # if cfg.weight_decay != 1e-3:
     #     opt_str += f"-wd{cfg.weight_decay}"
     # opt_str += f"-lr-{cfg.max_lr}-{cfg.warmup_steps}"
@@ -476,23 +552,48 @@ def get_optimizer_str(cfg):
     #     opt_str += f"-{cfg.decay}"
     # if cfg.batch_size != 512:
     opt_str += f"-bs-{cfg.batch_size}"
-    # if cfg.grad_clip != 1.0:
-    #     opt_str += f"-gcl-{cfg.grad_clip}"
+    if cfg.grad_clip != 1.0:
+        opt_str += f"-gcl-{cfg.grad_clip}"
 
     return opt_str
 
 
+def flatten_batch(batch, dataset):
+    node_feat, label = batch
+
+    pid, lid, nid, ns = (
+        node_feat[:, 0].long(),
+        node_feat[:, 1].long(),
+        node_feat[:, 2].long(),
+        node_feat[:, 3],
+    )
+    # DD node data
+    flat_idx = dataset.nodes_in_layer_prefix[lid] + nid
+    dd_node_data = dataset.dd_flat[flat_idx]
+    # Instance data
+    coords, dists = dataset.get_instance_data(pid)
+    # Layer weight
+    lw = dataset.get_layer_weights_exponential(lid)
+    label = label.long()
+
+    return coords, dists, lid, dd_node_data, lw, ns, label
+
+
 @torch.no_grad()
-def test(model, dataloader, loss_fn):
+def test(cfg, model, dataset, dataloader, loss_fn, class_weights):
     model.eval()
     tn, fp, fn, tp = 0, 0, 0, 0
     running_loss = 0.0
     n_items = 0.0
     for i, batch in enumerate(dataloader):
-        coords, dists, lids, states, lw, sw, labels = batch
+        # coords, dists, lids, states, lw, sw, labels = batch
+        coords, dists, lids, states, lw, sw, labels = flatten_batch(batch, dataset)
 
         logits = model(coords, dists, lids, states)
-        loss = loss_fn(logits, labels.long().view(-1))
+        loss = loss_fn(logits, labels, reduction="none")
+        if cfg.weighted_loss:
+            loss *= (lw + sw)  # Add layer weight and pareto-score weights
+        loss = loss.mean()
         running_loss += loss.cpu().item() * coords.shape[0]
         n_items += coords.shape[0]
 
@@ -584,7 +685,7 @@ def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
 
 
 def training_loop(
-    cfg, model, optimizer, loss_fn, train_dataloader, val_dataloader, metric_type
+    cfg, model, optimizer, loss_fn, train_dataset, val_dataset, metric_type
 ):
     exp_str = get_model_str(cfg) + "-" + get_optimizer_str(cfg)
     exp_path = path.checkpoint / "tsp" / cfg.prob.size / exp_str
@@ -593,53 +694,65 @@ def training_loop(
 
     # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
     # scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
-    max_steps = len(train_dataloader) * cfg.epochs
+    max_steps = (len(train_dataset) // cfg.batch_size) * cfg.epochs
     # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
     # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
 
     train_results, val_results = [], []
 
-    # Set up epoch -1 training performance baseline
-    train_result = test(model, train_dataloader, loss_fn)
-    train_result.update({"epoch": -1, "global_step": 0})
-    train_results.append(train_result)
-    print_eval_result("Train", -1, cfg.epochs, -1, max_steps, train_result)
+    # # Set up epoch -1 training performance baseline
+    # train_result = test(model, train_dataloader, loss_fn)
+    # train_result.update({"epoch": -1, "global_step": 0})
+    # train_results.append(train_result)
+    # print_eval_result("Train", -1, cfg.epochs, -1, max_steps, train_result)
+    #
+    # val_result = test(model, val_dataloader, loss_fn)
+    # val_result.update({"epoch": -1, "global_step": 0})
+    # val_results.append(val_result)
+    # print_eval_result("Val", -1, cfg.epochs, -1, max_steps, val_result)
 
-    val_result = test(model, val_dataloader, loss_fn)
-    val_result.update({"epoch": -1, "global_step": 0})
-    val_results.append(val_result)
-    print_eval_result("Val", -1, cfg.epochs, -1, max_steps, val_result)
-
-    global_step, val_metric, best_epoch, best_step, best_metric = (
-        0,
-        0,
-        -1,
-        -1,
-        initialize_eval_metric(metric_type),
+    global_step, val_metric, best_epoch, best_step = 0, 0, -1, -1
+    best_metric = initialize_eval_metric(metric_type)
+    val_node_dataset = val_dataset.get_epoch_node_dataset()
+    val_dataloader = DataLoader(
+        val_node_dataset, batch_size=cfg.batch_size, shuffle=True
     )
     for ep in range(cfg.epochs):
+        train_epoch_node_dataset = train_dataset.get_epoch_node_dataset()
+        train_dataloader = DataLoader(
+            train_epoch_node_dataset,
+            batch_size=cfg.batch_size,
+            shuffle=True,
+            drop_last=True,
+        )
         for i, batch in enumerate(train_dataloader):
             model.train()
             global_step += 1
             # adjust_learning_rate(global_step, optimizer, scheduler, val_metric, warmup_steps)
-            coords, dists, lids, states, lw, sw, labels = batch
+            coords, dists, lids, states, lw, sw, labels = flatten_batch(
+                batch, train_dataset
+            )
             logits = model(coords, dists, lids, states)
-            loss = loss_fn(logits, labels)
+            loss = loss_fn(logits, labels, reduction="none")
+            if cfg.weighted_loss:
+                loss *= (lw + sw)  # Add layer weight and pareto-score weights
+            loss = loss.mean()
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+            if cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
             if (global_step + 1) % cfg.eval_every == 0:
-                train_result = test(model, train_dataloader, loss_fn)
+                train_result = test(cfg, model, train_dataloader, loss_fn)
                 train_result.update({"epoch": ep, "global_step": global_step})
                 train_results.append(train_result)
                 print_eval_result(
                     "Train", ep, cfg.epochs, global_step, max_steps, train_result
                 )
 
-                val_result = test(model, val_dataloader, loss_fn)
+                val_result = test(cfg, model, val_dataloader, loss_fn)
                 val_metric = val_result[metric_type]
                 val_result.update({"epoch": ep, "global_step": global_step})
                 val_results.append(val_result)
@@ -680,17 +793,27 @@ def training_loop(
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
 def main(cfg):
+    print(cfg)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Training on :", device)
 
-    # Construct dataset and dataloader
-    train_dataset = TSPDataset(cfg.prob.n_objs, cfg.prob.n_vars, "train", device)
-    train_dataloader = DataLoader(
-        train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
+    # Construct dataset
+    train_dataset = TSPNodeDataset(
+        cfg.prob.n_objs,
+        cfg.prob.n_vars,
+        "train",
+        device,
+        resample=cfg.resample.train,
+        subsample=cfg.subsample,
     )
-
-    val_dataset = TSPDataset(cfg.prob.n_objs, cfg.prob.n_vars, "val", device)
-    val_dataloader = DataLoader(val_dataset, batch_size=cfg.batch_size, shuffle=True)
+    val_dataset = TSPNodeDataset(
+        cfg.prob.n_objs,
+        cfg.prob.n_vars,
+        "val",
+        device,
+        resample=False,
+        subsample=0,
+    )
 
     model = ParetoNodePredictor(
         d_emb=cfg.model.d_emb,
@@ -703,12 +826,14 @@ def main(cfg):
         dropout_mlp=cfg.model.dropout_mlp,
         h2i_ratio=cfg.model.h2i_ratio,
     ).to(device)
-    # opt = torch.optim.AdamW(model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay)
-    opt = torch.optim.Adam(model.parameters(), lr=cfg.max_lr)
+    optimizer_cls = getattr(torch.optim, cfg.optimizer)
+    opt = optimizer_cls(
+        model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay
+    )
 
     loss_fn = F.cross_entropy
     training_loop(
-        cfg, model, opt, loss_fn, train_dataloader, val_dataloader, metric_type="f1"
+        cfg, model, opt, loss_fn, train_dataset, val_dataset, metric_type="f1"
     )
 
 
