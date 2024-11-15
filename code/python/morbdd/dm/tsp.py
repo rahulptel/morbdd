@@ -88,7 +88,7 @@ class TSPDataManager(DataManager):
 
         return data
 
-    def _get_pareto_state_scores(self, data, x, order=None):
+    def _get_pareto_state_scores(self, x, order=None):
         x = np.array(x)
         x = x[:, 1:]
         n_pareto_sol = x.shape[0]
@@ -177,7 +177,7 @@ class TSPDataManager(DataManager):
             print(f"{pid}: |Z| = {len(frontier['z'])}")
 
             print(f"{rank}/9/10: Marking Pareto nodes...")
-            pareto_state_scores = self._get_pareto_state_scores(data, frontier["x"])
+            pareto_state_scores = self._get_pareto_state_scores(frontier["x"])
             save_all_neg = True if self.cfg.split != "train" else False
             dataset = self._tag_dd_nodes(
                 pid, exact_dd, pareto_state_scores, save_all_neg=save_all_neg
