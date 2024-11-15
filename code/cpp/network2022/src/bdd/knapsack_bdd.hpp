@@ -31,6 +31,7 @@ public:
 
 	// Generate next layer
 	bool generate_next_layer();
+	void fix_state_map();
 
 	// Update node weights
 	void update_node_weights(BDD *bdd);
@@ -38,19 +39,20 @@ public:
 	// BDD
 	BDD *bdd;
 
+	// State maps
+	StateNodeMap states[2];
+	int l;
+	int iter, next;
+
 private:
 	// Knapsack Instance
 	KnapsackInstance *inst;
-	// State maps
-	StateNodeMap states[2];
 
-	int iter, next;
 	State state;
 	Node *root_node;
 	Node *terminal_node;
 	bool feasible;
 	ObjType *zero_weights;
-	int l;
 };
 
 inline KnapsackBDDConstructor::KnapsackBDDConstructor()

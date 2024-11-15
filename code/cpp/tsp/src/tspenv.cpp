@@ -69,8 +69,7 @@ bool TSPEnv::generate_next_layer(){
     return tsp_mdd_constructor.generate_next_layer();
 }
 
-int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){    
-    cout << mdd->layers[layer].size() << endl;
+int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
     if (states_to_remove.size() >= mdd->layers[layer].size())
     {
         return -1;
@@ -92,18 +91,7 @@ int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
             }
             
         }
-
-        int i = 0;
-        while (i < mdd->layers[layer].size())
-        {
-            MDDNode *node = mdd->layers[layer][i];
-            if (node->in_arcs_list.empty())
-            {
-                cout << "Empty in arcs: " << i << endl;
-            }      
-            ++i;
-        }
-
+        
         int i = 0;
         while (i < mdd->layers[layer].size())
         {
@@ -121,7 +109,6 @@ int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
                 ++i;
             }
         }
-    
         mdd->repair_node_indices(layer);
         tsp_mdd_constructor.fix_state_map();
         

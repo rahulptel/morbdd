@@ -120,14 +120,16 @@ public:
 
     int initialize_dd_constructor();
 
+    void set_var_layer(int l);
+
     int generate_dd();
 
     int generate_next_layer();
 
-    void approximate_layer(int layer,
-                           int approx_type = 1,
-                           int method = 1,
-                           vector<int> states_to_process = {});
+    int approximate_layer(int layer,
+                          int approx_type = 1,
+                          int method = 1,
+                          vector<int> states_to_process = {});
 
     void calculate_bdd_topology_stats(bool is_non_reduced);
 
@@ -141,7 +143,13 @@ public:
 
     vector<int> get_var_layer();
 
-    vector<int> get_frontier();
+    map<string, vector<vector<int>>> get_frontier();
+
+    double get_time(int);
+
+    int get_num_nodes_per_layer(int);
+
+    void restrict(vector<vector<int>> states_to_remove);
 
     double get_time(int);
 
@@ -150,9 +158,9 @@ private:
 
     void clean_memory();
 
-    void restrict_layer(int layer, int method, vector<int> states_to_remove);
+    int restrict_layer(int layer, int method, vector<int> states_to_remove);
 
-    void relax_layer(int layer, int method, vector<int> states_to_merge);
+    int relax_layer(int layer, int method, vector<int> states_to_merge);
 
     ParetoFrontier *pareto_frontier;
     // ----------------------------------------------------------------
@@ -175,5 +183,5 @@ private:
     // ----------------------------------------------------------------
     // DD
     BDD *bdd;
-    MDD *mdd;
+    // MDD *mdd;
 };

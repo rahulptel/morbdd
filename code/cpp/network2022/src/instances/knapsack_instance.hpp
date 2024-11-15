@@ -54,6 +54,8 @@ struct KnapsackInstance
 
 	// Reorder variables based on constraint coefficients
 	void reorder_coefficients();
+
+	void reset_order(vector<int> new_order);
 };
 
 #endif

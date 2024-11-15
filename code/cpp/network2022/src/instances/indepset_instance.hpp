@@ -101,10 +101,9 @@ private:
 //
 struct IndepSetInst
 {
-
 	Graph *graph;									// independent set graph
 	vector<boost::dynamic_bitset<>> adj_mask_compl; // complement mask of adjacencies
-
+	vector<vector<int>> obj_coeffs;
 	/** Read DIMACS independent set instance */
 	void read_DIMACS(const char *filename);
 
@@ -117,7 +116,8 @@ struct IndepSetInst
 	/** Create from graph */
 	IndepSetInst(Graph *_graph);
 
-	IndepSetInst(int n_vertices, vector<vector<int>> edges);
+
+	IndepSetInst(int n_vertices, vector<vector<int>> edges, vector<vector<int>> obj_ceoffs);
 };
 
 /*
@@ -401,15 +401,15 @@ inline IndepSetInst::IndepSetInst(Graph *_graph) : graph(_graph)
 	}
 }
 
-inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges)
+inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges, vector<vector<int>> _obj_coeffs)
 {
 	graph = new Graph(n_vars);
 
-	for (int i = 0; i <= edges.size(); ++i)
+	for (int i = 0; i < edges.size(); ++i)
 	{
 		graph->add_edge(edges[i][0], edges[i][1]);
 	}
-
+	// graph->print();
 	// cout << "\tAuxiliary graph for set packing:" << endl;
 	// cout << "\t\tnumber of vertices: " << graph->n_vertices << endl;
 	// cout << "\t\tnumber of edges: " << graph->n_edges << endl;
@@ -430,6 +430,8 @@ inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges)
 		// we assume here a vertex is adjacent to itself
 		adj_mask_compl[v].set(v, false);
 	}
+
+	obj_coeffs = _obj_coeffs;
 }
 
 //

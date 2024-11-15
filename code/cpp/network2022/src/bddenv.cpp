@@ -26,10 +26,10 @@ void BDDEnv::clean_memory()
     {
         delete bdd;
     }
-    if (mdd != NULL)
-    {
-        delete mdd;
-    }
+    // if (mdd != NULL)
+    // {
+    //     delete mdd;
+    // }
     if (pareto_frontier != NULL)
     {
         delete pareto_frontier;
@@ -45,7 +45,7 @@ void BDDEnv::initialize()
         inst_kp = NULL;
         inst_indepset = NULL;
         bdd = NULL;
-        mdd = NULL;
+        // mdd = NULL;
         pareto_frontier = NULL;
     }
     else
@@ -146,6 +146,8 @@ int BDDEnv::set_inst(int n_vars,
 
         // create associated independent set instance
         inst_indepset = inst_setpack.create_indepset_instance();
+        // inst_indepset = new IndepSetInst(n_vars, cons_coeffs, obj_coeffs);
+        inst_indepset->obj_coeffs = obj_coeffs;
 
         return 0;
     }
@@ -213,7 +215,8 @@ int BDDEnv::preprocess_inst()
     {
         if (order.size())
         {
-            inst_kp->reorder_coefficients();
+            // inst_kp->reorder_coefficients();
+            inst_kp->reset_order(order);
         }
     }
     else if (problem_type == 2)
@@ -253,7 +256,9 @@ int BDDEnv::initialize_dd_constructor()
     {
 
         // generate independent set BDD
-        indset_bdd_constructor = IndepSetBDDConstructor(inst_indepset, inst_setpack.objs);
+        indset_bdd_constructor = IndepSetBDDConstructor(inst_indepset, inst_indepset->obj_coeffs);
+
+        // indset_bdd_constructor.var_layer.clear();
         bdd = indset_bdd_constructor.bdd;
     }
     // // Set covering problem
@@ -282,6 +287,14 @@ int BDDEnv::initialize_dd_constructor()
     timers.end_timer(compilation_time);
 
     return 0;
+}
+
+void BDDEnv::set_var_layer(int v)
+{
+    if (problem_type == 2)
+    {
+        indset_bdd_constructor.set_var_layer(v);
+    }
 }
 
 void BDDEnv::calculate_bdd_topology_stats(bool is_non_reduced)
@@ -408,46 +421,92 @@ int BDDEnv::generate_next_layer()
     return 0;
 }
 
-void BDDEnv::approximate_layer(int layer, int approx_type, int method, vector<int> states_to_process)
+int BDDEnv::approximate_layer(int layer, int approx_type, int method, vector<int> states_to_process)
 {
     if (approx_type == 1)
     {
-        restrict_layer(layer, method, states_to_process);
+        return restrict_layer(layer, method, states_to_process);
     }
     else if (approx_type == 2)
     {
-        relax_layer(layer, method, states_to_process);
+        return relax_layer(layer, method, states_to_process);
     }
 }
 
-void BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
+int BDDEnv::restrict_layer(int layer, int method, vector<int> states_to_remove)
+{
+    if (states_to_remove.size() >= bdd->layers[layer].size())
+    {
+        return -1;
+    }
+    if (states_to_remove.size())
+    {
+        vector<int>::iterator it1;
+        vector<Node *> restricted_layer;
+        restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
+
+        if (method == 1)
+        {
+            for (int i = 0; i < bdd->layers[layer].size(); ++i)
+            {
+                it1 = find(states_to_remove.begin(),
+                           states_to_remove.end(),
+                           i);
+                if (it1 != states_to_remove.end())
+                {
+                    bdd->remove_node_ref_prev(bdd->layers[layer][i]);
+                    states_to_remove.erase(it1);
+                }
+                else
+                {
+                    restricted_layer.push_back(bdd->layers[layer][i]);
+                }
+            }
+        }
+        bdd->layers[layer] = restricted_layer;
+        bdd->fix_indices(layer);
+
+        if (problem_type == 1)
+        {
+            kp_bdd_constructor.fix_state_map();
+        }
+        else if (problem_type == 2)
+        {
+            indset_bdd_constructor.fix_state_map();
+        }
+        return 0;
+    }
+}
+
+void BDDEnv::restrict(vector<vector<int>> states_to_remove)
 {
     vector<int>::iterator it1;
-    vector<Node *> restricted_layer;
-    restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
 
-    if (method == 1 && states_to_remove.size())
+    for (int layer = 0; layer < states_to_remove.size(); ++layer)
     {
+        vector<Node *> restricted_layer;
+        restricted_layer.reserve(bdd->layers[layer].size() - states_to_remove.size());
         for (int i = 0; i < bdd->layers[layer].size(); ++i)
         {
-            it1 = find(states_to_remove.begin(),
-                       states_to_remove.end(),
-                       i);
-            if (it1 != states_to_remove.end())
+            it1 = find(states_to_remove[layer].begin(), states_to_remove[layer].end(), i);
+            if (it1 != states_to_remove[layer].end())
             {
                 bdd->remove_node_ref_prev(bdd->layers[layer][i]);
-                states_to_remove.erase(it1);
+                states_to_remove[layer].erase(it1);
             }
             else
             {
                 restricted_layer.push_back(bdd->layers[layer][i]);
             }
         }
+        bdd->layers[layer] = restricted_layer;
     }
-    bdd->layers[layer] = restricted_layer;
 }
 
-void BDDEnv::relax_layer(int layer, int method, vector<int> states) {}
+int BDDEnv::relax_layer(int layer, int method, vector<int> states)
+{
+    return 0;
+}
 
 int BDDEnv::reduce_dd()
 {
@@ -578,11 +637,12 @@ vector<int> BDDEnv::get_var_layer()
     }
 }
 
-vector<int> BDDEnv::get_frontier()
+map<string, vector<vector<int>>> BDDEnv::get_frontier()
 {
     if (pareto_frontier != NULL)
     {
-        return pareto_frontier->sols;
+        // cout << pareto_frontier->sols.size() << endl;
+        return pareto_frontier->get_frontier();
     }
     return {};
 }
@@ -602,6 +662,16 @@ double BDDEnv::get_time(int time_type)
         return -1;
     }
 }
+
+int BDDEnv::get_num_nodes_per_layer(int layer)
+{
+    if (bdd != NULL)
+    {
+        return bdd->layers[layer].size();
+    }
+    return -1;
+}
+
 
 int BDDEnv::compute_pareto_frontier()
 {
@@ -629,11 +699,11 @@ int BDDEnv::compute_pareto_frontier()
         //     // -- Optimal BFS algorithm: bottom-up --
         //     pareto_frontier = BDDMultiObj::pareto_frontier_bottomup(bdd, maximization, problem_type, dominance, statsMultiObj);
         // }
-        else if (method == 3)
-        {
-            // -- Dynamic layer cutset --
-            pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
-        }
+        // else if (method == 3)
+        // {
+        //     // -- Dynamic layer cutset --
+        //     pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(bdd, maximization, problem_type, dominance, statsMultiObj);
+        // }
 
         if (pareto_frontier == NULL)
         {
@@ -644,20 +714,20 @@ int BDDEnv::compute_pareto_frontier()
 
         return 0;
     }
-    else if (problem_type == 5)
-    {
-        if (mdd == NULL)
-        {
-            cout << "MDD not constructed! Cannot compute pareto frontier. " << endl;
-            return 1;
-        }
+    // else if (problem_type == 5)
+    // {
+    //     if (mdd == NULL)
+    //     {
+    //         cout << "MDD not constructed! Cannot compute pareto frontier. " << endl;
+    //         return 1;
+    //     }
 
-        timers.start_timer(pareto_time);
-        pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
-        timers.end_timer(pareto_time);
+    //     timers.start_timer(pareto_time);
+    //     pareto_frontier = BDDMultiObj::pareto_frontier_dynamic_layer_cutset(mdd, statsMultiObj);
+    //     timers.end_timer(pareto_time);
 
-        return 0;
-    }
+    //     return 0;
+    // }
     else
     {
         cout << "Invalid problem name! Cannot compute pareto frontier." << endl;

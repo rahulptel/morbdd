@@ -16,24 +16,13 @@ using namespace boost;
 //
 bool IndepSetBDDConstructor::generate_next_layer()
 {
-	// If the last layer is approximated update the states[iter]
-	if (states[iter].size() > bdd->layers[l - 1].size())
-	{
-		states[iter].clear();
-		for (int k = 0; k < bdd->layers[l - 1].size(); ++k)
-		{
-			states[iter][&bdd->layers[l - 1][k]->setpack_state] = bdd->layers[l - 1][k];
-		}
-	}
 
 	// cout << "\nCreating IndepSet BDD..." << endl;
 	if (l < inst->graph->n_vertices + 1)
 	{
 		states[next].clear();
 		// select next vertex
-		vertex = choose_next_vertex_min_size_next_layer(states[iter]);
-		// vertex = l - 1;
-		var_layer[l - 1] = vertex;
+		vertex = var_layer[l - 1];
 
 		// set weights for one arc
 		one_weights = new ObjType[NOBJS];
@@ -46,7 +35,7 @@ bool IndepSetBDDConstructor::generate_next_layer()
 
 		BOOST_FOREACH (StateNodeMap::value_type i, states[iter])
 		{
-			State &state = *(i.first);
+			State state = *(i.first);
 			Node *node = i.second;
 			bool was_set = state[vertex];
 
@@ -56,10 +45,11 @@ bool IndepSetBDDConstructor::generate_next_layer()
 			if (it == states[next].end())
 			{
 				Node *new_node = bdd->add_node(l);
-				State *new_state = alloc.request();
-				(*new_state) = state;
-				states[next][new_state] = new_node;
+				// State *new_state = alloc.request();
+				// (*new_state) = state;
+				// states[next][new_state] = new_node;
 				new_node->setpack_state = state;
+				states[next][&new_node->setpack_state] = new_node;
 
 				node->add_out_arc(new_node, 0);
 				node->set_arc_weights(0, zero_weights);
@@ -78,10 +68,11 @@ bool IndepSetBDDConstructor::generate_next_layer()
 				if (it == states[next].end())
 				{
 					Node *new_node = bdd->add_node(l);
-					State *new_state = alloc.request();
-					(*new_state) = state;
-					states[next][new_state] = new_node;
+					// State *new_state = alloc.request();
+					// (*new_state) = state;
 					new_node->setpack_state = state;
+					states[next][&new_node->setpack_state] = new_node;
+
 					node->add_out_arc(new_node, 1);
 					node->set_arc_weights(1, one_weights);
 				}
@@ -93,7 +84,7 @@ bool IndepSetBDDConstructor::generate_next_layer()
 			}
 
 			// deallocate node state
-			alloc.deallocate(i.first);
+			// alloc.deallocate(i.first);
 		}
 
 		// invert iter and next
@@ -119,6 +110,39 @@ void IndepSetBDDConstructor::generate()
 	bool is_done;
 	do
 	{
+		set_var_layer(-1);
 		is_done = generate_next_layer();
 	} while (!is_done);
+}
+
+void IndepSetBDDConstructor::fix_state_map()
+{
+	// If the last layer is approximated update the states[iter]
+	if (states[iter].size() > bdd->layers[l - 1].size())
+	{
+		states[iter].clear();
+		for (int k = 0; k < bdd->layers[l - 1].size(); ++k)
+		{
+			states[iter][&bdd->layers[l - 1][k]->setpack_state] = bdd->layers[l - 1][k];
+		}
+	}
+}
+
+void IndepSetBDDConstructor::set_var_layer(int v)
+{
+	// Use dynamically provided vertex to build next layer
+	if (v > -1)
+	{
+		var_layer[l - 1] = v;
+	}
+	// Use statically provided vertex during reset
+	else if (order_provided)
+	{
+		var_layer[l - 1] = l - 1;
+	}
+	// Select vertex dynamically based on min-state heuristic
+	else
+	{
+		var_layer[l - 1] = choose_next_vertex_min_size_next_layer(states[iter]);
+	}
 }

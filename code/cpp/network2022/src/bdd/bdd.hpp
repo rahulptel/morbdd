@@ -101,6 +101,9 @@ struct BDD
 	// Ensure node indices are consistent
 	void fix_indices();
 
+	// Ensure node indices are consistent
+	void fix_indices(int l);
+
 	// Get BDD width
 	size_t get_width();
 
@@ -125,6 +128,9 @@ struct BDD
 
 	// Update incoming arc sets of each node
 	void update_incoming_arcsets();
+
+	// Update incoming arc sets of each node
+	void update_incoming_arcsets(int);
 
 	// Return terminal
 	Node *get_terminal() const
@@ -322,6 +328,18 @@ inline void BDD::fix_indices()
 }
 
 //
+// Ensure node indices are consistent
+//
+inline void BDD::fix_indices(int l)
+{
+	assert(l < num_layers);
+	for (int i = 0; i < layers[l].size(); ++i)
+	{
+		layers[l][i]->index = i;
+	}
+}
+
+//
 // Get number of nodes of the BDD
 //
 inline size_t BDD::get_num_nodes()
@@ -402,9 +420,9 @@ inline vector<size_t> BDD::get_num_nodes_per_layer()
 //
 // Update incoming arc sets of each node
 //
-inline void BDD::update_incoming_arcsets()
+inline void BDD::update_incoming_arcsets(int l)
 {
-	for (int l = 0; l < num_layers - 1; ++l)
+	if (l < num_layers - 1)
 	{
 		// Reset incoming arc sets in next-layer nodes
 		for (vector<Node *>::iterator it = layers[l + 1].begin(); it != layers[l + 1].end(); ++it)
@@ -426,6 +444,37 @@ inline void BDD::update_incoming_arcsets()
 				(*it)->arcs[1]->prev[1].push_back((*it));
 			}
 		}
+	}
+}
+
+//
+// Update incoming arc sets of each node
+//
+inline void BDD::update_incoming_arcsets()
+{
+	for (int l = 0; l < num_layers - 1; ++l)
+	{
+		update_incoming_arcsets(l);
+		// // Reset incoming arc sets in next-layer nodes
+		// for (vector<Node *>::iterator it = layers[l + 1].begin(); it != layers[l + 1].end(); ++it)
+		// {
+		// 	for (int arc_type = 0; arc_type < 2; ++arc_type)
+		// 	{
+		// 		(*it)->prev[arc_type].clear();
+		// 	}
+		// }
+		// // Update incoming arcs
+		// for (vector<Node *>::iterator it = layers[l].begin(); it != layers[l].end(); ++it)
+		// {
+		// 	if ((*it)->arcs[0] != NULL)
+		// 	{
+		// 		(*it)->arcs[0]->prev[0].push_back((*it));
+		// 	}
+		// 	if ((*it)->arcs[1] != NULL)
+		// 	{
+		// 		(*it)->arcs[1]->prev[1].push_back((*it));
+		// 	}
+		// }
 	}
 }
 

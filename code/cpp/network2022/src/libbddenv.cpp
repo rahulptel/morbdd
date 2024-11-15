@@ -4,9 +4,9 @@
 
 namespace py = pybind11;
 
-PYBIND11_MODULE(libbddenv, m)
+PYBIND11_MODULE(libbddenvv2o3, m)
 {
-    py::class_<BDDEnv>(m, "BDDEnv")
+    py::class_<BDDEnv>(m, "BDDEnv", py::module_local())
         .def(py::init<>())
         .def("reset", &BDDEnv::reset)
         .def("set_inst", &BDDEnv::set_inst)
@@ -15,13 +15,16 @@ PYBIND11_MODULE(libbddenv, m)
         .def("generate_dd", &BDDEnv::generate_dd)
         .def("generate_next_layer", &BDDEnv::generate_next_layer)
         .def("approximate_layer", &BDDEnv::approximate_layer)
+        .def("restrict", &BDDEnv::restrict)
         .def("get_dd", &BDDEnv::get_dd)
         .def("get_layer", &BDDEnv::get_layer)
         .def("reduce_dd", &BDDEnv::reduce_dd)
         .def("compute_pareto_frontier", &BDDEnv::compute_pareto_frontier)
+        .def("set_var_layer", &BDDEnv::set_var_layer)
         .def("get_var_layer", &BDDEnv::get_var_layer)
         .def("get_frontier", &BDDEnv::get_frontier)
         .def("get_time", &BDDEnv::get_time)
+        .def("get_num_nodes_per_layer", &BDDEnv::get_num_nodes_per_layer)
         .def_readwrite("initial_width", &BDDEnv::initial_width)
         .def_readwrite("initial_node_count", &BDDEnv::initial_node_count)
         .def_readwrite("initial_arcs_count", &BDDEnv::initial_arcs_count)
@@ -35,5 +38,5 @@ PYBIND11_MODULE(libbddenv, m)
         .def_readwrite("num_comparisons_per_layer", &BDDEnv::num_comparisons_per_layer)
         .def_readwrite("in_degree", &BDDEnv::in_degree)
         .def_readwrite("nnds", &BDDEnv::nnds)
-        .def_readwrite("z_sol", &BDDEnv::z_sol)
+        .def_readwrite("z_sol", &BDDEnv::z_sol);
 }
