@@ -7,7 +7,7 @@ import pandas as pd
 
 from morbdd import resource_path
 from morbdd.utils import get_instance_data
-from morbdd.utils import get_order
+from morbdd.utils import get_static_order
 from morbdd.utils import handle_timeout
 
 import multiprocessing as mp
@@ -19,7 +19,7 @@ def worker(rank, cfg):
 
     for pid in range(cfg.from_pid + rank, cfg.to_pid, cfg.num_processes):
         data = get_instance_data(cfg.prob, cfg.size, cfg.split, pid)
-        order = get_order(cfg.prob, cfg.order_type, data)
+        order = get_static_order(cfg.prob, cfg.order_type, data)
 
         env.set_knapsack_inst(cfg.num_vars,
                               cfg.num_objs,

@@ -69,7 +69,7 @@ bool TSPEnv::generate_next_layer(){
     return tsp_mdd_constructor.generate_next_layer();
 }
 
-int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){    
+int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
     if (states_to_remove.size() >= mdd->layers[layer].size())
     {
         return -1;
@@ -91,7 +91,7 @@ int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
             }
             
         }
-
+        
         int i = 0;
         while (i < mdd->layers[layer].size())
         {
@@ -109,7 +109,6 @@ int TSPEnv::restrict_layer(int layer, vector<int> states_to_remove){
                 ++i;
             }
         }
-        
         mdd->repair_node_indices(layer);
         tsp_mdd_constructor.fix_state_map();
         

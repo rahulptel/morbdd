@@ -1,0 +1,12 @@
+name: tsp
+prefix: tsp
+
+n_objs: 3
+n_vars: 10
+size: ${prob.n_objs}_${prob.n_vars}
+grid_size: 1000
+time_limit: 1800
+
+problem_type: 6
+# 3: coupled
+pf_enum_method: 3

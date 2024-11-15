@@ -13,7 +13,7 @@ import pandas as pd
 
 from morbdd import resource_path
 from morbdd.utils import get_instance_data
-from morbdd.utils import get_order
+from morbdd.utils import get_static_order
 from morbdd.utils import get_xgb_model_name
 from morbdd.utils import label_bdd
 from morbdd.utils import statscore
@@ -283,7 +283,7 @@ def worker(rank, cfg, mdl_hex):
         print(pid)
         # Read instance
         inst_data = get_instance_data(cfg.prob.name, cfg.prob.size, cfg.deploy.split, pid)
-        order = get_order(cfg.prob.name, cfg.deploy.order_type, inst_data)
+        order = get_static_order(cfg.prob.name, cfg.deploy.order_type, inst_data)
 
         # Load BDD
         bdd_path = resource_path / (f"predictions/{cfg.deploy.mdl}/{cfg.prob.name}/{cfg.prob.size}/{cfg.deploy.split}/"

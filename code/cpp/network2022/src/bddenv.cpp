@@ -672,6 +672,7 @@ int BDDEnv::get_num_nodes_per_layer(int layer)
     return -1;
 }
 
+
 int BDDEnv::compute_pareto_frontier()
 {
     MultiObjectiveStats *statsMultiObj = new MultiObjectiveStats;

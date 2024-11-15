@@ -1,17 +1,243 @@
+import hashlib
 import io
 import json
+import os
 import random
 import zipfile
 from operator import itemgetter
+
 import numpy as np
 import torch
+import torch.distributed as dist
+from torch.distributed import init_process_group
 from torch.utils.data import Dataset, DataLoader
 
-from morbdd import resource_path
-import hashlib
+from morbdd import CONST
+from morbdd import ResourcePaths as path
 
-ZERO_ARC = -1
-ONE_ARC = 1
+
+# import pygmo as pg
+
+
+class MetricCalculator:
+    def __init__(self, n_objs, eps=0.1, delta=0.1):
+        self.eps = eps
+        self.delta = delta
+        self.ref_point = None
+        self.set_ref_point(n_objs)
+
+    def set_ref_point(self, n_objs):
+        self.ref_point = np.zeros(n_objs)
+
+    @staticmethod
+    def compute_cardinality(z, z_pred):
+        z, z_pred = np.array(z), np.array(z_pred)
+        assert z.shape[1] == z_pred.shape[1]
+
+        if z.shape[0] == 0:
+            print("True PF not available!")
+            return {'card': -1, 'precision': -1}
+
+        if z_pred.shape[0] == 0:
+            print("Predicted PF not available!")
+            return {'card': 0, 'precision': 0}
+
+        # Defining a data type
+        rows, cols = z.shape
+        data_type_z = {'names': ['f{}'.format(i) for i in range(cols)],
+                       'formats': cols * [z.dtype]}
+
+        rows, cols = z_pred.shape
+        data_type_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                            'formats': cols * [z_pred.dtype]}
+
+        # Finding intersection
+        found_ndps = np.intersect1d(z.view(data_type_z), z_pred.view(data_type_z_pred))
+
+        return {'cardinality': found_ndps.shape[0] / z.shape[0], 'cardinality_raw': found_ndps.shape[0],
+                'precision': found_ndps.shape[0] / z_pred.shape[0]}
+
+    # def compute_approx_hv(self, seed, z_norm):
+    #     hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
+    #     hv = pg.hypervolume(z_norm)
+    #     hv_approx = hv.compute(self.ref_point, hv_algo=hv_algo)
+    #
+    #     return {'hv_approx': hv_approx}
+
+
+def zipdir(path, ziph):
+    # Iterate over all the files in the directory
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            # Create the relative path to maintain the folder structure
+            ziph.write(os.path.join(root, file),
+                       os.path.relpath(os.path.join(root, file), os.path.join(path, '..')))
+
+
+def get_env(n_objs=3):
+    modname = "libbddenvv2o" + str(n_objs)
+    libbddenv = __import__(modname)
+    env = libbddenv.BDDEnv()
+
+    return env
+
+
+def get_dataset_prefix(with_parent=False, layer_weight=None, neg_to_pos_ratio=1.0):
+    prefix = []
+    if with_parent:
+        prefix.append("wp")
+    if layer_weight is not None:
+        prefix.append(f"{layer_weight}")
+    if neg_to_pos_ratio != 1.0:
+        prefix.append(f"{neg_to_pos_ratio}")
+
+    if len(prefix):
+        prefix = "-".join(prefix)
+    else:
+        prefix = "default"
+
+    return prefix
+
+
+def get_dataset_path(cfg):
+    file_path = path.dataset / f"{cfg.prob.name}/{cfg.model.type}/{cfg.prob.size}/{cfg.split}"
+    prefix = get_dataset_prefix(cfg.with_parent, cfg.layer_weight, cfg.neg_to_pos_ratio)
+    file_path /= prefix
+
+    return file_path
+
+
+class Meter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self, name):
+        self.name = name
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+class TrainingHelper:
+    def __init__(self):
+        self.train_stats = []
+        self.val_stats = []
+
+    @staticmethod
+    def compute_batch_stats(labels, preds):
+        # True positive: label=1 and class=1
+        tp = (preds[labels == 1] == 1).sum()
+        # True negative: label=0 and class=0
+        tn = (preds[labels == 0] == 0).sum()
+        # False positive: label=0 and class=1
+        fp = (preds[labels == 0] == 1).sum()
+        # False negative: label=1 and class=0
+        fn = (preds[labels == 1] == 0).sum()
+
+        pos = labels.sum()
+        neg = labels.shape[0] - pos
+        # items = pos + neg
+        return tp, tn, fp, fn, pos, neg
+
+    @staticmethod
+    def compute_meta_stats(stats, prefix=""):
+        loss, tp, tn, fp, fn, n_pos, n_neg = (stats[prefix + "loss"], stats[prefix + "tp"], stats[prefix + "tn"],
+                                              stats[prefix + "fp"], stats[prefix + "fn"], stats[prefix + "n_pos"],
+                                              stats[prefix + "n_neg"])
+
+        loss = loss / (n_pos + n_neg)
+        acc = ((tp + tn) / (tp + fp + tn + fn))
+        f1 = tp / (tp + (0.5 * (fn + fp)))
+        precision = tp / (tp + fp + 1e-10)
+        recall = tp / (tp + fn + 1e-10)
+        specificity = tn / (tn + fp + 1e-10)
+
+        meta_stats = {
+            prefix + "loss": loss, prefix + "acc": acc, prefix + "f1": f1, prefix + "precision": precision,
+            prefix + "recall": recall, prefix + "specificity": specificity
+        }
+
+        return meta_stats
+
+    @staticmethod
+    def print_batch_stats(epoch, batch_id, stats):
+        print("EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
+              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+              "Time: {:.2f}, Items: {}".format(epoch,
+                                               batch_id,
+                                               stats["loss"],
+                                               stats["acc"],
+                                               stats["f1"],
+                                               stats["precision"],
+                                               stats["recall"],
+                                               stats["specificity"],
+                                               stats["time"],
+                                               stats["items"]))
+
+    @staticmethod
+    def print_stats(split, stats, prefix=""):
+        epoch = stats["epoch"]
+        ept, bt, dt, = stats[prefix + "epoch_time"], stats[prefix + "batch_time"], stats[prefix + "data_time"]
+
+        print_str = ("{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
+                     "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}")
+        print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
+                               stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
+                               stats[prefix + "specificity"], ept, bt, dt))
+
+        print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
+        for i in ["0", "1"]:
+            print(print_str.format("lgt" + i,
+                                   stats[prefix + "lgt" + i + "-mean"],
+                                   stats[prefix + "lgt" + i + "-std"],
+                                   stats[prefix + "lgt" + i + "-min"],
+                                   stats[prefix + "lgt" + i + "-max"]))
+        print("--------------------------")
+
+    # def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
+    #     print("Saving model={}".format(best_model))
+    #     model_path = save_path / "model.pt"
+    #     print("Saving model to: {}".format(model_path))
+    #     model_obj = {"epoch": epoch, "model": model, "optimizer": optimizer}
+    #     torch.save(model_obj, model_path)
+    #     if best_model:
+    #         model_path = save_path / "best_model.pt"
+    #         torch.save(model_obj, model_path)
+
+    @staticmethod
+    def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
+        # print(epoch)
+        # print("Is best: {}".format(best_model))
+        if best_model:
+            model_path = save_path / "best_model.pt"
+        else:
+            model_path = save_path / "model.pt"
+        # print("Saving model to: {}".format(model_path))
+
+        model_obj = {"epoch": epoch + 1, "model": model, "optimizer": optimizer}
+        torch.save(model_obj, model_path)
+
+    def save_stats(self, save_path):
+        stats_path = save_path / f"stats.pt"
+        # print("Saving stats to: {}".format(stats_path))
+        stats_obj = {"train": self.train_stats, "val": self.val_stats}
+        torch.save(stats_obj, stats_path)
+
+    def compute_meta_stats_and_print(self, split, stats, prefix=""):
+        meta_stats = self.compute_meta_stats(stats, prefix=prefix)
+        stats.update(meta_stats)
+        self.print_stats(split, stats, prefix=prefix)
+
+        return stats
 
 
 class KnapsackBDDDataset(Dataset):
@@ -19,13 +245,13 @@ class KnapsackBDDDataset(Dataset):
                  sampling_type=None, labels_type=None, weights_type=None, device=None):
         super(KnapsackBDDDataset, self).__init__()
 
-        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
         self.node_feat = torch.load(zf.open(f"{sampling_type}/n{pid}.pt")).to(device)
         self.parent_feat = torch.load(zf.open(f"{sampling_type}/p{pid}.pt")).to(device)
         self.inst_feat = torch.load(zf.open(f"{sampling_type}/i{pid}.pt")).to(device)
         self.wt = torch.load(zf.open(f"{sampling_type}/{weights_type}/{pid}.pt")).to(device)
 
-        zf = zipfile.ZipFile(resource_path / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
+        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
         self.labels = torch.load(zf.open(f"{labels_type}/{pid}.pt")).to(device)
 
         # self.node_feat = data["nf"].to(device)
@@ -66,6 +292,10 @@ def read_from_zip(archive, file, format="raw"):
             data = raw_data
         elif format == "json":
             data = json.load(raw_data)
+        elif format == "npz":
+            data = np.load(io.BytesIO(raw_data.read()))
+        elif format == "pt":
+            data = torch.load(io.BytesIO(raw_data.read()))
 
     return data
 
@@ -85,11 +315,56 @@ def read_instance_knapsack(archive, inst):
     return data
 
 
+def read_instance_indepset(archive, inst):
+    if inst.split(".")[-1] == "npz":
+        data = read_from_zip(archive, inst, format="npz")
+    else:
+        raw_data = read_from_zip(archive, inst)
+
+        data = {"obj_coeffs": [], "cons_coeffs": [], "rhs": []}
+
+        data["n_vars"], data["n_cons"] = list(map(int, raw_data.readline().strip().split()))
+        data["n_objs"] = int(raw_data.readline())
+        data["adj_list"] = np.zeros((data["n_vars"], data["n_vars"]))
+        data["adj_list_comp"] = np.ones((data["n_vars"], data["n_vars"]))
+        for i in range(data["n_vars"]):
+            data["adj_list"][i, i] = 1
+            data["adj_list_comp"][i, i] = 0
+
+        for _ in range(data["n_objs"]):
+            data["obj_coeffs"].append(list(map(int, raw_data.readline().split())))
+        # print(data["obj_coeffs"])
+
+        for _ in range(data["n_cons"]):
+            n_vars_per_con = list(map(int, raw_data.readline().strip().split()))[0]
+            non_zero_vars = list(map(int, raw_data.readline().strip().split()))
+            # print(n_vars_per_con, non_zero_vars)
+            non_zero_vars = [i - 1 for i in non_zero_vars]
+            data["cons_coeffs"].append(non_zero_vars)
+
+            for i in range(len(non_zero_vars)):
+                i_var = non_zero_vars[i]
+                for j in range(i + 1, len(non_zero_vars)):
+                    j_var = non_zero_vars[j]
+                    data["adj_list"][i_var, j_var] = 1
+                    data["adj_list"][j_var, i_var] = 1
+                    data["adj_list_comp"][i_var, j_var] = 0
+                    data["adj_list_comp"][j_var, i_var] = 0
+
+        # print(data["adj_list"])
+        # data["adj_list_comp"] = np.zeros((data["n_vars"], data["n_vars"]))
+        # data["adj_list_comp"][data["adj_list"] == 0] = 1
+        # print(data["adj_list"][96])
+        # print(data["adj_list_comp"][96])
+    return data
+
+
 def read_instance(problem, archive, inst):
     data = None
     if problem == "knapsack" or problem == "knapsackc":
         data = read_instance_knapsack(archive, inst)
-
+    elif problem == "indepset":
+        data = read_instance_indepset(archive, inst)
     return data
 
 
@@ -97,14 +372,21 @@ def get_instance_prefix(problem):
     prefix = None
     if problem == 'knapsack' or problem == 'knapsackc':
         prefix = 'kp_7'
+    elif problem == "indepset":
+        prefix = "ind_7"
 
     return prefix
 
 
 def get_instance_data(problem, size, split, pid):
     prefix = get_instance_prefix(problem)
-    archive = resource_path / f"instances/{problem}/{size}.zip"
-    inst = f'{size}/{split}/{prefix}_{size}_{pid}.dat'
+    archive = path.inst / f"{problem}/{size}.zip"
+    suffix = "dat"
+    if problem == "indepset":
+        if len(size.split("-")) > 2:
+            suffix = "npz"
+
+    inst = f'{size}/{split}/{prefix}_{size}_{pid}.{suffix}'
     data = read_instance(problem, archive, inst)
 
     return data
@@ -187,7 +469,7 @@ def get_layer_weights(flag_penalty, penalty, num_vars):
 
 
 def get_bdd_data(problem, size, split, pid):
-    archive = resource_path / f"bdds/{problem}/{size}.zip"
+    archive = path.bdd / f"{problem}/{size}.zip"
     zf = zipfile.ZipFile(archive)
     fp = zf.open(f"{size}/{split}/{pid}.json", "r")
     bdd = json.load(fp)
@@ -212,11 +494,12 @@ def get_knapsack_order(order_type, data):
         return np.arange(data['n_vars'])
 
 
-def get_order(problem, order_type, data):
+def get_static_order(problem, order_type, data):
     order = None
     if problem == 'knapsack' or problem == 'knapsackc':
         order = get_knapsack_order(order_type, data)
-
+    elif problem == 'indepset':
+        order = []
     assert order is not None
 
     return order
@@ -257,7 +540,7 @@ def get_parent_features(problem, node, bdd, lidx, inst_data, state_norm_const):
 
         for p in node['op']:
             parents_feat.append([
-                ONE_ARC,
+                CONST.ONE_ARC,
                 0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / state_norm_const,
                 0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / inst_data['capacity'],
             ])
@@ -265,7 +548,7 @@ def get_parent_features(problem, node, bdd, lidx, inst_data, state_norm_const):
         for _ in node['zp']:
             # Parent state will be the same as the current state for zero-arc
             parents_feat.append([
-                ZERO_ARC,
+                CONST.ZERO_ARC,
                 node['s'][0] / state_norm_const,
                 node['s'][0] / inst_data['capacity'],
             ])
@@ -307,12 +590,12 @@ def convert_bdd_to_tensor_data(problem,
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "tensors" / problem / size / split / sampling_type
+    sampling_data_path = path.resource / "tensors" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.pt").exists()
     features_exists = False
 
-    labels_data_path = resource_path / "tensors" / problem / size / split / "labels" / label_type
+    labels_data_path = path.resource / "tensors" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.pt").exists()
     labels_exists = False
@@ -323,7 +606,7 @@ def convert_bdd_to_tensor_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "tensors" / problem / size / split / sampling_type / weights_type
+    weights_data_path = path.resource / "tensors" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.pt").exists()
     weights_exists = False
@@ -348,7 +631,7 @@ def convert_bdd_to_tensor_data(problem,
 
         # Get instance features
         inst_data = get_instance_data(problem, size, split, pid)
-        order = get_order(problem, order_type, inst_data)
+        order = get_static_order(problem, order_type, inst_data)
         inst_feat = get_instance_features(problem,
                                           inst_data,
                                           state_norm_const=state_norm_const)
@@ -540,11 +823,11 @@ def convert_bdd_to_xgb_data(problem,
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type
+    sampling_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.npy").exists()
 
-    labels_data_path = resource_path / "xgb_data" / problem / size / split / "labels" / label_type
+    labels_data_path = path.resource / "xgb_data" / problem / size / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.npy").exists()
 
@@ -554,7 +837,7 @@ def convert_bdd_to_xgb_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "xgb_data" / problem / size / split / sampling_type / weights_type
+    weights_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.npy").exists()
 
@@ -571,7 +854,7 @@ def convert_bdd_to_xgb_data(problem,
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
-            order = get_order(problem, order_type, inst_data)
+            order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
             featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
                                                                   raw=False,
@@ -690,11 +973,11 @@ def convert_bdd_to_xgb_mixed_data(problem,
     dataset_type = "mixed"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type
+    sampling_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{counter}.npy").exists()
 
-    labels_data_path = resource_path / "xgb_data" / problem / dataset_type / split / "labels" / label_type
+    labels_data_path = path.resource / "xgb_data" / problem / dataset_type / split / "labels" / label_type
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{counter}.npy").exists()
 
@@ -704,7 +987,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = resource_path / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
+    weights_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{counter}.npy").exists()
 
@@ -721,7 +1004,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
-            order = get_order(problem, order_type, inst_data)
+            order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
             featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
                                                                   raw=False,
@@ -818,7 +1101,7 @@ def convert_bdd_to_xgb_mixed_data(problem,
 
 def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device):
     def get_dataset_knapsack():
-        zf = zipfile.Path(resource_path / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.Path(path.resource / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
         if zf.joinpath(f"{sampling_type}/n{pid}.pt").exists():
             return KnapsackBDDDataset(size=size,
                                       split=split,
@@ -841,10 +1124,10 @@ def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weight
 def get_xgb_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
     def get_dataset_knapsack():
         dtype = f"npr{neg_pos_ratio}ms{min_samples}"
-        zf = zipfile.Path(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+        zf = zipfile.Path(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
         np_file = zf.joinpath(f"{split}/{dtype}/{pid}.npy")
         if np_file.exists():
-            zf = zipfile.ZipFile(resource_path / f"xgb_data/knapsack/{size}/{split}.zip")
+            zf = zipfile.ZipFile(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
             with zf.open(f"{split}/{dtype}/{pid}.npy", "r") as fp:
                 data = io.BytesIO(fp.read())
                 np_array = np.load(data)
@@ -964,7 +1247,7 @@ def get_log_dir_name(name,
 
 
 def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None):
-    mdl_path = resource_path / f"pretrained/nn/{cfg.prob.name}/{cfg.prob.size}"
+    mdl_path = path.resource / f"pretrained/nn/{cfg.prob.name}/{cfg.prob.size}"
     mdl_path.mkdir(parents=True, exist_ok=True)
 
     mdl_name = get_nn_model_name(cfg)
@@ -1005,7 +1288,7 @@ def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None)
 
 
 def checkpoint_test(cfg, scores_df):
-    checkpoint_dir = resource_path / "experiments/"
+    checkpoint_dir = path.resource / "experiments/"
     checkpoint_str = get_log_dir_name(cfg.prob.name,
                                       cfg.prob.size,
                                       cfg.train.flag_layer_penalty,
@@ -1040,9 +1323,13 @@ def handle_timeout(sig, frame):
 
 
 def set_seed(seed):
-    random.seed = seed
-    torch.manual_seed(seed)
+    random.seed(seed)
     np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def set_device(device_type):
@@ -1053,6 +1340,61 @@ def set_device(device_type):
     print("Training on ", device)
 
     return device
+
+
+def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
+    world_size = int(os.environ.get("SLURM_JOB_NUM_NODES", 1))
+    # print("World size", world_size)
+    n_gpus_per_node = torch.cuda.device_count()
+    world_size *= n_gpus_per_node
+    # print("World size", world_size)
+    # The id of the node on which the current process is running
+    node_id = int(os.environ.get("SLURM_NODEID", 0))
+    # print(node_id)
+    # The id of the current process inside a node
+    local_rank = int(os.environ.get("SLURM_LOCALID"))
+    # print("Local rank ", local_rank)
+    # Unique id of the current process across processes spawned across all nodes
+    global_rank = (node_id * n_gpus_per_node) + local_rank
+    # print("Global rank: ", global_rank)
+    # The local cuda device id we assign to the current process
+    device_id = local_rank
+    print("World size: {}, Rank: {}, Node: {}, Local Rank: {}".format(world_size, global_rank, node_id, local_rank))
+    # Initialize process group and initiate communications between all processes
+    # running on all nodes
+    print("From Rank: {}, ==> Initializing Process Group...".format(global_rank))
+    # init the process group
+    init_process_group(backend=dist_backend,
+                       init_method=init_method,
+                       world_size=world_size,
+                       rank=global_rank)
+    print("Process group ready!")
+    print("From Rank: {}, ==> Making model...".format(global_rank))
+    print()
+
+    return world_size, global_rank, device_id
+
+
+def get_device(distributed=False, init_method=None, dist_backend=None):
+    device_str, pin_memory, master, device_id, world_size = "cpu", False, True, 0, 1
+    if distributed:
+        world_size, rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        device_str = f"cuda:{device_id}"
+        pin_memory = True
+        master = rank == 0
+    elif torch.cuda.is_available():
+        device_str = "cuda"
+        pin_memory = True
+    device = torch.device(device_str)
+
+    return device, device_str, pin_memory, master, device_id, world_size
+
+
+def get_size(cfg):
+    if cfg.problem_type == 1:
+        return f"{cfg.prob.n_objs}_{cfg.prob.n_vars}"
+    elif cfg.problem_type == 2:
+        return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
 
 
 def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, weights_type, device, dataset_dict=None):
@@ -1261,3 +1603,86 @@ def get_nn_model_name(cfg):
         return get_nn_model_name_knapsack()
     else:
         raise ValueError("Invalid problem!")
+
+
+def dict2cpu(stats):
+    cpu_stats = {}
+    for k, v in stats.items():
+        if v is not None:
+            cpu_stats[k] = v.cpu().numpy()
+        else:
+            cpu_stats[k] = None
+
+    return cpu_stats
+
+
+def reduce_epoch_time(epoch_time, device):
+    epoch_time = torch.tensor(epoch_time, dtype=torch.float32, device=device)
+    dist.all_reduce(epoch_time, dist.ReduceOp.AVG, async_op=False)
+    return epoch_time
+
+
+class LayerNodeSelector:
+    def __init__(self, strategy, width=-1, tau=0.5):
+        self.strategy = strategy
+        self.width = width
+        self.tau = tau
+
+    def __call__(self, scores):
+
+        idx_score = [(i, s) for i, s in enumerate(scores)]
+        selection = [0] * len(scores)
+        selected_idx, removed_idx = None, None
+        if self.strategy == "width":
+            if self.width >= len(scores):
+                selection, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
+            else:
+                idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
+                selected_idx = [i[0] for i in idx_score[:self.width]]
+                for i in idx_score[:self.width]:
+                    selection[i[0]] = 1
+
+        elif self.strategy == "threshold":
+            selected_idx = []
+            for i in idx_score:
+                if i[1] > self.tau:
+                    selection[i[0]] = 1
+                    selected_idx.append(i[0])
+
+        removed_idx = list(set(np.arange(len(scores))).difference(set(selected_idx)))
+
+        return selection, selected_idx, removed_idx
+
+
+def compute_cardinality(true_pf=None, pred_pf=None):
+    z, z_pred = np.array(true_pf), np.array(pred_pf)
+    assert z.shape[1] == z_pred.shape[1]
+
+    if z_pred.shape[0] == 0:
+        return 0
+    else:
+        # Defining a data type
+        rows, cols = z.shape
+        dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
+                'formats': cols * [z.dtype]}
+
+        rows, cols = z_pred.shape
+        dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
+                     'formats': cols * [z_pred.dtype]}
+
+        # Finding intersection
+        found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
+
+        return found_ndps.shape[0]
+
+
+def compute_dd_size(dd):
+    s = 0
+    for l in dd:
+        s += len(l)
+
+    return s
+
+
+def compute_dd_width(dd):
+    return np.max([len(l) for l in dd])

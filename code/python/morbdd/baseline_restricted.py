@@ -7,7 +7,7 @@ import pandas as pd
 
 from morbdd import resource_path
 from morbdd.utils import get_instance_data
-from morbdd.utils import get_order
+from morbdd.utils import get_static_order
 from morbdd.utils import handle_timeout
 from morbdd.utils import read_from_zip
 
@@ -21,7 +21,7 @@ def worker(rank, cfg):
     archive = resource_path / f"bdds/{cfg.prob}/{cfg.size}.zip"
     for pid in range(cfg.from_pid + rank, cfg.to_pid, cfg.num_processes):
         data = get_instance_data(cfg.prob, cfg.size, cfg.split, pid)
-        order = get_order(cfg.prob, cfg.order_type, data)
+        order = get_static_order(cfg.prob, cfg.order_type, data)
 
         file = f"{cfg.size}/{cfg.split}/{pid}.json"
         print(archive, file)

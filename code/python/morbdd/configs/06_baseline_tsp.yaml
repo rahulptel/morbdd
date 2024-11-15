@@ -1,0 +1,22 @@
+defaults:
+  - _self_
+  - prob: tsp
+  - baseline: wrbdd
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+split: test
+from_pid: 1100
+to_pid: 1200
+n_processes: 1
+trial_seeds:
+  - 13
+  - 349109032
+  - 8094
+  - 9342019
+  - 47623
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .

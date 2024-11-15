@@ -101,7 +101,6 @@ private:
 //
 struct IndepSetInst
 {
-
 	Graph *graph;									// independent set graph
 	vector<boost::dynamic_bitset<>> adj_mask_compl; // complement mask of adjacencies
 	vector<vector<int>> obj_coeffs;
@@ -116,6 +115,7 @@ struct IndepSetInst
 
 	/** Create from graph */
 	IndepSetInst(Graph *_graph);
+
 
 	IndepSetInst(int n_vertices, vector<vector<int>> edges, vector<vector<int>> obj_ceoffs);
 };
@@ -410,10 +410,10 @@ inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges, vector<
 		graph->add_edge(edges[i][0], edges[i][1]);
 	}
 	// graph->print();
-
 	// cout << "\tAuxiliary graph for set packing:" << endl;
 	// cout << "\t\tnumber of vertices: " << graph->n_vertices << endl;
 	// cout << "\t\tnumber of edges: " << graph->n_edges << endl;
+
 	// create complement mask of adjacencies
 	adj_mask_compl.resize(graph->n_vertices);
 	for (int v = 0; v < graph->n_vertices; ++v)
@@ -430,6 +430,7 @@ inline IndepSetInst::IndepSetInst(int n_vars, vector<vector<int>> edges, vector<
 		// we assume here a vertex is adjacent to itself
 		adj_mask_compl[v].set(v, false);
 	}
+
 	obj_coeffs = _obj_coeffs;
 }
 

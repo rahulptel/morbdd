@@ -151,6 +151,8 @@ public:
 
     void restrict(vector<vector<int>> states_to_remove);
 
+    double get_time(int);
+
 private:
     void initialize();
 

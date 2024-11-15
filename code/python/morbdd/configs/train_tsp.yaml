@@ -1,0 +1,36 @@
+defaults:
+  - _self_
+  - prob: tsp
+  - model: gtf
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+# optimizer
+optimizer: Adam
+initial_lr: 1e-5
+max_lr: 1e-3
+weight_decay: 0
+## Linear warm-up
+#warmup_steps_percent = 5
+## LR Scheduler
+#factor = 0.9
+#patience = 10
+
+
+
+batch_size: 512
+epochs: 10
+grad_clip: 0.0
+eval_every: 150
+weighted_loss: false
+
+resample: False
+# 0: Do not subsample
+# Positive constant
+subsample: 1
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
