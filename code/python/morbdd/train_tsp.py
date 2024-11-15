@@ -10,6 +10,7 @@ from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, Subset, TensorDataset
 
 from morbdd import ResourcePaths as path
+from morbdd.utils.tsp import get_model_str, get_optimizer_str
 
 
 class TSPNodeDataset:
@@ -84,6 +85,7 @@ class TSPNodeDataset:
         self.node_dataset = TensorDataset(
             self.node_data[:, 0:-1], self.node_data[:, -1]
         )
+        self.set_epoch_node_ids()
 
         # Compute layer weights
         # self.lw = self.get_layer_weights_exponential(self.node_data[:, 1]).to(device)
@@ -163,15 +165,19 @@ class TSPNodeDataset:
         ]
 
     def get_epoch_node_dataset(self):
-        if self.resample:
+        if self.resample and self.subsample > 0:
             print(f"Sampling new {self.split} dataset")
             self.set_epoch_node_ids()
             return Subset(self.node_dataset, self.epoch_ids)
-        else:
+        elif not self.resample and self.subsample > 0:
+            return Subset(self.node_dataset, self.epoch_ids)
+        elif self.subsample == 0:
             return self.node_dataset
+        else:
+            raise ValueError("Subsample must be greater than 0")
 
     def __len__(self):
-        return len(self.node_dataset)
+        return len(self.epoch_ids)
 
 
 class MLP(nn.Module):
@@ -514,50 +520,6 @@ def save_result(save_path, ep, global_step, train_result, val_result):
     )
 
 
-def get_model_str(cfg):
-    model_str = f"{cfg.model.type}-v{cfg.model.version}-"
-    if cfg.model.d_emb != 32:
-        model_str += f"-emb-{cfg.model.d_emb}"
-    if cfg.model.n_layers != 2:
-        model_str += f"-l-{cfg.model.n_layers}"
-    if cfg.model.n_heads != 8:
-        model_str += f"-h-{cfg.model.n_heads}"
-    if cfg.model.dropout_token != 0.0:
-        model_str += f"-dptk-{cfg.model.dropout_token}"
-    if cfg.model.dropout_attn != 0.0:
-        model_str += f"-dpa-{cfg.model.dropout_attn}"
-    if cfg.model.dropout_proj != 0.0:
-        model_str += f"-dpp-{cfg.model.dropout_proj}"
-    if cfg.model.dropout_mlp != 0.0:
-        model_str += f"-dpm-{cfg.model.dropout_mlp}"
-    if cfg.model.bias_mha:
-        model_str += f"-ba-{cfg.model.bias_mha}"
-    if cfg.model.bias_mha:
-        model_str += f"-bm-{cfg.model.bias_mlp}"
-    if cfg.model.h2i_ratio != 2:
-        model_str += f"-h2i-{cfg.model.h2i_ratio}"
-
-    return model_str
-
-
-def get_optimizer_str(cfg):
-    opt_str = "opt"
-    # if cfg.optimizer != "Adam":
-    opt_str += f"-{cfg.optimizer}"
-    # if cfg.weight_decay != 1e-3:
-    #     opt_str += f"-wd{cfg.weight_decay}"
-    # opt_str += f"-lr-{cfg.max_lr}-{cfg.warmup_steps}"
-    opt_str += f"-lr-{cfg.max_lr}"
-    # if cfg.decay is not None and cfg.decay != "Cosine":
-    #     opt_str += f"-{cfg.decay}"
-    # if cfg.batch_size != 512:
-    opt_str += f"-bs-{cfg.batch_size}"
-    if cfg.grad_clip != 1.0:
-        opt_str += f"-gcl-{cfg.grad_clip}"
-
-    return opt_str
-
-
 def flatten_batch(batch, dataset):
     node_feat, label = batch
 
@@ -580,7 +542,7 @@ def flatten_batch(batch, dataset):
 
 
 @torch.no_grad()
-def test(cfg, model, dataset, dataloader, loss_fn, class_weights):
+def test(cfg, model, dataset, dataloader, loss_fn):
     model.eval()
     tn, fp, fn, tp = 0, 0, 0, 0
     running_loss = 0.0
@@ -699,18 +661,6 @@ def training_loop(
     # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
 
     train_results, val_results = [], []
-
-    # # Set up epoch -1 training performance baseline
-    # train_result = test(model, train_dataloader, loss_fn)
-    # train_result.update({"epoch": -1, "global_step": 0})
-    # train_results.append(train_result)
-    # print_eval_result("Train", -1, cfg.epochs, -1, max_steps, train_result)
-    #
-    # val_result = test(model, val_dataloader, loss_fn)
-    # val_result.update({"epoch": -1, "global_step": 0})
-    # val_results.append(val_result)
-    # print_eval_result("Val", -1, cfg.epochs, -1, max_steps, val_result)
-
     global_step, val_metric, best_epoch, best_step = 0, 0, -1, -1
     best_metric = initialize_eval_metric(metric_type)
     val_node_dataset = val_dataset.get_epoch_node_dataset()
@@ -719,12 +669,14 @@ def training_loop(
     )
     for ep in range(cfg.epochs):
         train_epoch_node_dataset = train_dataset.get_epoch_node_dataset()
+        print("Train dataset: ", len(train_epoch_node_dataset))
         train_dataloader = DataLoader(
             train_epoch_node_dataset,
             batch_size=cfg.batch_size,
             shuffle=True,
             drop_last=True,
         )
+        print(len(train_dataloader))
         for i, batch in enumerate(train_dataloader):
             model.train()
             global_step += 1
@@ -745,14 +697,16 @@ def training_loop(
             optimizer.step()
 
             if (global_step + 1) % cfg.eval_every == 0:
-                train_result = test(cfg, model, train_dataloader, loss_fn)
+                train_result = test(
+                    cfg, model, train_dataset, train_dataloader, loss_fn
+                )
                 train_result.update({"epoch": ep, "global_step": global_step})
                 train_results.append(train_result)
                 print_eval_result(
                     "Train", ep, cfg.epochs, global_step, max_steps, train_result
                 )
 
-                val_result = test(cfg, model, val_dataloader, loss_fn)
+                val_result = test(cfg, model, val_dataset, val_dataloader, loss_fn)
                 val_metric = val_result[metric_type]
                 val_result.update({"epoch": ep, "global_step": global_step})
                 val_results.append(val_result)
@@ -774,7 +728,7 @@ def training_loop(
                             "model_state_dict": model.state_dict(),
                             "optimizer_state_dict": optimizer.state_dict(),
                         },
-                        f"{path.resource}/checkpoint/tsp/best_model.pt",
+                        f"{exp_path}/best_model.pt",
                     )
 
                 print(
@@ -782,13 +736,6 @@ def training_loop(
                         best_epoch, best_step, metric_type, best_metric
                     )
                 )
-        torch.save(
-            {
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-            },
-            f"{path.resource}/checkpoint/tsp/model_{ep}.pt",
-        )
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
@@ -803,8 +750,16 @@ def main(cfg):
         cfg.prob.n_vars,
         "train",
         device,
-        resample=cfg.resample.train,
+        resample=cfg.resample,
         subsample=cfg.subsample,
+    )
+    print(
+        "Train dataset: ",
+        len(train_dataset),
+        "Resample: ",
+        cfg.resample,
+        "Subsample: ",
+        cfg.subsample,
     )
     val_dataset = TSPNodeDataset(
         cfg.prob.n_objs,
@@ -814,6 +769,7 @@ def main(cfg):
         resample=False,
         subsample=0,
     )
+    print("Val dataset: ", len(val_dataset))
 
     model = ParetoNodePredictor(
         d_emb=cfg.model.d_emb,

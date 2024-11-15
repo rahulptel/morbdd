@@ -24,9 +24,7 @@ grad_clip: 0.0
 eval_every: 150
 weighted_loss: false
 
-resample:
-  train: False
-  val: False
+resample: False
 # 0: Do not subsample
 # Positive constant
 subsample: 1
