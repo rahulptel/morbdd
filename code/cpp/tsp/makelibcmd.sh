@@ -1,5 +1,7 @@
 #!/bin/bash
 
+rm *.so
+
 for i in {3..7}; 
 do
 	sed -i "s/PYBIND11_MODULE(libtspenvv2, m)/PYBIND11_MODULE(libtspenvv2o$i, m)/g" src/libtspenv.cpp
