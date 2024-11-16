@@ -739,7 +739,7 @@ def training_loop(
                     )
                 )
     times["train"] = time.time() - tick
-    print("Wallclock time: ", times["train"]/3600)
+    print("Wallclock time: ", times["train"] / 3600)
     pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
 
 
