@@ -8,7 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, Subset, TensorDataset
-
+import time
 from morbdd import ResourcePaths as path
 from morbdd.utils.tsp import get_model_str, get_optimizer_str
 
@@ -660,6 +660,7 @@ def training_loop(
     # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
     # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
 
+    times = {"train": 0}
     train_results, val_results = [], []
     global_step, val_metric, best_epoch, best_step = 0, 0, -1, -1
     best_metric = initialize_eval_metric(metric_type)
@@ -667,6 +668,7 @@ def training_loop(
     val_dataloader = DataLoader(
         val_node_dataset, batch_size=cfg.batch_size, shuffle=True
     )
+    tick = time.time()
     for ep in range(cfg.epochs):
         train_epoch_node_dataset = train_dataset.get_epoch_node_dataset()
         print("Train dataset: ", len(train_epoch_node_dataset))
@@ -676,7 +678,7 @@ def training_loop(
             shuffle=True,
             drop_last=True,
         )
-        print(len(train_dataloader))
+        print("Train dataloader: ", len(train_dataloader))
         for i, batch in enumerate(train_dataloader):
             model.train()
             global_step += 1
@@ -736,6 +738,9 @@ def training_loop(
                         best_epoch, best_step, metric_type, best_metric
                     )
                 )
+    times["train"] = time.time() - tick
+    print("Wallclock time: ", times["train"]/3600)
+    pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
