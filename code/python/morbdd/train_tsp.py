@@ -733,8 +733,8 @@ def training_loop(
     )
 
     exp_str = get_model_str(cfg.model)
-    exp_str += get_optimizer_str(cfg.optimizer)
-    exp_str += get_exp_str(cfg)
+    exp_str += "-" + get_optimizer_str(cfg.optimizer)
+    exp_str += "-" + get_exp_str(cfg)
     exp_path = path.checkpoint / "tsp" / cfg.prob.size / exp_str
     exp_path.mkdir(exist_ok=True, parents=True)
 
