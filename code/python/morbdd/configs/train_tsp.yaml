@@ -10,7 +10,6 @@ optimizer:
   type: Adam
   lr: 1e-3
   decay_lr: false
-  # min_lr is lr/10
   min_lr:
   warmup: 0
   wd: 0
@@ -24,7 +23,7 @@ eval_every: 150
 weighted_loss: false
 
 # Resample negative class for each epoch
-resample: False
+resample: false
 # 0: Do not subsample
 # k: Samples k negative data points for one positive data point
 subsample:

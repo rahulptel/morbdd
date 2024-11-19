@@ -820,7 +820,7 @@ def training_loop(
             )
             print("N dataloader: train: {}".format(len(train_loader)))
 
-    times["train"] = time.time() - tick / 3600
+    times["train"] = (time.time() - tick) / 3600
     print("Wallclock time: ", times["train"])
     pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
     OmegaConf.save(cfg, "config.yaml")
@@ -830,9 +830,9 @@ def training_loop(
 def main(cfg):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Training on :", device)
+    print(cfg)
     if cfg.optimizer.decay_lr:
         cfg.optimizer.min_lr = cfg.optimizer.lr / 10
-    print(cfg)
 
     # Construct dataset
     train_dataset = TSPNodeDataset(
