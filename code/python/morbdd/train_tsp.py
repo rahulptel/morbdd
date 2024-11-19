@@ -823,7 +823,7 @@ def training_loop(
     times["train"] = (time.time() - tick) / 3600
     print("Wallclock time: ", times["train"])
     pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
-    OmegaConf.save(cfg, "config.yaml")
+    OmegaConf.save(cfg, exp_path / "config.yaml")
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
