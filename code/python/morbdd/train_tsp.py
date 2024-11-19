@@ -1,16 +1,20 @@
 import json
+import math
 import pickle as pkl
+import time
 
 import hydra
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from omegaconf import OmegaConf
 from sklearn.metrics import confusion_matrix
 from torch.utils.data import DataLoader, Subset, TensorDataset
-import time
+
 from morbdd import ResourcePaths as path
-from morbdd.utils.tsp import get_model_str, get_optimizer_str
+from morbdd.utils.tsp import compute_stat_features
+from morbdd.utils.tsp import get_model_str, get_optimizer_str, get_exp_str
 
 
 class TSPNodeDataset:
@@ -114,19 +118,6 @@ class TSPNodeDataset:
                 self.dd_flat.append(node)
         self.dd_flat = torch.from_numpy(np.array(self.dd_flat)).float().to(self.device)
 
-    def compute_stat_features(self):
-        return torch.cat(
-            (
-                self.dists.max(dim=-1, keepdim=True)[0],
-                self.dists.min(dim=-1, keepdim=True)[0],
-                self.dists.std(dim=-1, keepdim=True),
-                self.dists.median(dim=-1, keepdim=True)[0],
-                self.dists.quantile(0.75, dim=-1, keepdim=True)
-                - self.dists.quantile(0.25, dim=-1, keepdim=True),
-            ),
-            dim=-1,
-        )
-
     def set_instance_data(self):
         # Load coordinates and distance matrix to GPU
         n_samples = self.INSTS_PER_SPLIT.get(self.split, None)
@@ -141,7 +132,9 @@ class TSPNodeDataset:
             self.dists[idx] = torch.from_numpy(d["dists"])
         self.dists = self.dists.float().to(self.device) / self.MAX_DIST_ON_GRID
         self.coords = self.coords.float().to(self.device) / self.GRID_DIM
-        self.coords = torch.cat((self.coords, self.compute_stat_features()), dim=-1)
+        self.coords = torch.cat(
+            (self.coords, compute_stat_features(self.dists)), dim=-1
+        )
 
     def get_instance_data(self, pids):
         idxs = pids - self.PID_OFFSET[self.split]
@@ -406,22 +399,23 @@ class TokenEmbedGraph(nn.Module):
     DeepSet-based node and edge embeddings
     """
 
-    def __init__(self, n_node_feat=7, d_emb=32):
+    def __init__(self, n_node_feat=7, d_emb=32, act="relu"):
         super(TokenEmbedGraph, self).__init__()
         self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
         self.linear2 = nn.Linear(2 * d_emb, d_emb)
         self.linear3 = nn.Linear(1, d_emb)
         self.linear4 = nn.Linear(d_emb, d_emb)
+        self.act = nn.ReLU() if act == "relu" else nn.GELU()
 
     def forward(self, n, e):
-        n = F.relu(self.linear1(n))  # B x n_objs x n_vars x (2 * d_emb)
+        n = self.act(self.linear1(n))  # B x n_objs x n_vars x (2 * d_emb)
         n = n.sum(1)  # B x n_vars x (2 * d_emb)
-        n = F.relu(self.linear2(n))  # B x n_vars x d_emb
+        n = self.act(self.linear2(n))  # B x n_vars x d_emb
 
         e = e.unsqueeze(-1)
-        e = F.relu(self.linear3(e))  # B x n_objs x n_vars x n_vars x d_emb
+        e = self.act(self.linear3(e))  # B x n_objs x n_vars x n_vars x d_emb
         e = e.sum(1)  # B x n_vars x n_vars x d_emb
-        e = F.relu(self.linear4(e))  # B x n_vars x n_vars x d_emb
+        e = self.act(self.linear4(e))  # B x n_vars x n_vars x d_emb
 
         return n, e
 
@@ -439,15 +433,19 @@ class ParetoNodePredictor(nn.Module):
         d_emb=32,
         n_layers=2,
         n_heads=8,
+        act="relu",
         bias_mha=False,
         dropout_attn=0.0,
         dropout_proj=0.0,
         bias_mlp=False,
         dropout_mlp=0.0,
         h2i_ratio=2,
+        concat_emb=False,
     ):
         super(ParetoNodePredictor, self).__init__()
-        self.token_encoder = TokenEmbedGraph(d_emb=d_emb)
+        self.concat_emb = concat_emb
+        self.act = nn.ReLU() if act == "relu" else nn.GELU()
+        self.token_encoder = TokenEmbedGraph(d_emb=d_emb, act=act)
         self.graph_encoder = GTEncoder(
             d_emb=d_emb,
             n_layers=n_layers,
@@ -462,21 +460,28 @@ class ParetoNodePredictor(nn.Module):
         self.visit_encoder = nn.Embedding(self.NODE_VISIT_TYPES, d_emb)
         self.node_visit_encoder1 = nn.Sequential(
             nn.Linear(d_emb, h2i_ratio * d_emb),
-            nn.ReLU(),
+            self.act,
         )
         self.node_visit_encoder2 = nn.Sequential(
             nn.Linear(h2i_ratio * d_emb, d_emb),
-            nn.ReLU(),
+            self.act,
         )
         self.layer_encoder = nn.Sequential(
             nn.Linear(self.N_LAYER_INDEX, d_emb),
-            nn.ReLU(),
+            self.act,
         )
-        self.pareto_predictor = nn.Sequential(
-            nn.Linear(d_emb, h2i_ratio * d_emb),
-            nn.ReLU(),
-            nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
-        )
+        if self.concat_emb:
+            self.pareto_predictor = nn.Sequential(
+                nn.Linear(3 * d_emb, h2i_ratio * d_emb),
+                self.act,
+                nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
+            )
+        else:
+            self.pareto_predictor = nn.Sequential(
+                nn.Linear(d_emb, h2i_ratio * d_emb),
+                self.act,
+                nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
+            )
 
     def forward(self, n, e, l, s):
         n, e = self.token_encoder(n, e)
@@ -495,7 +500,45 @@ class ParetoNodePredictor(nn.Module):
         customer_enc = n[torch.arange(B), last_visit.long()]
         l_enc = self.layer_encoder(((n_vars - l) / n_vars).unsqueeze(-1))
 
-        return self.pareto_predictor(node_visit + customer_enc + l_enc)
+        if self.concat_emb:
+            return self.pareto_predictor(
+                torch.cat((node_visit, customer_enc, l_enc), dim=-1)
+            )
+        else:
+            return self.pareto_predictor(node_visit + customer_enc + l_enc)
+
+    def configure_optimizer(self, cfg):
+        # Ref: https://github.com/karpathy/nanoGPT/blob/master/model.py
+        # start with all of the candidate parameters
+        param_dict = {pn: p for pn, p in self.named_parameters()}
+        # filter out those that do not require grad
+        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        optim_groups = [
+            {"params": decay_params, "weight_decay": cfg.wd},
+            {"params": nodecay_params, "weight_decay": 0.0},
+        ]
+        num_decay_params = sum(p.numel() for p in decay_params)
+        num_nodecay_params = sum(p.numel() for p in nodecay_params)
+        print(
+            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+        )
+        print(
+            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+        )
+        optimizer_cls = getattr(torch.optim, cfg.type)
+        optimizer = optimizer_cls(
+            optim_groups,
+            lr=cfg.lr,
+            betas=(cfg.beta1, cfg.beta2),
+        )
+        print(f"using optimizer: {cfg.type}")
+        print()
+
+        return optimizer
 
 
 def save_model(save_path, model, optimizer):
@@ -549,7 +592,8 @@ def test(cfg, model, dataset, dataloader, loss_fn):
     n_items = 0.0
     for i, batch in enumerate(dataloader):
         # coords, dists, lids, states, lw, sw, labels = batch
-        coords, dists, lids, states, lw, sw, labels = flatten_batch(batch, dataset)
+        batch = flatten_batch(batch, dataset)
+        coords, dists, lids, states, lw, sw, labels = batch
 
         logits = model(coords, dists, lids, states)
         loss = loss_fn(logits, labels, reduction="none")
@@ -623,14 +667,23 @@ def initialize_eval_metric(metric):
         return np.infty
 
 
-def adjust_learning_rate(step, optimizer, scheduler, val_metric, max_lr, warmup_steps):
+def adjust_learning_rate(cfg, step, optimizer, warmup_steps, decay_steps):
     """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
-    if step < warmup_steps:
-        lr = max_lr * (step + 1) / warmup_steps
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
-    # else:
-    #     scheduler.step(val_metric)
+    lr = cfg.lr
+    if cfg.warmup > 0 and step < warmup_steps:
+        lr = cfg.lr * (step + 1) / warmup_steps
+    elif cfg.decay_lr and step > decay_steps:
+        lr = cfg.min_lr
+    elif cfg.decay_lr and step <= decay_steps:
+        decay_ratio = (step - warmup_steps) / (decay_steps - warmup_steps)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+        lr = cfg.min_lr + coeff * (cfg.lr - cfg.min_lr)
+
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+    return lr
 
 
 def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
@@ -640,52 +693,74 @@ def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
         )
     )
     print(
-        "\tF1: {}, Recall: {}, Precision: {}, Loss: {}".format(
-            result["f1"], result["recall"], result["precision"], result["loss"]
+        "\tF1: {}, Recall: {}, Precision: {}, Acc: {}, Loss: {}".format(
+            result["f1"],
+            result["recall"],
+            result["precision"],
+            result["accuracy"],
+            result["loss"],
         )
+    )
+
+
+def get_dataloader(dataset, batch_size, shuffle=True, drop_last=False):
+    epoch_node_dataset = dataset.get_epoch_node_dataset()
+    return DataLoader(
+        epoch_node_dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        drop_last=drop_last,
     )
 
 
 def training_loop(
-    cfg, model, optimizer, loss_fn, train_dataset, val_dataset, metric_type
+    cfg,
+    model,
+    optimizer,
+    loss_fn,
+    train_dataset,
+    val_dataset,
+    train_loader=None,
+    val_loader=None,
+    metric_type="f1",
 ):
-    exp_str = get_model_str(cfg) + "-" + get_optimizer_str(cfg)
+    print("----------------- Training loop -----------------")
+    print("N samples: train: {} val: {}".format(len(train_dataset), len(val_dataset)))
+    print("N dataloader: train: {} val: {}".format(len(train_loader), len(val_loader)))
+    print("Resample train: {}".format(cfg.resample))
+    print(
+        "Subsample: train: {}, val: {}".format(cfg.subsample.train, cfg.subsample.val)
+    )
+
+    exp_str = get_model_str(cfg.model)
+    exp_str += get_optimizer_str(cfg.optimizer)
+    exp_str += get_exp_str(cfg)
     exp_path = path.checkpoint / "tsp" / cfg.prob.size / exp_str
     exp_path.mkdir(exist_ok=True, parents=True)
-    print("Saving experiment results to :", str(exp_path))
 
-    # Scheduler: Reduce learning rate on plateau (when validation metric stops improving)
-    # scheduler = ReduceLROnPlateau(optimizer, mode='max', patience=patience, factor=factor)
     max_steps = (len(train_dataset) // cfg.batch_size) * cfg.epochs
-    # warmup_steps = int((warmup_steps_percent / 100) * max_steps)
-    # print('Training epochs: {}, max steps: {}, warm-up steps: {}'.format(epochs, max_steps, warmup_steps))
+    warmup_steps = int((cfg.optimizer.warmup / 100) * max_steps)
+    print(
+        "Training epochs: {}, max steps: {}, warm-up steps: {}".format(
+            cfg.epochs, max_steps, warmup_steps
+        )
+    )
 
     times = {"train": 0}
-    train_results, val_results = [], []
+    train_results, val_results, lrs = [], [], []
     global_step, val_metric, best_epoch, best_step = 0, 0, -1, -1
     best_metric = initialize_eval_metric(metric_type)
-    val_node_dataset = val_dataset.get_epoch_node_dataset()
-    val_dataloader = DataLoader(
-        val_node_dataset, batch_size=cfg.batch_size, shuffle=True
-    )
+
     tick = time.time()
     for ep in range(cfg.epochs):
-        train_epoch_node_dataset = train_dataset.get_epoch_node_dataset()
-        print("Train dataset: ", len(train_epoch_node_dataset))
-        train_dataloader = DataLoader(
-            train_epoch_node_dataset,
-            batch_size=cfg.batch_size,
-            shuffle=True,
-            drop_last=True,
-        )
-        print("Train dataloader: ", len(train_dataloader))
-        for i, batch in enumerate(train_dataloader):
+        for i, batch in enumerate(train_loader):
             model.train()
-            global_step += 1
-            # adjust_learning_rate(global_step, optimizer, scheduler, val_metric, warmup_steps)
-            coords, dists, lids, states, lw, sw, labels = flatten_batch(
-                batch, train_dataset
+            lr = adjust_learning_rate(
+                cfg.optimizer, global_step, optimizer, warmup_steps, max_steps
             )
+
+            batch = flatten_batch(batch, train_dataset)
+            coords, dists, lids, states, lw, sw, labels = batch
             logits = model(coords, dists, lids, states)
             loss = loss_fn(logits, labels, reduction="none")
             if cfg.weighted_loss:
@@ -698,25 +773,23 @@ def training_loop(
                 torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
-            if (global_step + 1) % cfg.eval_every == 0:
-                train_result = test(
-                    cfg, model, train_dataset, train_dataloader, loss_fn
-                )
-                train_result.update({"epoch": ep, "global_step": global_step})
+            global_step += 1
+            if global_step % cfg.eval_every == 0:
+                train_result = test(cfg, model, train_dataset, train_loader, loss_fn)
+                train_result.update({"epoch": ep, "global_step": global_step, "lr": lr})
                 train_results.append(train_result)
                 print_eval_result(
                     "Train", ep, cfg.epochs, global_step, max_steps, train_result
                 )
 
-                val_result = test(cfg, model, val_dataset, val_dataloader, loss_fn)
-                val_metric = val_result[metric_type]
-                val_result.update({"epoch": ep, "global_step": global_step})
+                val_result = test(cfg, model, val_dataset, val_loader, loss_fn)
+                val_result.update({"epoch": ep, "global_step": global_step, "lr": lr})
                 val_results.append(val_result)
                 print_eval_result(
                     "Val", ep, cfg.epochs, global_step, max_steps, val_result
                 )
 
-                save_path = exp_path / f"model_{ep}_{global_step}.pt"
+                save_path = exp_path / f"ckpt_{ep}_{global_step}.pt"
                 save_model(save_path, model, optimizer)
                 save_path = open(str(exp_path / f"result_{ep}_{global_step}.pkl"), "wb")
                 save_result(save_path, ep, global_step, train_result, val_result)
@@ -730,7 +803,7 @@ def training_loop(
                             "model_state_dict": model.state_dict(),
                             "optimizer_state_dict": optimizer.state_dict(),
                         },
-                        f"{exp_path}/best_model.pt",
+                        f"{exp_path}/best_ckpt.pt",
                     )
 
                 print(
@@ -738,16 +811,28 @@ def training_loop(
                         best_epoch, best_step, metric_type, best_metric
                     )
                 )
-    times["train"] = time.time() - tick
-    print("Wallclock time: ", times["train"] / 3600)
+
+        # Resample training dataset by modifying the negative samples
+        if cfg.resample and cfg.subsample.train > 0:
+            print("Resampling train dataset...")
+            train_loader = get_dataloader(
+                train_dataset, cfg.batch_size, shuffle=True, drop_last=True
+            )
+            print("N dataloader: train: {}".format(len(train_loader)))
+
+    times["train"] = time.time() - tick / 3600
+    print("Wallclock time: ", times["train"])
     pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
+    OmegaConf.save(cfg, "config.yaml")
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
 def main(cfg):
-    print(cfg)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Training on :", device)
+    if cfg.optimizer.decay_lr:
+        cfg.optimizer.min_lr = cfg.optimizer.lr / 10
+    print(cfg)
 
     # Construct dataset
     train_dataset = TSPNodeDataset(
@@ -756,25 +841,23 @@ def main(cfg):
         "train",
         device,
         resample=cfg.resample,
-        subsample=cfg.subsample,
+        subsample=cfg.subsample.train,
     )
-    print(
-        "Train dataset: ",
-        len(train_dataset),
-        "Resample: ",
-        cfg.resample,
-        "Subsample: ",
-        cfg.subsample,
+    train_loader = get_dataloader(
+        train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
     )
+
     val_dataset = TSPNodeDataset(
         cfg.prob.n_objs,
         cfg.prob.n_vars,
         "val",
         device,
         resample=False,
-        subsample=0,
+        subsample=cfg.subsample.val,
     )
-    print("Val dataset: ", len(val_dataset))
+    val_loader = get_dataloader(
+        val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False
+    )
 
     model = ParetoNodePredictor(
         d_emb=cfg.model.d_emb,
@@ -787,14 +870,19 @@ def main(cfg):
         dropout_mlp=cfg.model.dropout_mlp,
         h2i_ratio=cfg.model.h2i_ratio,
     ).to(device)
-    optimizer_cls = getattr(torch.optim, cfg.optimizer)
-    opt = optimizer_cls(
-        model.parameters(), lr=cfg.max_lr, weight_decay=cfg.weight_decay
-    )
-
+    optimizer = model.configure_optimizer(cfg.optimizer)
     loss_fn = F.cross_entropy
+
     training_loop(
-        cfg, model, opt, loss_fn, train_dataset, val_dataset, metric_type="f1"
+        cfg,
+        model,
+        optimizer,
+        loss_fn,
+        train_dataset,
+        val_dataset,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        metric_type="f1",
     )
 
 

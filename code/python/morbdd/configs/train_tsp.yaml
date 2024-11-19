@@ -6,17 +6,16 @@ defaults:
   - override hydra/job_logging: disabled
 
 # optimizer
-optimizer: Adam
-initial_lr: 1e-5
-max_lr: 1e-3
-weight_decay: 0
-## Linear warm-up
-#warmup_steps_percent = 5
-## LR Scheduler
-#factor = 0.9
-#patience = 10
-
-
+optimizer:
+  type: Adam
+  lr: 1e-3
+  decay_lr: false
+  # min_lr is lr/10
+  min_lr:
+  warmup: 0
+  wd: 0
+  beta1: 0.9
+  beta2: 0.999
 
 batch_size: 512
 epochs: 10
@@ -24,10 +23,13 @@ grad_clip: 0.0
 eval_every: 150
 weighted_loss: false
 
+# Resample negative class for each epoch
 resample: False
 # 0: Do not subsample
-# Positive constant
-subsample: 1
+# k: Samples k negative data points for one positive data point
+subsample:
+  train: 1
+  val: 1
 
 hydra:
   output_subdir: null

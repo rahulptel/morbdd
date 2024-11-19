@@ -51,47 +51,56 @@ def get_instance_data(size, split, pid, seed=7):
 
 
 def get_model_str(cfg):
-    model_str = f"{cfg.model.type}-v{cfg.model.version}-"
-    if cfg.model.d_emb != 32:
-        model_str += f"-emb-{cfg.model.d_emb}"
-    if cfg.model.n_layers != 2:
-        model_str += f"-l-{cfg.model.n_layers}"
-    if cfg.model.n_heads != 8:
-        model_str += f"-h-{cfg.model.n_heads}"
-    if cfg.model.dropout_token != 0.0:
-        model_str += f"-dptk-{cfg.model.dropout_token}"
-    if cfg.model.dropout_attn != 0.0:
-        model_str += f"-dpa-{cfg.model.dropout_attn}"
-    if cfg.model.dropout_proj != 0.0:
-        model_str += f"-dpp-{cfg.model.dropout_proj}"
-    if cfg.model.dropout_mlp != 0.0:
-        model_str += f"-dpm-{cfg.model.dropout_mlp}"
-    if cfg.model.bias_mha:
-        model_str += f"-ba-{cfg.model.bias_mha}"
-    if cfg.model.bias_mha:
-        model_str += f"-bm-{cfg.model.bias_mlp}"
-    if cfg.model.h2i_ratio != 2:
-        model_str += f"-h2i-{cfg.model.h2i_ratio}"
+    model_str = f"{cfg.type}-v{cfg.version}-"
+    if cfg.d_emb != 32:
+        model_str += f"-emb-{cfg.d_emb}"
+    if cfg.n_layers != 2:
+        model_str += f"-l-{cfg.n_layers}"
+    if cfg.n_heads != 8:
+        model_str += f"-h-{cfg.n_heads}"
+    if cfg.act != "relu":
+        model_str += f"-act-{cfg.act}"
+    if cfg.dropout_token != 0.0:
+        model_str += f"-dptk-{cfg.dropout_token}"
+    if cfg.dropout_attn != 0.0:
+        model_str += f"-dpa-{cfg.dropout_attn}"
+    if cfg.dropout_proj != 0.0:
+        model_str += f"-dpp-{cfg.dropout_proj}"
+    if cfg.dropout_mlp != 0.0:
+        model_str += f"-dpm-{cfg.dropout_mlp}"
+    if cfg.bias_mha:
+        model_str += f"-ba-{cfg.bias_mha}"
+    if cfg.bias_mha:
+        model_str += f"-bm-{cfg.bias_mlp}"
+    if cfg.h2i_ratio != 2:
+        model_str += f"-h2i-{cfg.h2i_ratio}"
 
     return model_str
 
 
 def get_optimizer_str(cfg):
-    opt_str = "opt"
-    opt_str += f"-{cfg.optimizer}"
-    # if cfg.weight_decay != 1e-3:
-    #     opt_str += f"-wd{cfg.weight_decay}"
-    # opt_str += f"-lr-{cfg.max_lr}-{cfg.warmup_steps}"
-    opt_str += f"-lr-{cfg.max_lr}"
-    # if cfg.decay is not None and cfg.decay != "Cosine":
-    #     opt_str += f"-{cfg.decay}"
-    # if cfg.batch_size != 512:
-    opt_str += f"-bs-{cfg.batch_size}"
-    if cfg.grad_clip != 1.0:
-        opt_str += f"-gcl-{cfg.grad_clip}"
-    opt_str += f"-rs-{cfg.resample}"
-    opt_str += f"-ss-{cfg.subsample}"
+    opt_str = f"opt-{cfg.type}-lr-{cfg.lr}"
+    if cfg.warmup > 0:
+        opt_str += f"-wrm-{cfg.warmup}"
+    if cfg.decay_lr:
+        opt_str += f"-dlr"
+    if cfg.wd > 0:
+        opt_str += f"-wd-{cfg.wd}"
+    if cfg.beta1 != 0.9:
+        opt_str += f"-b1-{cfg.beta1}"
+    if cfg.beta2 != 0.999:
+        opt_str += f"-b2-{cfg.beta2}"
+
     return opt_str
+
+
+def get_exp_str(cfg):
+    exp_str = f"bs-{cfg.batch_size}"
+    exp_str += f"-gcl-{cfg.grad_clip}"
+    exp_str += f"-rs-{str(cfg.resample)}"
+    exp_str += f"-sst-{str(cfg.subsample.train)}"
+    exp_str += f"-ssv-{str(cfg.subsample.val)}"
+    return exp_str
 
 
 def compute_stat_features(dists):
