@@ -213,39 +213,31 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
     https://arxiv.org/pdf/2108.03348
     """
 
-    def __init__(
-        self,
-        d_emb=64,
-        n_heads=8,
-        bias_mha=False,
-        is_last_block=False,
-        dropout_attn=0.1,
-        dropout_proj=0.1,
-    ):
+    def __init__(self, cfg, is_last_block=False):
         super(MultiHeadSelfAttentionWithEdge, self).__init__()
-        assert d_emb % n_heads == 0
+        assert cfg.d_emb % cfg.n_heads == 0
 
-        self.d_emb = d_emb
-        self.d_k = d_emb // n_heads
-        self.n_heads = n_heads
+        self.d_emb = cfg.d_emb
+        self.d_k = cfg.d_emb // cfg.n_heads
+        self.n_heads = cfg.n_heads
         self.is_last_block = is_last_block
-        self.drop_attn = nn.Dropout(dropout_attn)
-        self.drop_proj_n = nn.Dropout(dropout_proj)
+        self.drop_attn = nn.Dropout(cfg.dropout_attn)
+        self.drop_proj_n = nn.Dropout(cfg.dropout_proj)
 
         # Node Q, K, V params
-        self.W_qkv = nn.Linear(d_emb, 3 * d_emb, bias=bias_mha)
-        self.O_n = nn.Linear(n_heads * self.d_k, d_emb, bias=bias_mha)
+        self.W_qkv = nn.Linear(cfg.d_emb, 3 * cfg.d_emb, bias=cfg.bias_mha)
+        self.O_n = nn.Linear(cfg.n_heads * self.d_k, cfg.d_emb, bias=cfg.bias_mha)
 
         # Edge bias and gating parameters
-        self.W_g = nn.Linear(d_emb, n_heads, bias=bias_mha)
-        self.W_e = nn.Linear(d_emb, n_heads, bias=bias_mha)
+        self.W_g = nn.Linear(cfg.d_emb, cfg.n_heads, bias=cfg.bias_mha)
+        self.W_e = nn.Linear(cfg.d_emb, cfg.n_heads, bias=cfg.bias_mha)
 
         # Output mapping params
         if is_last_block:
             self.O_e = None
         else:
-            self.O_e = nn.Linear(n_heads, d_emb, bias=bias_mha)
-            self.drop_proj_e = nn.Dropout(dropout_proj)
+            self.O_e = nn.Linear(cfg.n_heads, cfg.d_emb, bias=cfg.bias_mha)
+            self.drop_proj_e = nn.Dropout(cfg.dropout_proj)
 
     def forward(self, n, e):
         """
@@ -297,50 +289,37 @@ class MultiHeadSelfAttentionWithEdge(nn.Module):
 
 
 class GTEncoderLayer(nn.Module):
-    def __init__(
-        self,
-        d_emb=32,
-        n_heads=8,
-        bias_mha=False,
-        dropout_attn=0.0,
-        dropout_proj=0.0,
-        bias_mlp=False,
-        dropout_mlp=0.0,
-        h2i_ratio=2,
-        is_last_block=False,
-    ):
+    def __init__(self, cfg, is_last_block=False):
         super(GTEncoderLayer, self).__init__()
         self.is_last_block = is_last_block
         # MHA with edge information
-        self.ln_n1 = nn.LayerNorm(d_emb)
-        self.ln_e1 = nn.LayerNorm(d_emb)
-        self.mha = MultiHeadSelfAttentionWithEdge(
-            d_emb=d_emb,
-            n_heads=n_heads,
-            bias_mha=bias_mha,
-            is_last_block=is_last_block,
-            dropout_attn=dropout_attn,
-            dropout_proj=dropout_proj,
-        )
+        self.ln_n1 = nn.LayerNorm(cfg.d_emb)
+        self.ln_e1 = nn.LayerNorm(cfg.d_emb)
+        self.mha = MultiHeadSelfAttentionWithEdge(cfg, is_last_block=self.is_last_block)
         # FF
-        self.ln_n2 = nn.LayerNorm(d_emb)
+        self.ln_n2 = nn.LayerNorm(cfg.d_emb)
         self.mlp_node = MLP(
-            d_emb, h2i_ratio * d_emb, d_emb, bias=bias_mlp, normalize=False, dropout=0.0
+            cfg.d_emb,
+            cfg.h2i_ratio * cfg.d_emb,
+            cfg.d_emb,
+            bias=cfg.bias_mlp,
+            normalize=False,
+            dropout=0.0,
         )
-        self.dropout_mlp_n = nn.Dropout(dropout_mlp)
+        self.dropout_mlp_n = nn.Dropout(cfg.dropout_mlp)
 
         if not is_last_block:
             # self.dropout_mha_e = nn.Dropout(dropout_mha)
-            self.ln_e2 = nn.LayerNorm(d_emb)
+            self.ln_e2 = nn.LayerNorm(cfg.d_emb)
             self.mlp_edge = MLP(
-                d_emb,
-                h2i_ratio * d_emb,
-                d_emb,
-                bias=bias_mlp,
+                cfg.d_emb,
+                cfg.h2i_ratio * cfg.d_emb,
+                cfg.d_emb,
+                bias=cfg.bias_mlp,
                 normalize=False,
                 dropout=0.0,
             )
-            self.dropout_mlp_e = nn.Dropout(dropout_mlp)
+            self.dropout_mlp_e = nn.Dropout(cfg.dropout_mlp)
 
     def forward(self, n, e):
         n_norm = self.ln_n1(n)
@@ -357,35 +336,12 @@ class GTEncoderLayer(nn.Module):
 
 
 class GTEncoder(nn.Module):
-    def __init__(
-        self,
-        d_emb=32,
-        n_layers=2,
-        n_heads=8,
-        bias_mha=False,
-        dropout_attn=0.0,
-        dropout_proj=0.0,
-        bias_mlp=False,
-        dropout_mlp=0.0,
-        h2i_ratio=2,
-    ):
+    def __init__(self, cfg):
         super(GTEncoder, self).__init__()
-        self.encoder_blocks = nn.ModuleList(
-            [
-                GTEncoderLayer(
-                    d_emb=d_emb,
-                    n_heads=n_heads,
-                    bias_mha=bias_mha,
-                    dropout_attn=dropout_attn,
-                    dropout_proj=dropout_proj,
-                    bias_mlp=bias_mlp,
-                    dropout_mlp=dropout_mlp,
-                    h2i_ratio=h2i_ratio,
-                    is_last_block=i == n_layers - 1,
-                )
-                for i in range(n_layers)
-            ]
-        )
+        self.encoder_blocks = nn.ModuleList()
+        for i in range(cfg.n_layers):
+            is_last_block = i == cfg.n_layers - 1
+            self.encoder_blocks.append(GTEncoderLayer(cfg, is_last_block=is_last_block))
 
     def forward(self, n, e):
         for block in self.encoder_blocks:
@@ -399,13 +355,13 @@ class TokenEmbedGraph(nn.Module):
     DeepSet-based node and edge embeddings
     """
 
-    def __init__(self, n_node_feat=7, d_emb=32, act="relu"):
+    def __init__(self, cfg, n_node_feat=7):
         super(TokenEmbedGraph, self).__init__()
-        self.linear1 = nn.Linear(n_node_feat, 2 * d_emb)
-        self.linear2 = nn.Linear(2 * d_emb, d_emb)
-        self.linear3 = nn.Linear(1, d_emb)
-        self.linear4 = nn.Linear(d_emb, d_emb)
-        self.act = nn.ReLU() if act == "relu" else nn.GELU()
+        self.linear1 = nn.Linear(n_node_feat, 2 * cfg.d_emb)
+        self.linear2 = nn.Linear(2 * cfg.d_emb, cfg.d_emb)
+        self.linear3 = nn.Linear(1, cfg.d_emb)
+        self.linear4 = nn.Linear(cfg.d_emb, cfg.d_emb)
+        self.act = nn.ReLU() if cfg.act == "relu" else nn.GELU()
 
     def forward(self, n, e):
         n = self.act(self.linear1(n))  # B x n_objs x n_vars x (2 * d_emb)
@@ -428,59 +384,36 @@ class ParetoNodePredictor(nn.Module):
     N_LAYER_INDEX = 1
     N_CLASSES = 2
 
-    def __init__(
-        self,
-        d_emb=32,
-        n_layers=2,
-        n_heads=8,
-        act="relu",
-        bias_mha=False,
-        dropout_attn=0.0,
-        dropout_proj=0.0,
-        bias_mlp=False,
-        dropout_mlp=0.0,
-        h2i_ratio=2,
-        concat_emb=False,
-    ):
+    def __init__(self, cfg):
         super(ParetoNodePredictor, self).__init__()
-        self.concat_emb = concat_emb
-        self.act = nn.ReLU() if act == "relu" else nn.GELU()
-        self.token_encoder = TokenEmbedGraph(d_emb=d_emb, act=act)
-        self.graph_encoder = GTEncoder(
-            d_emb=d_emb,
-            n_layers=n_layers,
-            n_heads=n_heads,
-            bias_mha=bias_mha,
-            dropout_attn=dropout_attn,
-            dropout_proj=dropout_proj,
-            bias_mlp=bias_mlp,
-            dropout_mlp=dropout_mlp,
-            h2i_ratio=h2i_ratio,
-        )
-        self.visit_encoder = nn.Embedding(self.NODE_VISIT_TYPES, d_emb)
+        self.concat_emb = cfg.concat_emb
+        self.act = nn.ReLU() if cfg.act == "relu" else nn.GELU()
+        self.token_encoder = TokenEmbedGraph(cfg)
+        self.graph_encoder = GTEncoder(cfg)
+        self.visit_encoder = nn.Embedding(self.NODE_VISIT_TYPES, cfg.d_emb)
         self.node_visit_encoder1 = nn.Sequential(
-            nn.Linear(d_emb, h2i_ratio * d_emb),
+            nn.Linear(cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
             self.act,
         )
         self.node_visit_encoder2 = nn.Sequential(
-            nn.Linear(h2i_ratio * d_emb, d_emb),
+            nn.Linear(cfg.h2i_ratio * cfg.d_emb, cfg.d_emb),
             self.act,
         )
         self.layer_encoder = nn.Sequential(
-            nn.Linear(self.N_LAYER_INDEX, d_emb),
+            nn.Linear(self.N_LAYER_INDEX, cfg.d_emb),
             self.act,
         )
         if self.concat_emb:
             self.pareto_predictor = nn.Sequential(
-                nn.Linear(3 * d_emb, h2i_ratio * d_emb),
+                nn.Linear(3 * cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
                 self.act,
-                nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
+                nn.Linear(cfg.h2i_ratio * cfg.d_emb, self.N_CLASSES),
             )
         else:
             self.pareto_predictor = nn.Sequential(
-                nn.Linear(d_emb, h2i_ratio * d_emb),
+                nn.Linear(cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
                 self.act,
-                nn.Linear(h2i_ratio * d_emb, self.N_CLASSES),
+                nn.Linear(cfg.h2i_ratio * cfg.d_emb, self.N_CLASSES),
             )
 
     def forward(self, n, e, l, s):
@@ -508,33 +441,41 @@ class ParetoNodePredictor(nn.Module):
             return self.pareto_predictor(node_visit + customer_enc + l_enc)
 
     def configure_optimizer(self, cfg):
-        # Ref: https://github.com/karpathy/nanoGPT/blob/master/model.py
-        # start with all of the candidate parameters
-        param_dict = {pn: p for pn, p in self.named_parameters()}
-        # filter out those that do not require grad
-        param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
-        # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
-        # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
-        optim_groups = [
-            {"params": decay_params, "weight_decay": cfg.wd},
-            {"params": nodecay_params, "weight_decay": 0.0},
-        ]
-        num_decay_params = sum(p.numel() for p in decay_params)
-        num_nodecay_params = sum(p.numel() for p in nodecay_params)
-        print(
-            f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
-        )
-        print(
-            f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
-        )
-        optimizer_cls = getattr(torch.optim, cfg.type)
-        optimizer = optimizer_cls(
-            optim_groups,
-            lr=cfg.lr,
-            betas=(cfg.beta1, cfg.beta2),
-        )
+        if cfg.wd > 0:
+            # Ref: https://github.com/karpathy/nanoGPT/blob/master/model.py
+            # start with all of the candidate parameters
+            param_dict = {pn: p for pn, p in self.named_parameters()}
+            # filter out those that do not require grad
+            param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+            # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+            # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+            optim_groups = [
+                {"params": decay_params, "weight_decay": cfg.wd},
+                {"params": nodecay_params, "weight_decay": 0.0},
+            ]
+            num_decay_params = sum(p.numel() for p in decay_params)
+            num_nodecay_params = sum(p.numel() for p in nodecay_params)
+            print(
+                f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+            )
+            print(
+                f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+            )
+            optimizer_cls = getattr(torch.optim, cfg.type)
+            optimizer = optimizer_cls(
+                optim_groups,
+                lr=cfg.lr,
+                betas=(cfg.beta1, cfg.beta2),
+            )
+        else:
+            optimizer_cls = getattr(torch.optim, cfg.type)
+            optimizer = optimizer_cls(
+                self.parameters(),
+                lr=cfg.lr,
+                betas=(cfg.beta1, cfg.beta2),
+            )
         print(f"using optimizer: {cfg.type}")
         print()
 
@@ -551,7 +492,7 @@ def save_model(save_path, model, optimizer):
     )
 
 
-def save_result(save_path, ep, global_step, train_result, val_result):
+def save_result(save_path, ep, global_step, train_result=None, val_result=None):
     pkl.dump(
         {
             "epoch": ep,
@@ -559,7 +500,7 @@ def save_result(save_path, ep, global_step, train_result, val_result):
             "train_result": train_result,
             "val_result": val_result,
         },
-        save_path,
+        open(str(save_path), "wb"),
     )
 
 
@@ -737,6 +678,7 @@ def training_loop(
     exp_str += "-" + get_exp_str(cfg)
     exp_path = path.checkpoint / "tsp" / cfg.prob.size / exp_str
     exp_path.mkdir(exist_ok=True, parents=True)
+    OmegaConf.save(cfg, exp_path / "config.yaml")
 
     max_steps = (len(train_dataset) // cfg.batch_size) * cfg.epochs
     warmup_steps = int((cfg.optimizer.warmup / 100) * max_steps)
@@ -789,26 +731,34 @@ def training_loop(
                     "Val", ep, cfg.epochs, global_step, max_steps, val_result
                 )
 
-                save_path = exp_path / f"ckpt_{ep}_{global_step}.pt"
-                save_model(save_path, model, optimizer)
-                save_path = open(str(exp_path / f"result_{ep}_{global_step}.pkl"), "wb")
-                save_result(save_path, ep, global_step, train_result, val_result)
-
+                save_model(exp_path / f"ckpt_{ep}_{global_step}.pt", model, optimizer)
+                save_result(
+                    exp_path / f"result_{ep}_{global_step}.pkl",
+                    ep,
+                    global_step,
+                    train_result,
+                    val_result,
+                )
+                save_result(exp_path / f"last.pkl", ep, global_step)
+                prefix = ""
                 if is_better(best_metric, val_result[metric_type], metric_type):
+                    prefix = "***"
                     best_metric = val_result[metric_type]
                     best_epoch = ep
                     best_step = global_step
-                    torch.save(
-                        {
-                            "model_state_dict": model.state_dict(),
-                            "optimizer_state_dict": optimizer.state_dict(),
-                        },
-                        f"{exp_path}/best_ckpt.pt",
+
+                    save_model(exp_path / f"best_ckpt.pt", model, optimizer)
+                    save_result(
+                        exp_path / f"best_result.pkl",
+                        ep,
+                        global_step,
+                        train_result,
+                        val_result,
                     )
 
                 print(
-                    "\tBest epoch:step={}:{}, Best {}: {}".format(
-                        best_epoch, best_step, metric_type, best_metric
+                    "\t{}Best epoch:step={}:{}, Best {}: {}".format(
+                        prefix, best_epoch, best_step, metric_type, best_metric
                     )
                 )
 
@@ -823,7 +773,6 @@ def training_loop(
     times["train"] = (time.time() - tick) / 3600
     print("Wallclock time: ", times["train"])
     pkl.dump(times, open(str(exp_path / "log.pkl"), "wb"))
-    OmegaConf.save(cfg, exp_path / "config.yaml")
 
 
 @hydra.main(config_path="./configs", config_name="train_tsp.yaml", version_base="1.2")
@@ -859,17 +808,7 @@ def main(cfg):
         val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False
     )
 
-    model = ParetoNodePredictor(
-        d_emb=cfg.model.d_emb,
-        n_layers=cfg.model.n_layers,
-        n_heads=cfg.model.n_heads,
-        bias_mha=cfg.model.bias_mha,
-        dropout_attn=cfg.model.dropout_attn,
-        dropout_proj=cfg.model.dropout_proj,
-        bias_mlp=cfg.model.bias_mlp,
-        dropout_mlp=cfg.model.dropout_mlp,
-        h2i_ratio=cfg.model.h2i_ratio,
-    ).to(device)
+    model = ParetoNodePredictor(cfg.model).to(device)
     optimizer = model.configure_optimizer(cfg.optimizer)
     loss_fn = F.cross_entropy
 
