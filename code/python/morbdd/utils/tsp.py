@@ -99,7 +99,7 @@ def get_optimizer_str(cfg):
 def get_exp_str(cfg):
     exp_str = f"bs-{cfg.batch_size}"
     if cfg.weighted_loss:
-        exp_str = f"-wl-"
+        exp_str += f"-wl-"
     exp_str += f"-gcl-{cfg.grad_clip}"
     exp_str += f"-rs-{str(cfg.resample)}"
     exp_str += f"-sst-{str(cfg.subsample.train)}"
