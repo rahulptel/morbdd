@@ -122,12 +122,12 @@ def build_dd(env, max_width, inst, model):
         layer = env.get_layer(lid)
         print("Size: ", len(layer))
         if len(layer) > max_width:
-            # Sort nodes in ascending order of scores and remove the last ones
+            # Sort nodes in descending order of scores and remove the last ones
             scores = get_node_scores(
                 lid - 1, node_emb, model, layer, n_vars=node_emb.shape[0]
             )
             idx_scores = [(i, s) for i, s in enumerate(scores)]
-            idx_scores.sort(key=lambda x: x[1])
+            idx_scores.sort(key=lambda x: x[1], reverse=True)
             nodes_to_remove = [i for i, _ in idx_scores[max_width:]]
             # nodes_to_remove.sort()
             # print(nodes_to_remove)
@@ -196,23 +196,16 @@ def main(cfg):
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     print("Deploying on :", device)
-    model = ParetoNodePredictor(
-        d_emb=cfg.model.d_emb,
-        n_layers=cfg.model.n_layers,
-        n_heads=cfg.model.n_heads,
-        bias_mha=cfg.model.bias_mha,
-        dropout_attn=cfg.model.dropout_attn,
-        dropout_proj=cfg.model.dropout_proj,
-        bias_mlp=cfg.model.bias_mlp,
-        dropout_mlp=cfg.model.dropout_mlp,
-        h2i_ratio=cfg.model.h2i_ratio,
-    ).to(device)
+    model = ParetoNodePredictor(cfg.model).to(device)
     model.eval()
-    model_data = torch.load(
+    print(
+        f"Checkpoint path: {path.checkpoint}/{cfg.prob.prefix}/{cfg.prob.size}/{cfg.model.type}_best_model.pt"
+    )
+    ckpt = torch.load(
         f"{path.checkpoint}/{cfg.prob.prefix}/{cfg.prob.size}/{cfg.model.type}_best_model.pt",
         map_location=device,
     )
-    model.load_state_dict(model_data["model_state_dict"])
+    model.load_state_dict(ckpt["model_state_dict"])
 
     metric_calculator = MetricCalculator(cfg.prob.n_vars)
     for pid in range(cfg.from_pid, cfg.to_pid):
@@ -225,10 +218,11 @@ def main(cfg):
         sol_path = (
             path.sol / cfg.prob.name / cfg.prob.size / cfg.split / f"sol_{pid}.npz"
         )
-        if sol_path.exists():
-            true_pf = np.load(sol_path)
-            true_pf = true_pf["z"]
+        if not sol_path.exists():
+            continue
 
+        true_pf = np.load(sol_path)
+        true_pf = true_pf["z"]
         # Build dd layer-by-layer with pruning using node information
         result = run_pipeline(
             cfg,
@@ -240,7 +234,6 @@ def main(cfg):
             exact_dd=exact_dd,
             true_pf=true_pf,
         )
-
         save_result(cfg, result, 7, pid)
 
 
