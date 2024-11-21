@@ -1,6 +1,8 @@
+import json
 import multiprocessing as mp
 import random
 import signal
+import time
 
 import numpy as np
 import pandas as pd
@@ -109,27 +111,29 @@ class TSPDataManager(DataManager):
 
         return pareto_state_scores
 
-    def _tag_dd_nodes(self, pid, dd, pareto_state_scores, save_all_neg=False):
+    def _tag_dd_nodes(self, pid, dd, pareto_state_scores):
         assert len(pareto_state_scores) == len(dd)
 
+        tick = time.time()
         result = []
         for l in range(len(dd)):
             pareto_states, pareto_scores = pareto_state_scores[l]
             pos, neg = [], []
-            for nid, n in enumerate(dd[l]):
-                is_pos = False
-                for pareto_state, score in zip(pareto_states, pareto_scores):
+            for pareto_state, score in zip(pareto_states, pareto_scores):
+                for nid, n in enumerate(dd[l]):
                     if np.array_equal(pareto_state, n):
                         pos.append([pid, l, nid, float(score), 1])
-                        is_pos = True
                         break
 
-                if not is_pos:
-                    neg.append([pid, l, nid, 0, 0])
+            all_ids = [i for i in range(len(dd[l]))]
+            pos_ids = [p[2] for p in pos]
+            neg_ids = set(all_ids).difference(set(pos_ids))
+            for nid in neg_ids:
+                neg.append([pid, l, nid, 0, 0])
 
             result.extend(pos)
             random.shuffle(neg)
-            neg_upto = len(neg) if save_all_neg else min(len(neg), len(pos))
+            neg_upto = min(len(neg), 4 * len(pos))
             if neg_upto > 0:
                 result.extend(neg[:neg_upto])
 
@@ -152,13 +156,18 @@ class TSPDataManager(DataManager):
                 data["dists"].astype(int).tolist(),
             )
             env.initialize_dd_constructor()
+            tick = time.time()
             env.generate_dd()
+            time_compile = time.time() - tick
             exact_dd = env.get_dd()
 
             print(f"{rank}/2/10: Computing Pareto Frontier...")
+            time_pareto = 1800
             try:
                 signal.alarm(self.cfg.prob.time_limit)
+                tick = time.time()
                 env.compute_pareto_frontier()
+                time_pareto = time.time() - tick
             except TimeoutError:
                 is_pf_computed = False
                 print(
@@ -170,28 +179,16 @@ class TSPDataManager(DataManager):
             signal.alarm(0)
             if not is_pf_computed:
                 continue
-            # time_pareto = env.get_time(CONST.TIME_PARETO)
 
             print(f"{rank}/8/10: Fetching Pareto Frontier...")
             frontier = env.get_frontier()
             print(f"{pid}: |Z| = {len(frontier['z'])}")
 
-            print(f"{rank}/9/10: Marking Pareto nodes...")
-            pareto_state_scores = self._get_pareto_state_scores(frontier["x"])
-            save_all_neg = True if self.cfg.split != "train" else False
-            dataset = self._tag_dd_nodes(
-                pid, exact_dd, pareto_state_scores, save_all_neg=save_all_neg
-            )
-
             print(f"{rank}/10/10: Saving data...")
             # Save dd, solution and stats
             self._save_dd(pid, exact_dd)
-            self._save_states_dataset(pid, dataset)
             self._save_solution(pid, frontier)
-            self._save_dm_stats(pid, frontier, env, -1, 0, 0)
-
-    def _get_bdd_node_dataset(self, *args):
-        pass
+            self._save_dm_stats(pid, frontier, env, -1, time_compile, time_pareto)
 
     def generate_dd_dataset(self):
         if self.cfg.n_processes == 1:
@@ -208,5 +205,64 @@ class TSPDataManager(DataManager):
             for r in results:
                 r.get()
 
+    def _get_bdd_node_dataset(self, pid, inst_data, dd, dataset_path):
+        sol_path = (
+            path.sol
+            / self.cfg.prob.name
+            / self.cfg.prob.sizes
+            / self.cfg.splits
+            / f"sol_{pid}.npz"
+        )
+        if sol_path.exists():
+            frontier = np.load(sol_path)
+            pareto_state_scores = self._get_pareto_state_scores(frontier["x"])
+            dataset = self._tag_dd_nodes(pid, dd, pareto_state_scores)
+            dataset = np.array(dataset)
+            print(pid, dataset.shape)
+            self._save_states_dataset(pid, dataset)
+
+    def _generate_dataset_worker(self, rank, dataset_path):
+        dd_path = path.bdd / f"{self.cfg.prob.name}/{self.cfg.prob.size}/tsp_dd.json"
+
+        for pid in range(
+            self.cfg.from_pid + rank, self.cfg.to_pid, self.cfg.n_processes
+        ):
+            print("Processing pid {}".format(pid))
+            # Read instance data
+            inst_data = self._get_instance_data(pid)
+            dd = json.load(open(dd_path, "r"))
+            # Get node data
+            self._get_bdd_node_dataset(pid, inst_data, dd, dataset_path)
+
     def generate_dataset(self):
-        pass
+        dataset_path = (
+            path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        )
+        dataset_path.mkdir(exist_ok=True, parents=True)
+
+        if self.cfg.n_processes == 1:
+            self._generate_dataset_worker(0, dataset_path)
+        else:
+            pool = mp.Pool(processes=self.cfg.n_processes)
+            results = []
+
+            for rank in range(self.cfg.n_processes):
+                results.append(
+                    pool.apply_async(
+                        self._generate_dataset_worker, args=(rank, dataset_path)
+                    )
+                )
+
+            for r in results:
+                r.get()
+
+        if self.cfg.concat:
+            print("Concatenating files...")
+            M = None
+            for p in dataset_path.rglob("*.npz"):
+                mat = np.load(p)
+                M = np.concatenate((M, mat), axis=0) if M is not None else mat
+            print(f"Dataset size (all instances concat): {M.shape}")
+
+            prefix = dataset_path.stem
+            np.save(dataset_path.parent / f"{prefix}-{self.cfg.split}.npz", M)
