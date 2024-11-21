@@ -40,14 +40,16 @@ class TSPNodeScorer:
             self.edge_rank = np.mean(self.edge_rank, axis=0)
         elif self.edge_agg == "max":
             self.edge_rank = np.max(self.edge_rank, axis=0)
+        elif self.edge_agg == "min":
+            self.edge_rank = np.min(self.edge_rank, axis=0)
         else:
             raise ValueError("Method must be either 'mean' or 'max'")
 
     def score_nodes(self, layer):
         scores = []
-        for node in layer:
+        for nid, node in enumerate(layer):
             last_visit = node[-1]
-            to_visit = np.argwhere(np.array(node[:-1]) == 0)[0]
+            to_visit = [i for i, n in enumerate(node[:-1]) if n == 0]
             if len(to_visit):
                 if self.next_node == "min":
                     score = np.min([self.edge_rank[last_visit][tv] for tv in to_visit])
@@ -139,6 +141,7 @@ def build_dd(env, max_width, scorer):
         layer = env.get_layer(lid)
         print("Size: ", len(layer))
         if len(layer) > max_width:
+            print("\tRestricting")
             # Sort nodes in ascending order of scores and remove the last ones
             scores = scorer.score_nodes(layer)
             idx_scores = [(i, s) for i, s in enumerate(scores)]
@@ -147,7 +150,7 @@ def build_dd(env, max_width, scorer):
             # nodes_to_remove.sort()
             # print(nodes_to_remove)
             env.approximate_layer(lid, RESTRICT, nodes_to_remove)
-
+            print("\tSize: ", len(env.get_layer(lid)))
         lid += 1
         if is_done:
             break
