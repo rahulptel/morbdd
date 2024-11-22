@@ -1,6 +1,6 @@
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 
 root_path_dict = {
     "desktop": Path("/home/rahul/Documents/projects/MORBDD/resources"),
