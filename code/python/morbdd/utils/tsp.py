@@ -4,6 +4,7 @@ import zipfile
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset, TensorDataset
 
@@ -166,6 +167,28 @@ class TSPNodeDataset:
         return len(self.epoch_ids)
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, focal=True, gamma=2):
+        super(FocalLoss, self).__init__()
+        self.focal = focal
+        self.gamma = gamma
+
+    def forward(self, logits, targets, alpha=None):
+
+        probs = torch.sigmoid(logits)
+        pt = probs.gather(1, targets.view(-1, 1))
+        bce = F.cross_entropy(logits, targets, reduction="none")  # BCELoss
+        if self.focal:
+            loss = ((1 - pt) ** self.gamma) * bce  # Focal loss
+        else:
+            loss = bce
+
+        if alpha is not None:
+            loss *= alpha  # Class weighted focal loss
+
+        return loss.mean()
+
+
 class Result:
     def __init__(self):
         self.total_time = None
@@ -209,47 +232,47 @@ def get_instance_data(size, split, pid, seed=7):
 
 
 def get_model_str(cfg):
-    model_str = f"{cfg.type}-v{cfg.version}-"
+    model_str = [cfg.type, f"v{cfg.version}"]
     if cfg.d_emb != 32:
-        model_str += f"-emb-{cfg.d_emb}"
+        model_str.append(f"emb-{cfg.d_emb}")
     if cfg.n_layers != 2:
-        model_str += f"-l-{cfg.n_layers}"
+        model_str.append(f"l-{cfg.n_layers}")
     if cfg.n_heads != 8:
-        model_str += f"-h-{cfg.n_heads}"
+        model_str.append(f"h-{cfg.n_heads}")
     if cfg.act != "relu":
-        model_str += f"-act-{cfg.act}"
+        model_str.append(f"act-{cfg.act}")
     if cfg.concat_emb:
-        model_str += f"-cemb-"
+        model_str.append(f"cemb")
     if cfg.dropout_token != 0.0:
-        model_str += f"-dptk-{cfg.dropout_token}"
+        model_str.append(f"dptk-{cfg.dropout_token}")
     if cfg.dropout_attn != 0.0:
-        model_str += f"-dpa-{cfg.dropout_attn}"
+        model_str.append(f"dpa-{cfg.dropout_attn}")
     if cfg.dropout_proj != 0.0:
-        model_str += f"-dpp-{cfg.dropout_proj}"
+        model_str.append(f"dpp-{cfg.dropout_proj}")
     if cfg.dropout_mlp != 0.0:
-        model_str += f"-dpm-{cfg.dropout_mlp}"
+        model_str.append(f"dpm-{cfg.dropout_mlp}")
     if cfg.bias_mha:
-        model_str += f"-ba-{cfg.bias_mha}"
+        model_str.append(f"ba-{cfg.bias_mha}")
     if cfg.bias_mha:
-        model_str += f"-bm-{cfg.bias_mlp}"
+        model_str.append(f"bm-{cfg.bias_mlp}")
     if cfg.h2i_ratio != 2:
-        model_str += f"-h2i-{cfg.h2i_ratio}"
+        model_str.append(f"h2i-{cfg.h2i_ratio}")
 
     return model_str
 
 
 def get_optimizer_str(cfg):
-    opt_str = f"opt-{cfg.type}-lr-{cfg.lr}"
+    opt_str = [f"opt-{cfg.type}", f"lr-{cfg.lr}"]
     if cfg.warmup > 0:
-        opt_str += f"-wrm-{cfg.warmup}"
+        opt_str.append(f"wrm-{cfg.warmup}")
     if cfg.decay_lr:
-        opt_str += f"-dlr"
+        opt_str.append(f"dlr")
     if cfg.wd > 0:
-        opt_str += f"-wd-{cfg.wd}"
+        opt_str.append(f"wd-{cfg.wd}")
     if cfg.beta1 != 0.9:
-        opt_str += f"-b1-{cfg.beta1}"
+        opt_str.append(f"b1-{cfg.beta1}")
     if cfg.beta2 != 0.999:
-        opt_str += f"-b2-{cfg.beta2}"
+        opt_str.append(f"b2-{cfg.beta2}")
 
     return opt_str
 

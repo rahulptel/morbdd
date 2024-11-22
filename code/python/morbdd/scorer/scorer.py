@@ -3,4 +3,4 @@ class NodeScorer:
         self.cfg = cfg
 
     def get_score(self, *args):
-        pass
+        raise NotImplementedError
