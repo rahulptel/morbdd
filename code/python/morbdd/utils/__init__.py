@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import math
 import os
 import random
 import zipfile
@@ -17,8 +18,6 @@ from morbdd import ResourcePaths as path
 
 
 # import pygmo as pg
-
-
 class MetricCalculator:
     def __init__(self, n_objs, eps=0.1, delta=0.1):
         self.eps = eps
@@ -36,26 +35,33 @@ class MetricCalculator:
 
         if z.shape[0] == 0:
             print("True PF not available!")
-            return {'card': -1, 'precision': -1}
+            return {"card": -1, "precision": -1}
 
         if z_pred.shape[0] == 0:
             print("Predicted PF not available!")
-            return {'card': 0, 'precision': 0}
+            return {"card": 0, "precision": 0}
 
         # Defining a data type
         rows, cols = z.shape
-        data_type_z = {'names': ['f{}'.format(i) for i in range(cols)],
-                       'formats': cols * [z.dtype]}
+        data_type_z = {
+            "names": ["f{}".format(i) for i in range(cols)],
+            "formats": cols * [z.dtype],
+        }
 
         rows, cols = z_pred.shape
-        data_type_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
-                            'formats': cols * [z_pred.dtype]}
+        data_type_z_pred = {
+            "names": ["f{}".format(i) for i in range(cols)],
+            "formats": cols * [z_pred.dtype],
+        }
 
         # Finding intersection
         found_ndps = np.intersect1d(z.view(data_type_z), z_pred.view(data_type_z_pred))
 
-        return {'cardinality': found_ndps.shape[0] / z.shape[0], 'cardinality_raw': found_ndps.shape[0],
-                'precision': found_ndps.shape[0] / z_pred.shape[0]}
+        return {
+            "cardinality": found_ndps.shape[0] / z.shape[0],
+            "cardinality_raw": found_ndps.shape[0],
+            "precision": found_ndps.shape[0] / z_pred.shape[0],
+        }
 
     # def compute_approx_hv(self, seed, z_norm):
     #     hv_algo = pg.bf_fpras(eps=self.eps, delta=self.delta, seed=seed)
@@ -70,8 +76,10 @@ def zipdir(path, ziph):
     for root, dirs, files in os.walk(path):
         for file in files:
             # Create the relative path to maintain the folder structure
-            ziph.write(os.path.join(root, file),
-                       os.path.relpath(os.path.join(root, file), os.path.join(path, '..')))
+            ziph.write(
+                os.path.join(root, file),
+                os.path.relpath(os.path.join(root, file), os.path.join(path, "..")),
+            )
 
 
 def get_env(n_objs=3):
@@ -100,7 +108,9 @@ def get_dataset_prefix(with_parent=False, layer_weight=None, neg_to_pos_ratio=1.
 
 
 def get_dataset_path(cfg):
-    file_path = path.dataset / f"{cfg.prob.name}/{cfg.model.type}/{cfg.prob.size}/{cfg.split}"
+    file_path = (
+        path.dataset / f"{cfg.prob.name}/{cfg.model.type}/{cfg.prob.size}/{cfg.split}"
+    )
     prefix = get_dataset_prefix(cfg.with_parent, cfg.layer_weight, cfg.neg_to_pos_ratio)
     file_path /= prefix
 
@@ -150,57 +160,97 @@ class TrainingHelper:
 
     @staticmethod
     def compute_meta_stats(stats, prefix=""):
-        loss, tp, tn, fp, fn, n_pos, n_neg = (stats[prefix + "loss"], stats[prefix + "tp"], stats[prefix + "tn"],
-                                              stats[prefix + "fp"], stats[prefix + "fn"], stats[prefix + "n_pos"],
-                                              stats[prefix + "n_neg"])
+        loss, tp, tn, fp, fn, n_pos, n_neg = (
+            stats[prefix + "loss"],
+            stats[prefix + "tp"],
+            stats[prefix + "tn"],
+            stats[prefix + "fp"],
+            stats[prefix + "fn"],
+            stats[prefix + "n_pos"],
+            stats[prefix + "n_neg"],
+        )
 
         loss = loss / (n_pos + n_neg)
-        acc = ((tp + tn) / (tp + fp + tn + fn))
+        acc = (tp + tn) / (tp + fp + tn + fn)
         f1 = tp / (tp + (0.5 * (fn + fp)))
         precision = tp / (tp + fp + 1e-10)
         recall = tp / (tp + fn + 1e-10)
         specificity = tn / (tn + fp + 1e-10)
 
         meta_stats = {
-            prefix + "loss": loss, prefix + "acc": acc, prefix + "f1": f1, prefix + "precision": precision,
-            prefix + "recall": recall, prefix + "specificity": specificity
+            prefix + "loss": loss,
+            prefix + "acc": acc,
+            prefix + "f1": f1,
+            prefix + "precision": precision,
+            prefix + "recall": recall,
+            prefix + "specificity": specificity,
         }
 
         return meta_stats
 
     @staticmethod
     def print_batch_stats(epoch, batch_id, stats):
-        print("EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
-              "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
-              "Time: {:.2f}, Items: {}".format(epoch,
-                                               batch_id,
-                                               stats["loss"],
-                                               stats["acc"],
-                                               stats["f1"],
-                                               stats["precision"],
-                                               stats["recall"],
-                                               stats["specificity"],
-                                               stats["time"],
-                                               stats["items"]))
+        print(
+            "EP-{}:{}: Batch loss: {:.3f}, Acc: {:.3f}, F1: {:.3f}, "
+            "Precision:{:.3f}, Recall:{:.3f}, Specificity:{:.3f}, "
+            "Time: {:.2f}, Items: {}".format(
+                epoch,
+                batch_id,
+                stats["loss"],
+                stats["acc"],
+                stats["f1"],
+                stats["precision"],
+                stats["recall"],
+                stats["specificity"],
+                stats["time"],
+                stats["items"],
+            )
+        )
 
     @staticmethod
     def print_stats(split, stats, prefix=""):
         epoch = stats["epoch"]
-        ept, bt, dt, = stats[prefix + "epoch_time"], stats[prefix + "batch_time"], stats[prefix + "data_time"]
+        (
+            ept,
+            bt,
+            dt,
+        ) = (
+            stats[prefix + "epoch_time"],
+            stats[prefix + "batch_time"],
+            stats[prefix + "data_time"],
+        )
 
-        print_str = ("{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
-                     "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}")
-        print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
-                               stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
-                               stats[prefix + "specificity"], ept, bt, dt))
+        print_str = (
+            "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
+            "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
+        )
+        print(
+            print_str.format(
+                epoch,
+                prefix + split,
+                stats[prefix + "f1"],
+                stats[prefix + "acc"],
+                stats[prefix + "loss"],
+                stats[prefix + "recall"],
+                stats[prefix + "precision"],
+                stats[prefix + "specificity"],
+                ept,
+                bt,
+                dt,
+            )
+        )
 
         print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
         for i in ["0", "1"]:
-            print(print_str.format("lgt" + i,
-                                   stats[prefix + "lgt" + i + "-mean"],
-                                   stats[prefix + "lgt" + i + "-std"],
-                                   stats[prefix + "lgt" + i + "-min"],
-                                   stats[prefix + "lgt" + i + "-max"]))
+            print(
+                print_str.format(
+                    "lgt" + i,
+                    stats[prefix + "lgt" + i + "-mean"],
+                    stats[prefix + "lgt" + i + "-std"],
+                    stats[prefix + "lgt" + i + "-min"],
+                    stats[prefix + "lgt" + i + "-max"],
+                )
+            )
         print("--------------------------")
 
     # def save(self, epoch, save_path, best_model=False, model=None, optimizer=None):
@@ -214,7 +264,9 @@ class TrainingHelper:
     #         torch.save(model_obj, model_path)
 
     @staticmethod
-    def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
+    def save_model_and_opt(
+        epoch, save_path, best_model=False, model=None, optimizer=None
+    ):
         # print(epoch)
         # print("Is best: {}".format(best_model))
         if best_model:
@@ -241,17 +293,31 @@ class TrainingHelper:
 
 
 class KnapsackBDDDataset(Dataset):
-    def __init__(self, size=None, split=None, pid=None,
-                 sampling_type=None, labels_type=None, weights_type=None, device=None):
+    def __init__(
+        self,
+        size=None,
+        split=None,
+        pid=None,
+        sampling_type=None,
+        labels_type=None,
+        weights_type=None,
+        device=None,
+    ):
         super(KnapsackBDDDataset, self).__init__()
 
-        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.ZipFile(
+            path.resource / f"tensors/knapsack/{size}/{split}/{sampling_type}.zip"
+        )
         self.node_feat = torch.load(zf.open(f"{sampling_type}/n{pid}.pt")).to(device)
         self.parent_feat = torch.load(zf.open(f"{sampling_type}/p{pid}.pt")).to(device)
         self.inst_feat = torch.load(zf.open(f"{sampling_type}/i{pid}.pt")).to(device)
-        self.wt = torch.load(zf.open(f"{sampling_type}/{weights_type}/{pid}.pt")).to(device)
+        self.wt = torch.load(zf.open(f"{sampling_type}/{weights_type}/{pid}.pt")).to(
+            device
+        )
 
-        zf = zipfile.ZipFile(path.resource / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip")
+        zf = zipfile.ZipFile(
+            path.resource / f"tensors/knapsack/{size}/{split}/labels/{labels_type}.zip"
+        )
         self.labels = torch.load(zf.open(f"{labels_type}/{pid}.pt")).to(device)
 
         # self.node_feat = data["nf"].to(device)
@@ -265,11 +331,13 @@ class KnapsackBDDDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, i):
-        return {'nf': self.node_feat[i],
-                'pf': self.parent_feat[i],
-                'if': self.inst_feat,
-                'wt': self.wt[i],
-                'label': self.labels[i]}
+        return {
+            "nf": self.node_feat[i],
+            "pf": self.parent_feat[i],
+            "if": self.inst_feat,
+            "wt": self.wt[i],
+            "label": self.labels[i],
+        }
 
 
 class FeaturizerConfig:
@@ -301,16 +369,16 @@ def read_from_zip(archive, file, format="raw"):
 
 
 def read_instance_knapsack(archive, inst):
-    data = {'value': [], 'n_vars': 0, 'n_cons': 1, 'n_objs': 3}
-    data['weight'], data['capacity'] = [], 0
+    data = {"value": [], "n_vars": 0, "n_cons": 1, "n_objs": 3}
+    data["weight"], data["capacity"] = [], 0
 
     raw_data = read_from_zip(archive, inst, format="raw")
-    data['n_vars'] = int(raw_data.readline())
-    data['n_objs'] = int(raw_data.readline())
-    for _ in range(data['n_objs']):
-        data['value'].append(list(map(int, raw_data.readline().split())))
-    data['weight'].extend(list(map(int, raw_data.readline().split())))
-    data['capacity'] = int(raw_data.readline().split()[0])
+    data["n_vars"] = int(raw_data.readline())
+    data["n_objs"] = int(raw_data.readline())
+    for _ in range(data["n_objs"]):
+        data["value"].append(list(map(int, raw_data.readline().split())))
+    data["weight"].extend(list(map(int, raw_data.readline().split())))
+    data["capacity"] = int(raw_data.readline().split()[0])
 
     return data
 
@@ -323,7 +391,9 @@ def read_instance_indepset(archive, inst):
 
         data = {"obj_coeffs": [], "cons_coeffs": [], "rhs": []}
 
-        data["n_vars"], data["n_cons"] = list(map(int, raw_data.readline().strip().split()))
+        data["n_vars"], data["n_cons"] = list(
+            map(int, raw_data.readline().strip().split())
+        )
         data["n_objs"] = int(raw_data.readline())
         data["adj_list"] = np.zeros((data["n_vars"], data["n_vars"]))
         data["adj_list_comp"] = np.ones((data["n_vars"], data["n_vars"]))
@@ -370,8 +440,8 @@ def read_instance(problem, archive, inst):
 
 def get_instance_prefix(problem):
     prefix = None
-    if problem == 'knapsack' or problem == 'knapsackc':
-        prefix = 'kp_7'
+    if problem == "knapsack" or problem == "knapsackc":
+        prefix = "kp_7"
     elif problem == "indepset":
         prefix = "ind_7"
 
@@ -386,7 +456,7 @@ def get_instance_data(problem, size, split, pid):
         if len(size.split("-")) > 2:
             suffix = "npz"
 
-    inst = f'{size}/{split}/{prefix}_{size}_{pid}.{suffix}'
+    inst = f"{size}/{split}/{prefix}_{size}_{pid}.{suffix}"
     data = read_instance(problem, archive, inst)
 
     return data
@@ -427,7 +497,7 @@ def get_layer_weights_linearE(lidxs):
 
 
 def get_layer_weights_quadratic(lidxs):
-    return [(np.exp(-0.5) - 1) * (lidx ** 2) + 1 for lidx in lidxs]
+    return [(np.exp(-0.5) - 1) * (lidx**2) + 1 for lidx in lidxs]
 
 
 def get_layer_weights_sigmoidal(lidxs):
@@ -441,7 +511,7 @@ def get_layer_weights(flag_penalty, penalty, num_vars):
         "linear": get_layer_weights_linear,
         "exponential": get_layer_weights_exponential,
         "linearE": get_layer_weights_linearE,
-        "sigmoidal": get_layer_weights_sigmoidal
+        "sigmoidal": get_layer_weights_sigmoidal,
     }
     if flag_penalty is False or penalty == "const":
         return get_layer_weights_fn["const"](num_vars)
@@ -463,7 +533,7 @@ def get_layer_weights(flag_penalty, penalty, num_vars):
             layer_weight_b = get_layer_weights_fn[b](lidxs)
 
         layer_weight = layer_weight_a
-        layer_weight.extend(layer_weight_b[:num_vars - upto_layer])
+        layer_weight.extend(layer_weight_b[: num_vars - upto_layer])
 
     return layer_weight
 
@@ -478,27 +548,27 @@ def get_bdd_data(problem, size, split, pid):
 
 
 def get_knapsack_order(order_type, data):
-    if order_type == 'MinWt':
-        idx_weight = [(i, w) for i, w in enumerate(data['weight'])]
+    if order_type == "MinWt":
+        idx_weight = [(i, w) for i, w in enumerate(data["weight"])]
         idx_weight.sort(key=itemgetter(1))
 
         return np.array([i[0] for i in idx_weight])
-    elif order_type == 'MaxRatio':
-        min_profit = np.min(data['value'], 0)
-        profit_by_weight = [v / w for v, w in zip(min_profit, data['weight'])]
+    elif order_type == "MaxRatio":
+        min_profit = np.min(data["value"], 0)
+        profit_by_weight = [v / w for v, w in zip(min_profit, data["weight"])]
         idx_profit_by_weight = [(i, f) for i, f in enumerate(profit_by_weight)]
         idx_profit_by_weight.sort(key=itemgetter(1), reverse=True)
 
         return np.array([i[0] for i in idx_profit_by_weight])
-    elif order_type == 'Lex':
-        return np.arange(data['n_vars'])
+    elif order_type == "Lex":
+        return np.arange(data["n_vars"])
 
 
 def get_static_order(problem, order_type, data):
     order = None
-    if problem == 'knapsack' or problem == 'knapsackc':
+    if problem == "knapsack" or problem == "knapsackc":
         order = get_knapsack_order(order_type, data)
-    elif problem == 'indepset':
+    elif problem == "indepset":
         order = []
     assert order is not None
 
@@ -519,7 +589,9 @@ def get_featurizer(problem, cfg):
 
 def get_instance_features(problem, data, state_norm_const=None):
     def get_knapsack_instance_features():
-        _feat = np.concatenate((np.array(data['value']), np.array(data['weight']).reshape(1, -1)), axis=0)
+        _feat = np.concatenate(
+            (np.array(data["value"]), np.array(data["weight"]).reshape(1, -1)), axis=0
+        )
 
         assert state_norm_const is not None
         _feat = _feat / state_norm_const
@@ -538,20 +610,28 @@ def get_parent_features(problem, node, bdd, lidx, inst_data, state_norm_const):
     def get_parent_features_knapsack():
         parents_feat = []
 
-        for p in node['op']:
-            parents_feat.append([
-                CONST.ONE_ARC,
-                0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / state_norm_const,
-                0 if lidx == 0 else bdd[lidx - 1][p]['s'][0] / inst_data['capacity'],
-            ])
+        for p in node["op"]:
+            parents_feat.append(
+                [
+                    CONST.ONE_ARC,
+                    0 if lidx == 0 else bdd[lidx - 1][p]["s"][0] / state_norm_const,
+                    (
+                        0
+                        if lidx == 0
+                        else bdd[lidx - 1][p]["s"][0] / inst_data["capacity"]
+                    ),
+                ]
+            )
 
-        for _ in node['zp']:
+        for _ in node["zp"]:
             # Parent state will be the same as the current state for zero-arc
-            parents_feat.append([
-                CONST.ZERO_ARC,
-                node['s'][0] / state_norm_const,
-                node['s'][0] / inst_data['capacity'],
-            ])
+            parents_feat.append(
+                [
+                    CONST.ZERO_ARC,
+                    node["s"][0] / state_norm_const,
+                    node["s"][0] / inst_data["capacity"],
+                ]
+            )
 
         return parents_feat
 
@@ -568,34 +648,40 @@ def np2tensor(data):
     return torch.from_numpy(data).float()
 
 
-def convert_bdd_to_tensor_data(problem,
-                               bdd=None,
-                               num_objs=None,
-                               num_vars=None,
-                               split=None,
-                               pid=None,
-                               order_type=None,
-                               state_norm_const=1000,
-                               layer_norm_const=100,
-                               task="classification",
-                               label_type="binary",
-                               neg_pos_ratio=1,
-                               min_samples=0,
-                               flag_layer_penalty=True,
-                               layer_penalty=None,
-                               flag_imbalance_penalty=None,
-                               flag_importance_penalty=None,
-                               penalty_aggregation="sum",
-                               random_seed=100):
+def convert_bdd_to_tensor_data(
+    problem,
+    bdd=None,
+    num_objs=None,
+    num_vars=None,
+    split=None,
+    pid=None,
+    order_type=None,
+    state_norm_const=1000,
+    layer_norm_const=100,
+    task="classification",
+    label_type="binary",
+    neg_pos_ratio=1,
+    min_samples=0,
+    flag_layer_penalty=True,
+    layer_penalty=None,
+    flag_imbalance_penalty=None,
+    flag_importance_penalty=None,
+    penalty_aggregation="sum",
+    random_seed=100,
+):
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = path.resource / "tensors" / problem / size / split / sampling_type
+    sampling_data_path = (
+        path.resource / "tensors" / problem / size / split / sampling_type
+    )
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.pt").exists()
     features_exists = False
 
-    labels_data_path = path.resource / "tensors" / problem / size / split / "labels" / label_type
+    labels_data_path = (
+        path.resource / "tensors" / problem / size / split / "labels" / label_type
+    )
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.pt").exists()
     labels_exists = False
@@ -606,12 +692,22 @@ def convert_bdd_to_tensor_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = path.resource / "tensors" / problem / size / split / sampling_type / weights_type
+    weights_data_path = (
+        path.resource
+        / "tensors"
+        / problem
+        / size
+        / split
+        / sampling_type
+        / weights_type
+    )
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.pt").exists()
     weights_exists = False
 
-    print(f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
+    print(
+        f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}"
+    )
 
     def convert_bdd_to_tensor_dataset_knapsack():
         rng = random.Random(random_seed)
@@ -632,14 +728,16 @@ def convert_bdd_to_tensor_data(problem,
         # Get instance features
         inst_data = get_instance_data(problem, size, split, pid)
         order = get_static_order(problem, order_type, inst_data)
-        inst_feat = get_instance_features(problem,
-                                          inst_data,
-                                          state_norm_const=state_norm_const)
+        inst_feat = get_instance_features(
+            problem, inst_data, state_norm_const=state_norm_const
+        )
         # Reset order of the instance
         inst_feat = inst_feat[:, order]
 
         for lidx, layer in enumerate(_bdd):
-            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            pos_ids = [
+                node_id for node_id, node in enumerate(layer) if node["pareto"] == 1
+            ]
             neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
 
             # Subsample negative samples
@@ -647,8 +745,9 @@ def convert_bdd_to_tensor_data(problem,
             if neg_pos_ratio < 1:
                 num_neg_samples = len(neg_ids)
             else:
-                num_neg_samples = np.max([int(neg_pos_ratio * num_pos_samples),
-                                          min_samples])
+                num_neg_samples = np.max(
+                    [int(neg_pos_ratio * num_pos_samples), min_samples]
+                )
                 num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
                 rng.shuffle(neg_ids)
             neg_ids = neg_ids[:num_neg_samples]
@@ -664,28 +763,38 @@ def convert_bdd_to_tensor_data(problem,
 
                 if not features_exists:
                     # Extract node feature
-                    node_feat_lst.append([node['s'][0] / state_norm_const,
-                                          node['s'][0] / inst_data['capacity'],
-                                          (lidx + 1) / layer_norm_const])
+                    node_feat_lst.append(
+                        [
+                            node["s"][0] / state_norm_const,
+                            node["s"][0] / inst_data["capacity"],
+                            (lidx + 1) / layer_norm_const,
+                        ]
+                    )
                     # print(node_feat_lst)
 
                     # Extract parent feature
-                    parents_node_feat_lst.append(get_parent_features(problem,
-                                                                     node,
-                                                                     _bdd,
-                                                                     lidx,
-                                                                     inst_data,
-                                                                     state_norm_const))
+                    parents_node_feat_lst.append(
+                        get_parent_features(
+                            problem, node, _bdd, lidx, inst_data, state_norm_const
+                        )
+                    )
 
                 if not weights_exists:
-                    weights_lst.append(get_aggregated_weight(
-                        aggregation=penalty_aggregation,
-                        flag_layer_penalty=flag_layer_penalty,
-                        layer_weight=layer_weight[lidx],
-                        flag_imbalance_penalty=flag_imbalance_penalty,
-                        imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
-                        flag_importance_penalty=flag_importance_penalty if i < num_pos_samples else False,
-                        score=node["score"]))
+                    weights_lst.append(
+                        get_aggregated_weight(
+                            aggregation=penalty_aggregation,
+                            flag_layer_penalty=flag_layer_penalty,
+                            layer_weight=layer_weight[lidx],
+                            flag_imbalance_penalty=flag_imbalance_penalty,
+                            imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
+                            flag_importance_penalty=(
+                                flag_importance_penalty
+                                if i < num_pos_samples
+                                else False
+                            ),
+                            score=node["score"],
+                        )
+                    )
 
                 if not labels_exists:
                     labels_lst.append(node["l"])
@@ -696,7 +805,11 @@ def convert_bdd_to_tensor_data(problem,
             parents_node_feat_padded = []
             for pf in parents_node_feat_lst:
                 if len(pf) < max_parents:
-                    parents_node_feat_padded.append(np.concatenate((pf, np.zeros((max_parents - len(pf), len(pf[0]))))))
+                    parents_node_feat_padded.append(
+                        np.concatenate(
+                            (pf, np.zeros((max_parents - len(pf), len(pf[0]))))
+                        )
+                    )
                 else:
                     parents_node_feat_padded.append(pf)
 
@@ -728,18 +841,22 @@ def convert_bdd_to_tensor_data(problem,
         torch.save(weights, weights_data_path.joinpath(f"{pid}.pt"))
 
 
-def extract_node_features(problem,
-                          lidx,
-                          node,
-                          prev_layer,
-                          inst_data,
-                          layer_norm_const=None,
-                          state_norm_const=None):
+def extract_node_features(
+    problem,
+    lidx,
+    node,
+    prev_layer,
+    inst_data,
+    layer_norm_const=None,
+    state_norm_const=None,
+):
     def extract_node_features_knapsack():
         # Node features
         norm_state = node["s"][0] / state_norm_const
         state_to_capacity = node["s"][0] / inst_data["capacity"]
-        _node_feat = np.array([norm_state, state_to_capacity, (lidx + 1) / layer_norm_const])
+        _node_feat = np.array(
+            [norm_state, state_to_capacity, (lidx + 1) / layer_norm_const]
+        )
 
         # Parent node features
         _parent_node_feat = []
@@ -776,13 +893,15 @@ def extract_node_features(problem,
         raise ValueError("Invalid problem!")
 
 
-def get_aggregated_weight(aggregation="sum",
-                          flag_layer_penalty=False,
-                          layer_weight=1,
-                          flag_imbalance_penalty=False,
-                          imb_wt=1,
-                          flag_importance_penalty=False,
-                          score=0):
+def get_aggregated_weight(
+    aggregation="sum",
+    flag_layer_penalty=False,
+    layer_weight=1,
+    flag_imbalance_penalty=False,
+    imb_wt=1,
+    flag_importance_penalty=False,
+    score=0,
+):
     weight = None
     if aggregation == "sum":
         l_wt = layer_weight if flag_layer_penalty else 0
@@ -801,33 +920,39 @@ def get_aggregated_weight(aggregation="sum",
     return weight
 
 
-def convert_bdd_to_xgb_data(problem,
-                            bdd=None,
-                            num_objs=None,
-                            num_vars=None,
-                            split=None,
-                            pid=None,
-                            order_type=None,
-                            state_norm_const=1000,
-                            layer_norm_const=100,
-                            task="classification",
-                            label_type="binary",
-                            neg_pos_ratio=1,
-                            min_samples=0,
-                            flag_layer_penalty=True,
-                            layer_penalty=None,
-                            flag_imbalance_penalty=False,
-                            flag_importance_penalty=False,
-                            penalty_aggregation="sum",
-                            random_seed=100):
+def convert_bdd_to_xgb_data(
+    problem,
+    bdd=None,
+    num_objs=None,
+    num_vars=None,
+    split=None,
+    pid=None,
+    order_type=None,
+    state_norm_const=1000,
+    layer_norm_const=100,
+    task="classification",
+    label_type="binary",
+    neg_pos_ratio=1,
+    min_samples=0,
+    flag_layer_penalty=True,
+    layer_penalty=None,
+    flag_imbalance_penalty=False,
+    flag_importance_penalty=False,
+    penalty_aggregation="sum",
+    random_seed=100,
+):
     size = f"{num_objs}_{num_vars}"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type
+    sampling_data_path = (
+        path.resource / "xgb_data" / problem / size / split / sampling_type
+    )
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{pid}.npy").exists()
 
-    labels_data_path = path.resource / "xgb_data" / problem / size / split / "labels" / label_type
+    labels_data_path = (
+        path.resource / "xgb_data" / problem / size / split / "labels" / label_type
+    )
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{pid}.npy").exists()
 
@@ -837,28 +962,48 @@ def convert_bdd_to_xgb_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = path.resource / "xgb_data" / problem / size / split / sampling_type / weights_type
+    weights_data_path = (
+        path.resource
+        / "xgb_data"
+        / problem
+        / size
+        / split
+        / sampling_type
+        / weights_type
+    )
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{pid}.npy").exists()
 
-    print(f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
+    print(
+        f"Processed {pid}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}"
+    )
 
     def convert_bdd_to_xgb_data_knapsack():
         rng = random.Random(random_seed)
         features_lst = None if features_exists else []
         weights_lst = None if weights_exists else []
         labels_lst = None if labels_exists else []
-        layer_weight_lst = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
+        layer_weight_lst = get_layer_weights(
+            flag_layer_penalty, layer_penalty, num_vars
+        )
 
-        inst_data, order, features, inst_features, var_features, num_var_features = None, None, None, None, None, None
+        inst_data, order, features, inst_features, var_features, num_var_features = (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
             order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
-            featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
-                                                                  raw=False,
-                                                                  context=True))
+            featurizer = get_featurizer(
+                problem,
+                FeaturizerConfig(norm_const=state_norm_const, raw=False, context=True),
+            )
             features = featurizer.get(inst_data)
             # Instance features
             inst_features = features["inst"][0]
@@ -869,7 +1014,9 @@ def convert_bdd_to_xgb_data(problem,
         # features_lst, labels_lst, weights_lst = [], [], []
         for lidx, layer in enumerate(bdd):
             # _features_lst, _labels_lst, _weights_lst = [], [], []
-            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            pos_ids = [
+                node_id for node_id, node in enumerate(layer) if node["pareto"] == 1
+            ]
             neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
 
             # Subsample negative samples
@@ -877,8 +1024,9 @@ def convert_bdd_to_xgb_data(problem,
             if neg_pos_ratio < 1:
                 num_neg_samples = len(neg_ids)
             else:
-                num_neg_samples = np.max([int(neg_pos_ratio * num_pos_samples),
-                                          min_samples])
+                num_neg_samples = np.max(
+                    [int(neg_pos_ratio * num_pos_samples), min_samples]
+                )
                 num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
                 rng.shuffle(neg_ids)
             neg_ids = neg_ids[:num_neg_samples]
@@ -890,9 +1038,11 @@ def convert_bdd_to_xgb_data(problem,
             _parent_var_feat, _var_feat = None, None
             if not features_exists:
                 # Variable features: Parent and current layer
-                _parent_var_feat = -1 * np.ones(num_var_features) \
-                    if lidx == 0 \
+                _parent_var_feat = (
+                    -1 * np.ones(num_var_features)
+                    if lidx == 0
                     else var_features[lidx - 1]
+                )
                 _var_feat = var_features[lidx]
 
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
@@ -902,31 +1052,46 @@ def convert_bdd_to_xgb_data(problem,
                 node = layer[node_id]
 
                 if not features_exists:
-                    _node_feat, _parent_node_feat = extract_node_features("knapsack",
-                                                                          lidx,
-                                                                          node,
-                                                                          prev_layer,
-                                                                          inst_data,
-                                                                          layer_norm_const=layer_norm_const,
-                                                                          state_norm_const=state_norm_const)
-                    features_lst.append(np.concatenate((inst_features,
-                                                        _parent_var_feat,
-                                                        _parent_node_feat,
-                                                        _var_feat,
-                                                        _node_feat)))
+                    _node_feat, _parent_node_feat = extract_node_features(
+                        "knapsack",
+                        lidx,
+                        node,
+                        prev_layer,
+                        inst_data,
+                        layer_norm_const=layer_norm_const,
+                        state_norm_const=state_norm_const,
+                    )
+                    features_lst.append(
+                        np.concatenate(
+                            (
+                                inst_features,
+                                _parent_var_feat,
+                                _parent_node_feat,
+                                _var_feat,
+                                _node_feat,
+                            )
+                        )
+                    )
 
                 if not labels_exists:
                     labels_lst.append(node["l"])
 
                 if not weights_exists:
-                    weights_lst.append(get_aggregated_weight(
-                        aggregation=penalty_aggregation,
-                        flag_layer_penalty=flag_layer_penalty,
-                        layer_weight=layer_weight_lst[lidx],
-                        flag_imbalance_penalty=flag_imbalance_penalty,
-                        imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
-                        flag_importance_penalty=flag_importance_penalty if i < num_pos_samples else False,
-                        score=node["score"]))
+                    weights_lst.append(
+                        get_aggregated_weight(
+                            aggregation=penalty_aggregation,
+                            flag_layer_penalty=flag_layer_penalty,
+                            layer_weight=layer_weight_lst[lidx],
+                            flag_imbalance_penalty=flag_imbalance_penalty,
+                            imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
+                            flag_importance_penalty=(
+                                flag_importance_penalty
+                                if i < num_pos_samples
+                                else False
+                            ),
+                            score=node["score"],
+                        )
+                    )
 
         return features_lst, labels_lst, weights_lst
 
@@ -949,35 +1114,47 @@ def convert_bdd_to_xgb_data(problem,
         np.save(open(weights_data_path.joinpath(f"{pid}.npy"), "wb"), weights_np)
 
 
-def convert_bdd_to_xgb_mixed_data(problem,
-                                  counter=None,
-                                  bdd=None,
-                                  num_objs=None,
-                                  num_vars=None,
-                                  split=None,
-                                  pid=None,
-                                  order_type=None,
-                                  state_norm_const=1000,
-                                  layer_norm_const=100,
-                                  task="classification",
-                                  label_type="binary",
-                                  neg_pos_ratio=1,
-                                  min_samples=0,
-                                  flag_layer_penalty=True,
-                                  layer_penalty=None,
-                                  flag_imbalance_penalty=False,
-                                  flag_importance_penalty=False,
-                                  penalty_aggregation="sum",
-                                  random_seed=100):
+def convert_bdd_to_xgb_mixed_data(
+    problem,
+    counter=None,
+    bdd=None,
+    num_objs=None,
+    num_vars=None,
+    split=None,
+    pid=None,
+    order_type=None,
+    state_norm_const=1000,
+    layer_norm_const=100,
+    task="classification",
+    label_type="binary",
+    neg_pos_ratio=1,
+    min_samples=0,
+    flag_layer_penalty=True,
+    layer_penalty=None,
+    flag_imbalance_penalty=False,
+    flag_importance_penalty=False,
+    penalty_aggregation="sum",
+    random_seed=100,
+):
     size = f"{num_objs}_{num_vars}"
     dataset_type = "mixed"
 
     sampling_type = f"npr{neg_pos_ratio}ms{min_samples}"
-    sampling_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type
+    sampling_data_path = (
+        path.resource / "xgb_data" / problem / dataset_type / split / sampling_type
+    )
     sampling_data_path.mkdir(parents=True, exist_ok=True)
     features_exists = sampling_data_path.joinpath(f"{counter}.npy").exists()
 
-    labels_data_path = path.resource / "xgb_data" / problem / dataset_type / split / "labels" / label_type
+    labels_data_path = (
+        path.resource
+        / "xgb_data"
+        / problem
+        / dataset_type
+        / split
+        / "labels"
+        / label_type
+    )
     labels_data_path.mkdir(parents=True, exist_ok=True)
     labels_exists = labels_data_path.joinpath(f"{counter}.npy").exists()
 
@@ -987,28 +1164,48 @@ def convert_bdd_to_xgb_mixed_data(problem,
     weights_type += "1-" if flag_imbalance_penalty else "0-"
     weights_type += "1-" if flag_importance_penalty else "0-"
     weights_type += penalty_aggregation
-    weights_data_path = path.resource / "xgb_data" / problem / dataset_type / split / sampling_type / weights_type
+    weights_data_path = (
+        path.resource
+        / "xgb_data"
+        / problem
+        / dataset_type
+        / split
+        / sampling_type
+        / weights_type
+    )
     weights_data_path.mkdir(parents=True, exist_ok=True)
     weights_exists = weights_data_path.joinpath(f"{counter}.npy").exists()
 
-    print(f"Processed {counter}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}")
+    print(
+        f"Processed {counter}, Features - {features_exists}, Weights - {weights_exists}, Labels - {labels_exists}"
+    )
 
     def convert_bdd_to_xgb_mixed_data_knapsack():
         rng = random.Random(random_seed)
         features_lst = None if features_exists else []
         weights_lst = None if weights_exists else []
         labels_lst = None if labels_exists else []
-        layer_weight_lst = get_layer_weights(flag_layer_penalty, layer_penalty, num_vars)
+        layer_weight_lst = get_layer_weights(
+            flag_layer_penalty, layer_penalty, num_vars
+        )
 
-        inst_data, order, features, inst_features, var_features, num_var_features = None, None, None, None, None, None
+        inst_data, order, features, inst_features, var_features, num_var_features = (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         if not features_exists:
             # Read instance
             inst_data = get_instance_data(problem, size, split, pid)
             order = get_static_order(problem, order_type, inst_data)
             # Extract instance and variable features
-            featurizer = get_featurizer(problem, FeaturizerConfig(norm_const=state_norm_const,
-                                                                  raw=False,
-                                                                  context=True))
+            featurizer = get_featurizer(
+                problem,
+                FeaturizerConfig(norm_const=state_norm_const, raw=False, context=True),
+            )
             features = featurizer.get(inst_data)
             # Instance features
             inst_features = features["inst"][0]
@@ -1019,7 +1216,9 @@ def convert_bdd_to_xgb_mixed_data(problem,
         # features_lst, labels_lst, weights_lst = [], [], []
         for lidx, layer in enumerate(bdd):
             # _features_lst, _labels_lst, _weights_lst = [], [], []
-            pos_ids = [node_id for node_id, node in enumerate(layer) if node["pareto"] == 1]
+            pos_ids = [
+                node_id for node_id, node in enumerate(layer) if node["pareto"] == 1
+            ]
             neg_ids = list(set(range(len(layer))).difference(set(pos_ids)))
 
             # Subsample negative samples
@@ -1027,8 +1226,9 @@ def convert_bdd_to_xgb_mixed_data(problem,
             if neg_pos_ratio < 1:
                 num_neg_samples = len(neg_ids)
             else:
-                num_neg_samples = np.max([int(neg_pos_ratio * num_pos_samples),
-                                          min_samples])
+                num_neg_samples = np.max(
+                    [int(neg_pos_ratio * num_pos_samples), min_samples]
+                )
                 num_neg_samples = np.min([num_neg_samples, len(neg_ids)])
                 rng.shuffle(neg_ids)
             neg_ids = neg_ids[:num_neg_samples]
@@ -1040,9 +1240,11 @@ def convert_bdd_to_xgb_mixed_data(problem,
             _parent_var_feat, _var_feat = None, None
             if not features_exists:
                 # Variable features: Parent and current layer
-                _parent_var_feat = -1 * np.ones(num_var_features) \
-                    if lidx == 0 \
+                _parent_var_feat = (
+                    -1 * np.ones(num_var_features)
+                    if lidx == 0
                     else var_features[lidx - 1]
+                )
                 _var_feat = var_features[lidx]
 
             prev_layer = bdd[lidx - 1] if lidx > 0 else None
@@ -1052,31 +1254,46 @@ def convert_bdd_to_xgb_mixed_data(problem,
                 node = layer[node_id]
 
                 if not features_exists:
-                    _node_feat, _parent_node_feat = extract_node_features("knapsack",
-                                                                          lidx,
-                                                                          node,
-                                                                          prev_layer,
-                                                                          inst_data,
-                                                                          layer_norm_const=layer_norm_const,
-                                                                          state_norm_const=state_norm_const)
-                    features_lst.append(np.concatenate((inst_features,
-                                                        _parent_var_feat,
-                                                        _parent_node_feat,
-                                                        _var_feat,
-                                                        _node_feat)))
+                    _node_feat, _parent_node_feat = extract_node_features(
+                        "knapsack",
+                        lidx,
+                        node,
+                        prev_layer,
+                        inst_data,
+                        layer_norm_const=layer_norm_const,
+                        state_norm_const=state_norm_const,
+                    )
+                    features_lst.append(
+                        np.concatenate(
+                            (
+                                inst_features,
+                                _parent_var_feat,
+                                _parent_node_feat,
+                                _var_feat,
+                                _node_feat,
+                            )
+                        )
+                    )
 
                 if not labels_exists:
                     labels_lst.append(node["l"])
 
                 if not weights_exists:
-                    weights_lst.append(get_aggregated_weight(
-                        aggregation=penalty_aggregation,
-                        flag_layer_penalty=flag_layer_penalty,
-                        layer_weight=layer_weight_lst[lidx],
-                        flag_imbalance_penalty=flag_imbalance_penalty,
-                        imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
-                        flag_importance_penalty=flag_importance_penalty if i < num_pos_samples else False,
-                        score=node["score"]))
+                    weights_lst.append(
+                        get_aggregated_weight(
+                            aggregation=penalty_aggregation,
+                            flag_layer_penalty=flag_layer_penalty,
+                            layer_weight=layer_weight_lst[lidx],
+                            flag_imbalance_penalty=flag_imbalance_penalty,
+                            imb_wt=pos_imb_wt if i < num_pos_samples else neg_imb_wt,
+                            flag_importance_penalty=(
+                                flag_importance_penalty
+                                if i < num_pos_samples
+                                else False
+                            ),
+                            score=node["score"],
+                        )
+                    )
 
         return features_lst, labels_lst, weights_lst
 
@@ -1099,17 +1316,23 @@ def convert_bdd_to_xgb_mixed_data(problem,
         np.save(open(weights_data_path.joinpath(f"{counter}.npy"), "wb"), weights_np)
 
 
-def get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device):
+def get_nn_dataset(
+    problem, size, split, pid, sampling_type, labels_type, weights_type, device
+):
     def get_dataset_knapsack():
-        zf = zipfile.Path(path.resource / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip")
+        zf = zipfile.Path(
+            path.resource / f"tensors/{problem}/{size}/{split}/{sampling_type}.zip"
+        )
         if zf.joinpath(f"{sampling_type}/n{pid}.pt").exists():
-            return KnapsackBDDDataset(size=size,
-                                      split=split,
-                                      pid=pid,
-                                      sampling_type=sampling_type,
-                                      labels_type=labels_type,
-                                      weights_type=weights_type,
-                                      device=device)
+            return KnapsackBDDDataset(
+                size=size,
+                split=split,
+                pid=pid,
+                sampling_type=sampling_type,
+                labels_type=labels_type,
+                weights_type=weights_type,
+                device=device,
+            )
         else:
             return None
 
@@ -1127,7 +1350,9 @@ def get_xgb_dataset(problem, size, split, pid, neg_pos_ratio, min_samples):
         zf = zipfile.Path(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
         np_file = zf.joinpath(f"{split}/{dtype}/{pid}.npy")
         if np_file.exists():
-            zf = zipfile.ZipFile(path.resource / f"xgb_data/knapsack/{size}/{split}.zip")
+            zf = zipfile.ZipFile(
+                path.resource / f"xgb_data/knapsack/{size}/{split}.zip"
+            )
             with zf.open(f"{split}/{dtype}/{pid}.npy", "r") as fp:
                 data = io.BytesIO(fp.read())
                 np_array = np.load(data)
@@ -1200,34 +1425,42 @@ def calculate_accuracy(tp, fp, tn, fn):
     return correct / total, correct, total
 
 
-def print_result(epoch,
-                 split,
-                 pid=None,
-                 acc=None,
-                 correct=None,
-                 total=None,
-                 inst_per_step=None,
-                 is_best=None,
-                 pre_space='\t'):
+def print_result(
+    epoch,
+    split,
+    pid=None,
+    acc=None,
+    correct=None,
+    total=None,
+    inst_per_step=None,
+    is_best=None,
+    pre_space="\t",
+):
     is_best_str = " -- BEST ACC" if is_best else ""
     print(f"{pre_space}------------------------------------------------")
     if pid is not None and inst_per_step is not None:
-        print(f"{pre_space}Inst: {pid}-{pid + inst_per_step}, "
-              f"Acc: {acc:.2f}, Correct: {correct}, Total: {total}")
+        print(
+            f"{pre_space}Inst: {pid}-{pid + inst_per_step}, "
+            f"Acc: {acc:.2f}, Correct: {correct}, Total: {total}"
+        )
     else:
-        print(f"{pre_space}Acc: {acc:.2f}, Correct: {correct}, Total: {total} {is_best_str}")
+        print(
+            f"{pre_space}Acc: {acc:.2f}, Correct: {correct}, Total: {total} {is_best_str}"
+        )
 
 
-def get_log_dir_name(name,
-                     size,
-                     flag_layer_penalty,
-                     layer_penalty,
-                     flag_label_penalty,
-                     label_penalty,
-                     neg_pos_ratio,
-                     order,
-                     layer_norm_const,
-                     state_norm_const):
+def get_log_dir_name(
+    name,
+    size,
+    flag_layer_penalty,
+    layer_penalty,
+    flag_label_penalty,
+    label_penalty,
+    neg_pos_ratio,
+    order,
+    layer_norm_const,
+    state_norm_const,
+):
     checkpoint_str = f"{name}-{size}/"
 
     if flag_layer_penalty:
@@ -1259,17 +1492,17 @@ def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None)
     split_path.mkdir(parents=True, exist_ok=True)
 
     if model is not None:
-        torch.save(model.state_dict(),
-                   split_path.joinpath(f"model_{epoch}.ckpt"))
+        torch.save(model.state_dict(), split_path.joinpath(f"model_{epoch}.ckpt"))
 
         if is_best:
-            torch.save(model.state_dict(),
-                       split_path.joinpath(f"model_best.ckpt"))
+            torch.save(model.state_dict(), split_path.joinpath(f"model_best.ckpt"))
 
     if scores_df is not None:
         scores_df.to_csv(split_path.joinpath(f"scores_{epoch}.csv"), index=False)
         if is_best:
-            scores_df.to_csv(split_path.joinpath(f"scores_best_{epoch}.csv"), index=False)
+            scores_df.to_csv(
+                split_path.joinpath(f"scores_best_{epoch}.csv"), index=False
+            )
 
         # Normalize scores
         # scores_df["NSupport"] = (scores_df["TP"] + scores_df["FP"] +
@@ -1289,16 +1522,18 @@ def checkpoint(cfg, split, epoch=None, model=None, scores_df=None, is_best=None)
 
 def checkpoint_test(cfg, scores_df):
     checkpoint_dir = path.resource / "experiments/"
-    checkpoint_str = get_log_dir_name(cfg.prob.name,
-                                      cfg.prob.size,
-                                      cfg.train.flag_layer_penalty,
-                                      cfg.train.layer_penalty,
-                                      cfg.train.flag_label_penalty,
-                                      cfg.train.label_penalty,
-                                      cfg.train.neg_pos_ratio,
-                                      cfg.prob.order,
-                                      cfg.prob.layer_norm_const,
-                                      cfg.prob.state_norm_const)
+    checkpoint_str = get_log_dir_name(
+        cfg.prob.name,
+        cfg.prob.size,
+        cfg.train.flag_layer_penalty,
+        cfg.train.layer_penalty,
+        cfg.train.flag_label_penalty,
+        cfg.train.label_penalty,
+        cfg.train.neg_pos_ratio,
+        cfg.prob.order,
+        cfg.prob.layer_norm_const,
+        cfg.prob.state_norm_const,
+    )
     checkpoint_str += f"{cfg.test.log_dir}"
     checkpoint_dir /= checkpoint_str
     checkpoint_dir.mkdir(exist_ok=True, parents=True)
@@ -1307,8 +1542,9 @@ def checkpoint_test(cfg, scores_df):
     scores_df.to_csv(scores_df_name, index=False)
 
     # Normalize scores
-    scores_df["NSupport"] = (scores_df["TP"] + scores_df["FP"] +
-                             scores_df["TN"] + scores_df["FN"]) - scores_df["Support"]
+    scores_df["NSupport"] = (
+        scores_df["TP"] + scores_df["FP"] + scores_df["TN"] + scores_df["FN"]
+    ) - scores_df["Support"]
     scores_df["TP"] /= scores_df["Support"]
     scores_df["FP"] /= scores_df["NSupport"]
     scores_df["TN"] /= scores_df["NSupport"]
@@ -1319,7 +1555,7 @@ def checkpoint_test(cfg, scores_df):
 
 
 def handle_timeout(sig, frame):
-    raise TimeoutError('Timeout')
+    raise TimeoutError("Timeout")
 
 
 def set_seed(seed):
@@ -1359,15 +1595,21 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
     # print("Global rank: ", global_rank)
     # The local cuda device id we assign to the current process
     device_id = local_rank
-    print("World size: {}, Rank: {}, Node: {}, Local Rank: {}".format(world_size, global_rank, node_id, local_rank))
+    print(
+        "World size: {}, Rank: {}, Node: {}, Local Rank: {}".format(
+            world_size, global_rank, node_id, local_rank
+        )
+    )
     # Initialize process group and initiate communications between all processes
     # running on all nodes
     print("From Rank: {}, ==> Initializing Process Group...".format(global_rank))
     # init the process group
-    init_process_group(backend=dist_backend,
-                       init_method=init_method,
-                       world_size=world_size,
-                       rank=global_rank)
+    init_process_group(
+        backend=dist_backend,
+        init_method=init_method,
+        world_size=world_size,
+        rank=global_rank,
+    )
     print("Process group ready!")
     print("From Rank: {}, ==> Making model...".format(global_rank))
     print()
@@ -1378,7 +1620,9 @@ def setup_ddp(dist_backend="nccl", init_method="tcp://localhost:1234"):
 def get_device(distributed=False, init_method=None, dist_backend=None):
     device_str, pin_memory, master, device_id, world_size = "cpu", False, True, 0, 1
     if distributed:
-        world_size, rank, device_id = setup_ddp(dist_backend=dist_backend, init_method=init_method)
+        world_size, rank, device_id = setup_ddp(
+            dist_backend=dist_backend, init_method=init_method
+        )
         device_str = f"cuda:{device_id}"
         pin_memory = True
         master = rank == 0
@@ -1397,7 +1641,17 @@ def get_size(cfg):
         return f"{cfg.prob.n_objs}-{cfg.prob.n_vars}"
 
 
-def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, weights_type, device, dataset_dict=None):
+def get_split_datasets(
+    pids,
+    problem,
+    size,
+    split,
+    sampling_type,
+    labels_type,
+    weights_type,
+    device,
+    dataset_dict=None,
+):
     datasets = []
     # if dataset_dict is not None:
     #     for pid in pids:
@@ -1409,7 +1663,9 @@ def get_split_datasets(pids, problem, size, split, sampling_type, labels_type, w
     # datasets.append(get_dataset(problem, size, split, pid, neg_pos_ratio, min_samples, device))
     # else:
     for pid in pids:
-        dataset = get_nn_dataset(problem, size, split, pid, sampling_type, labels_type, weights_type, device)
+        dataset = get_nn_dataset(
+            problem, size, split, pid, sampling_type, labels_type, weights_type, device
+        )
         if dataset is not None:
             datasets.append(dataset)
 
@@ -1436,42 +1692,44 @@ def label_bdd(bdd, labeling_scheme):
     return bdd
 
 
-def get_xgb_model_name(max_depth=None,
-                       eta=None,
-                       min_child_weight=None,
-                       subsample=None,
-                       colsample_bytree=None,
-                       objective=None,
-                       num_round=None,
-                       early_stopping_rounds=None,
-                       evals=None,
-                       eval_metric=None,
-                       seed=None,
-                       prob_name=None,
-                       num_objs=None,
-                       num_vars=None,
-                       order=None,
-                       layer_norm_const=None,
-                       state_norm_const=None,
-                       train_from_pid=None,
-                       train_to_pid=None,
-                       train_neg_pos_ratio=None,
-                       train_min_samples=None,
-                       train_flag_layer_penalty=None,
-                       train_layer_penalty=None,
-                       train_flag_imbalance_penalty=None,
-                       train_flag_importance_penalty=None,
-                       train_penalty_aggregation=None,
-                       val_from_pid=None,
-                       val_to_pid=None,
-                       val_neg_pos_ratio=None,
-                       val_min_samples=None,
-                       val_flag_layer_penalty=None,
-                       val_layer_penalty=None,
-                       val_flag_imbalance_penalty=None,
-                       val_flag_importance_penalty=None,
-                       val_penalty_aggregation=None,
-                       device=None):
+def get_xgb_model_name(
+    max_depth=None,
+    eta=None,
+    min_child_weight=None,
+    subsample=None,
+    colsample_bytree=None,
+    objective=None,
+    num_round=None,
+    early_stopping_rounds=None,
+    evals=None,
+    eval_metric=None,
+    seed=None,
+    prob_name=None,
+    num_objs=None,
+    num_vars=None,
+    order=None,
+    layer_norm_const=None,
+    state_norm_const=None,
+    train_from_pid=None,
+    train_to_pid=None,
+    train_neg_pos_ratio=None,
+    train_min_samples=None,
+    train_flag_layer_penalty=None,
+    train_layer_penalty=None,
+    train_flag_imbalance_penalty=None,
+    train_flag_importance_penalty=None,
+    train_penalty_aggregation=None,
+    val_from_pid=None,
+    val_to_pid=None,
+    val_neg_pos_ratio=None,
+    val_min_samples=None,
+    val_flag_layer_penalty=None,
+    val_layer_penalty=None,
+    val_flag_imbalance_penalty=None,
+    val_flag_importance_penalty=None,
+    val_penalty_aggregation=None,
+    device=None,
+):
     def get_model_name_knapsack():
         name = ""
         if max_depth is not None:
@@ -1635,11 +1893,13 @@ class LayerNodeSelector:
         selected_idx, removed_idx = None, None
         if self.strategy == "width":
             if self.width >= len(scores):
-                selection, selected_idx = [1] * len(scores), list(np.arange(len(scores)))
+                selection, selected_idx = [1] * len(scores), list(
+                    np.arange(len(scores))
+                )
             else:
                 idx_score = sorted(idx_score, key=lambda x: x[1], reverse=True)
-                selected_idx = [i[0] for i in idx_score[:self.width]]
-                for i in idx_score[:self.width]:
+                selected_idx = [i[0] for i in idx_score[: self.width]]
+                for i in idx_score[: self.width]:
                     selection[i[0]] = 1
 
         elif self.strategy == "threshold":
@@ -1663,12 +1923,16 @@ def compute_cardinality(true_pf=None, pred_pf=None):
     else:
         # Defining a data type
         rows, cols = z.shape
-        dt_z = {'names': ['f{}'.format(i) for i in range(cols)],
-                'formats': cols * [z.dtype]}
+        dt_z = {
+            "names": ["f{}".format(i) for i in range(cols)],
+            "formats": cols * [z.dtype],
+        }
 
         rows, cols = z_pred.shape
-        dt_z_pred = {'names': ['f{}'.format(i) for i in range(cols)],
-                     'formats': cols * [z_pred.dtype]}
+        dt_z_pred = {
+            "names": ["f{}".format(i) for i in range(cols)],
+            "formats": cols * [z_pred.dtype],
+        }
 
         # Finding intersection
         found_ndps = np.intersect1d(z.view(dt_z), z_pred.view(dt_z_pred))
@@ -1686,3 +1950,55 @@ def compute_dd_size(dd):
 
 def compute_dd_width(dd):
     return np.max([len(l) for l in dd])
+
+
+def is_better(prev_best, new_result, metric):
+    if (
+        metric == "f1"
+        or metric == "accuracy"
+        or metric == "precision"
+        or metric == "recall"
+    ):
+        if new_result > prev_best:
+            return True
+
+    elif metric == "loss":
+        if new_result < prev_best:
+            return True
+
+    else:
+        raise ValueError("Invalid metric!")
+
+    return False
+
+
+def initialize_eval_metric(metric):
+    if (
+        metric == "f1"
+        or metric == "accuracy"
+        or metric == "precision"
+        or metric == "recall"
+    ):
+        return 0
+
+    elif metric == "loss":
+        return np.infty
+
+
+def adjust_learning_rate(cfg, step, optimizer, warmup_steps, decay_steps):
+    """Linearly increase learning rate and then decrease the learning rate using ReduceLROnPlateau scheduler."""
+    lr = cfg.lr
+    if cfg.warmup > 0 and step < warmup_steps:
+        lr = cfg.lr * (step + 1) / warmup_steps
+    elif cfg.decay_lr and step > decay_steps:
+        lr = cfg.min_lr
+    elif cfg.decay_lr and step <= decay_steps:
+        decay_ratio = (step - warmup_steps) / (decay_steps - warmup_steps)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff ranges 0..1
+        lr = cfg.min_lr + coeff * (cfg.lr - cfg.min_lr)
+
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+    return lr
