@@ -1,7 +1,12 @@
 import numpy as np
+import torch
+from omegaconf import OmegaConf
 from scipy.stats import rankdata
 
+from morbdd import ResourcePaths
 from morbdd.scorer.scorer import NodeScorer
+
+resource = ResourcePaths()
 
 
 class TSPHeuristicNodeScorer(NodeScorer):
