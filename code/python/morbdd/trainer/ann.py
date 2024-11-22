@@ -32,33 +32,47 @@ NBINS = 10
 
 
 class IndepsetBDDNodeDataset(Dataset):
-    def __init__(self, n_vars, n_objs, bdd_node_dataset, obj, adj, top_k=5, norm_const=100, max_objs=10):
+    def __init__(
+        self,
+        n_vars,
+        n_objs,
+        bdd_node_dataset,
+        obj,
+        adj,
+        top_k=5,
+        norm_const=100,
+        max_objs=10,
+    ):
         super(IndepsetBDDNodeDataset, self).__init__()
         self.n_vars = n_vars
         self.n_objs = n_objs
         self.norm_const = norm_const
         self.max_objs = max_objs
 
-        self.nodes = torch.from_numpy(bdd_node_dataset.astype('int16'))
+        self.nodes = torch.from_numpy(bdd_node_dataset.astype("int16"))
         perm = torch.randperm(self.nodes.shape[0])
         self.nodes = self.nodes[perm]
 
         self.top_k = top_k
-        self.obj, self.adj = torch.from_numpy(obj) / self.norm_const, torch.from_numpy(adj)
+        self.obj, self.adj = torch.from_numpy(obj) / self.norm_const, torch.from_numpy(
+            adj
+        )
         self.append_obj_id()
         self.pos = self.precompute_pos_enc(top_k, self.adj)
 
     def __getitem__(self, item):
         pid = self.nodes[item, 0]
 
-        return (self.obj[pid],
-                self.adj[pid],
-                self.pos[pid] if self.top_k > 0 else None,
-                self.nodes[item, 0],
-                self.nodes[item, 1],
-                self.nodes[item, 2],
-                self.nodes[item, 3:3 + self.n_vars],
-                self.nodes[item, 3 + self.n_vars])
+        return (
+            self.obj[pid],
+            self.adj[pid],
+            self.pos[pid] if self.top_k > 0 else None,
+            self.nodes[item, 0],
+            self.nodes[item, 1],
+            self.nodes[item, 2],
+            self.nodes[item, 3 : 3 + self.n_vars],
+            self.nodes[item, 3 + self.n_vars],
+        )
 
     def __len__(self):
         return self.nodes.shape[0]
@@ -85,7 +99,9 @@ class IndepsetBDDNodeDataset(Dataset):
         obj_id = obj_id.repeat((n_vars, 1))
         obj_id = obj_id.repeat((n_items, 1, 1))
         # n_items x n_objs x n_vars x 2
-        self.obj = torch.cat((self.obj.transpose(1, 2).unsqueeze(-1), obj_id.unsqueeze(-1)), dim=-1)
+        self.obj = torch.cat(
+            (self.obj.transpose(1, 2).unsqueeze(-1), obj_id.unsqueeze(-1)), dim=-1
+        )
 
 
 class KnapsackBDDNodeDataset(Dataset):
@@ -106,7 +122,8 @@ def get_stats(losses, data_time, batch_time, result):
         "recall": recall_score(result[:, LABEL], result[:, PREDICTION]),
         "precision": precision_score(result[:, LABEL], result[:, PREDICTION]),
         "acc": accuracy_score(result[:, LABEL], result[:, PREDICTION]),
-        "specificity": (result[result[:, LABEL] == 0][:, PREDICTION] == 0).sum() / result.shape[0],
+        "specificity": (result[result[:, LABEL] == 0][:, PREDICTION] == 0).sum()
+        / result.shape[0],
         "lgt0-mean": np.mean(result[:, LGT0]),
         "lgt0-std": np.std(result[:, LGT0]),
         "lgt0-med": np.median(result[:, LGT0]),
@@ -124,13 +141,15 @@ def get_stats(losses, data_time, batch_time, result):
         "lgt1-count": l1c,
         "lgt1-bins": l1b,
         "score1-count": s1c,
-        "score1-bins": s1b
+        "score1-bins": s1b,
     }
 
     return stats
 
 
-def aggregate_distributed_stats(master, losses=None, data_time=None, batch_time=None, result=None):
+def aggregate_distributed_stats(
+    master, losses=None, data_time=None, batch_time=None, result=None
+):
     if losses is not None:
         dist.all_reduce(losses.sum, dist.ReduceOp.SUM)
         losses.count = torch.tensor(losses.count).to(losses.sum.device)
@@ -142,7 +161,11 @@ def aggregate_distributed_stats(master, losses=None, data_time=None, batch_time=
         dist.all_reduce(batch_time.avg, dist.ReduceOp.AVG)
         dist.all_reduce(batch_time.sum, dist.ReduceOp.AVG)
     if result is not None:
-        result_lst = [torch.zeros_like(result) for _ in range(dist.get_world_size())] if master else None
+        result_lst = (
+            [torch.zeros_like(result) for _ in range(dist.get_world_size())]
+            if master
+            else None
+        )
         dist.gather(result, gather_list=result_lst, dst=0)
         result = torch.cat(result_lst) if master else result
 
@@ -204,16 +227,28 @@ class ANNTrainer(Trainer):
 
     def set_optimizer(self):
         opt_cls = getattr(optim, self.cfg.opt.name)
-        self.optimizer = opt_cls(self.model.parameters(), lr=self.cfg.opt.lr, weight_decay=self.cfg.opt.wd)
+        self.optimizer = opt_cls(
+            self.model.parameters(), lr=self.cfg.opt.lr, weight_decay=self.cfg.opt.wd
+        )
 
     def get_instance_data(self, split, pid):
         data = None
         if self.cfg.prob.name == "knapsack":
-            data = get_instance_data_kp(self.cfg.prob.name, self.cfg.prob.prefix, self.cfg.prob.seed,
-                                        self.cfg.prob.size, split, pid)
-            data["inst_node"] = np.vstack((np.array(data["value"]),
-                                           np.array(data["weight"]).reshape(1, -1),
-                                           np.array(data["capacity"] * self.cfg.prob.n_vars).reshape(1, -1)))
+            data = get_instance_data_kp(
+                self.cfg.prob.name,
+                self.cfg.prob.prefix,
+                self.cfg.prob.seed,
+                self.cfg.prob.size,
+                split,
+                pid,
+            )
+            data["inst_node"] = np.vstack(
+                (
+                    np.array(data["value"]),
+                    np.array(data["weight"]).reshape(1, -1),
+                    np.array(data["capacity"] * self.cfg.prob.n_vars).reshape(1, -1),
+                )
+            )
             data["inst_node"] = data["inst_node"].T
             data["inst_edge"] = None
 
@@ -231,17 +266,24 @@ class ANNTrainer(Trainer):
 
     def set_dataset(self, split):
         self.cfg.split = split
-        dataset_path = path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
-        prefix = get_dataset_prefix(with_parent=self.cfg.bdd_data.with_parent,
-                                    layer_weight=self.cfg.layer_weight,
-                                    neg_to_pos_ratio=self.cfg.bdd_data.neg_to_pos_ratio)
+        dataset_path = (
+            path.dataset / f"{self.cfg.prob.name}/{self.cfg.prob.size}/{self.cfg.split}"
+        )
+        prefix = get_dataset_prefix(
+            with_parent=self.cfg.bdd_data.with_parent,
+            layer_weight=self.cfg.layer_weight,
+            neg_to_pos_ratio=self.cfg.bdd_data.neg_to_pos_ratio,
+        )
         dataset_path = dataset_path / f"{prefix}-{split}.npy"
         print(f"Dataset {split} path: ", dataset_path)
         bdd_node_dataset = np.load(dataset_path)
 
-        from_pid, to_pid = self.cfg.dataset[split].from_pid, self.cfg.dataset[split].to_pid
-        valid_rows = (from_pid <= bdd_node_dataset[:, 0])
-        valid_rows &= (bdd_node_dataset[:, 0] < to_pid)
+        from_pid, to_pid = (
+            self.cfg.dataset[split].from_pid,
+            self.cfg.dataset[split].to_pid,
+        )
+        valid_rows = from_pid <= bdd_node_dataset[:, 0]
+        valid_rows &= bdd_node_dataset[:, 0] < to_pid
 
         bdd_node_dataset = bdd_node_dataset[valid_rows]
         if split == "val":
@@ -262,8 +304,14 @@ class ANNTrainer(Trainer):
         if self.cfg.prob.name == "knapsack":
             pass
         elif self.cfg.prob.name == "indepset":
-            dataset = IndepsetBDDNodeDataset(self.cfg.prob.n_vars, self.cfg.prob.n_objs, bdd_node_dataset,
-                                             inst_node_dataset, inst_edge_dataset, top_k=self.cfg.model.top_k)
+            dataset = IndepsetBDDNodeDataset(
+                self.cfg.prob.n_vars,
+                self.cfg.prob.n_objs,
+                bdd_node_dataset,
+                inst_node_dataset,
+                inst_edge_dataset,
+                top_k=self.cfg.model.top_k,
+            )
         assert dataset is not None
 
         setattr(self, f"{split}_dataset", dataset)
@@ -271,26 +319,54 @@ class ANNTrainer(Trainer):
     @staticmethod
     def print_stats(split, stats, prefix=""):
         epoch = stats["epoch"]
-        ept, bt, dt, = stats[prefix + "epoch_time"], stats[prefix + "batch_time"], stats[prefix + "data_time"]
+        (
+            ept,
+            bt,
+            dt,
+        ) = (
+            stats[prefix + "epoch_time"],
+            stats[prefix + "batch_time"],
+            stats[prefix + "data_time"],
+        )
 
-        print_str = ("{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
-                     "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}")
-        print(print_str.format(epoch, prefix + split, stats[prefix + "f1"], stats[prefix + "acc"],
-                               stats[prefix + "loss"], stats[prefix + "recall"], stats[prefix + "precision"],
-                               stats[prefix + "specificity"], ept, bt, dt))
+        print_str = (
+            "{}:{}: F1: {:4f}, Acc: {:.4f}, Loss {:.4f}, Recall: {:.4f}, Precision: {:.4f}, "
+            "Specificity: {:.4f}, Epoch Time: {:.4f}, Batch Time: {:.4f}, Data Time: {:.4f}"
+        )
+        print(
+            print_str.format(
+                epoch,
+                prefix + split,
+                stats[prefix + "f1"],
+                stats[prefix + "acc"],
+                stats[prefix + "loss"],
+                stats[prefix + "recall"],
+                stats[prefix + "precision"],
+                stats[prefix + "specificity"],
+                ept,
+                bt,
+                dt,
+            )
+        )
 
         print("Logit distribution:")
         print_str = "{}: Mean: {:.4f}, Std: {:.4f}, Min: {:.4f}, Max: {:.4f},"
         for i in ["0", "1"]:
-            print(print_str.format("lgt" + i,
-                                   stats[prefix + "lgt" + i + "-mean"],
-                                   stats[prefix + "lgt" + i + "-std"],
-                                   stats[prefix + "lgt" + i + "-min"],
-                                   stats[prefix + "lgt" + i + "-max"]))
+            print(
+                print_str.format(
+                    "lgt" + i,
+                    stats[prefix + "lgt" + i + "-mean"],
+                    stats[prefix + "lgt" + i + "-std"],
+                    stats[prefix + "lgt" + i + "-min"],
+                    stats[prefix + "lgt" + i + "-max"],
+                )
+            )
         print()
 
     @staticmethod
-    def save_model_and_opt(epoch, save_path, best_model=False, model=None, optimizer=None):
+    def save_model_and_opt(
+        epoch, save_path, best_model=False, model=None, optimizer=None
+    ):
         # print(epoch)
         # print("Is best: {}".format(best_model))
         if best_model:
@@ -334,10 +410,19 @@ class ANNTrainer(Trainer):
         set_seed(self.cfg.seed)
 
         # Set-up device
-        device_data = get_device(distributed=self.cfg.distributed,
-                                 init_method=self.cfg.init_method,
-                                 dist_backend=self.cfg.dist_backend)
-        (self.device, self.device_str, self.pin_memory, self.master, self.device_id, self.world_size) = device_data
+        device_data = get_device(
+            distributed=self.cfg.distributed,
+            init_method=self.cfg.init_method,
+            dist_backend=self.cfg.dist_backend,
+        )
+        (
+            self.device,
+            self.device_str,
+            self.pin_memory,
+            self.master,
+            self.device_id,
+            self.world_size,
+        ) = device_data
         print("Device: ", self.device)
 
         self.set_model()
@@ -353,36 +438,52 @@ class ANNTrainer(Trainer):
             self.model.load_state_dict(ckpt["state_dict"])
             self.optimizer.load_state_dict(ckpt["opt_dict"])
 
-            stats = torch.load(self.ckpt_path / "stats.pt", map_location=torch.device("cpu"))
+            stats = torch.load(
+                self.ckpt_path / "stats.pt", map_location=torch.device("cpu")
+            )
             for v in stats["val"]:
                 if v["f1"] < self.best_f1:
                     self.best_f1 = v["f1"]
             self.start_epoch = int(ckpt["epoch"])
 
         self.model.to(self.device)
-        self.model = DDP(self.model, device_ids=[self.device_id]) if self.cfg.distributed else self.model
+        self.model = (
+            DDP(self.model, device_ids=[self.device_id])
+            if self.cfg.distributed
+            else self.model
+        )
 
         # Initialize dataloaders
         print("N worker dataloader: ", self.cfg.n_worker_dataloader)
         self.set_dataset("train")
-        self.train_sampler = DistributedSampler(self.train_dataset, shuffle=True) if self.cfg.distributed else None
-        self.train_dataloader = DataLoader(self.train_dataset,
-                                           batch_size=self.cfg.batch_size,
-                                           shuffle=(self.train_sampler is None),
-                                           sampler=self.train_sampler,
-                                           num_workers=self.cfg.n_worker_dataloader,
-                                           pin_memory=self.pin_memory)
+        self.train_sampler = (
+            DistributedSampler(self.train_dataset, shuffle=True)
+            if self.cfg.distributed
+            else None
+        )
+        self.train_dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=self.cfg.batch_size,
+            shuffle=(self.train_sampler is None),
+            sampler=self.train_sampler,
+            num_workers=self.cfg.n_worker_dataloader,
+            pin_memory=self.pin_memory,
+        )
 
         self.set_dataset("val")
-        self.val_sampler = DistributedSampler(self.val_dataset, shuffle=False) \
-            if self.cfg.distributed and not self.cfg.validate_on_master \
+        self.val_sampler = (
+            DistributedSampler(self.val_dataset, shuffle=False)
+            if self.cfg.distributed and not self.cfg.validate_on_master
             else None
-        self.val_dataloader = DataLoader(self.val_dataset,
-                                         batch_size=self.cfg.batch_size,
-                                         sampler=self.val_sampler,
-                                         shuffle=False,
-                                         num_workers=self.cfg.n_worker_dataloader,
-                                         pin_memory=self.pin_memory)
+        )
+        self.val_dataloader = DataLoader(
+            self.val_dataset,
+            batch_size=self.cfg.batch_size,
+            sampler=self.val_sampler,
+            shuffle=False,
+            num_workers=self.cfg.n_worker_dataloader,
+            pin_memory=self.pin_memory,
+        )
         self.print_validation_machine()
 
     def setup_predict(self):
@@ -409,9 +510,16 @@ class ANNTrainer(Trainer):
     def validate(self, epoch, split, dataloader):
         stats = {}
         result = None
-        if (not self.cfg.distributed) or (self.cfg.distributed and self.cfg.validate_on_master and self.master) or (
-                self.cfg.distributed and not self.cfg.validate_on_master):
-            data_time, batch_time, losses = Meter('DataTime'), Meter('BatchTime'), Meter('Loss')
+        if (
+            (not self.cfg.distributed)
+            or (self.cfg.distributed and self.cfg.validate_on_master and self.master)
+            or (self.cfg.distributed and not self.cfg.validate_on_master)
+        ):
+            data_time, batch_time, losses = (
+                Meter("DataTime"),
+                Meter("BatchTime"),
+                Meter("Loss"),
+            )
             result = torch.empty((6, 0)).to(self.device)
             max_batches = len(dataloader)
 
@@ -420,21 +528,43 @@ class ANNTrainer(Trainer):
             for batch_id, batch in enumerate(dataloader):
                 if self.pin_memory:
                     batch = [item.to(self.device, non_blocking=True) for item in batch]
-                data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=self.device))
-                log = self.master and self.cfg.log_every > 0 and batch_id % self.cfg.log_every == 0
+                data_time.update(
+                    torch.tensor(
+                        time.time() - start_time,
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
+                )
+                log = (
+                    self.master
+                    and self.cfg.log_every > 0
+                    and batch_id % self.cfg.log_every == 0
+                )
                 curr_iter = (epoch * max_batches) + batch_id
-                loss, batch_result = self.process_batch(batch, curr_iter=curr_iter, log=log, split="val-" + split)
+                loss, batch_result = self.process_batch(
+                    batch, curr_iter=curr_iter, log=log, split="val-" + split
+                )
 
                 result = torch.cat((result, batch_result), dim=1)
                 losses.update(loss.detach(), batch_result.shape[0])
-                batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=self.device))
+                batch_time.update(
+                    torch.tensor(
+                        time.time() - start_time,
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
+                )
                 start_time = time.time()
 
             result = result.T
             if self.cfg.distributed and not self.cfg.validate_on_master:
-                result = aggregate_distributed_stats(self.master, losses=losses, data_time=data_time,
-                                                     batch_time=batch_time,
-                                                     result=result)
+                result = aggregate_distributed_stats(
+                    self.master,
+                    losses=losses,
+                    data_time=data_time,
+                    batch_time=batch_time,
+                    result=result,
+                )
             result = result.cpu().numpy()
             stats = get_stats(losses, data_time, batch_time, result)
 
@@ -444,7 +574,11 @@ class ANNTrainer(Trainer):
         raise NotImplementedError
 
     def train_step(self, epoch):
-        data_time, batch_time, losses = Meter('DataTime'), Meter('BatchTime'), Meter('Loss')
+        data_time, batch_time, losses = (
+            Meter("DataTime"),
+            Meter("BatchTime"),
+            Meter("Loss"),
+        )
         result = torch.empty((6, 0)).to(self.device)
         max_batches = len(self.train_dataloader)
 
@@ -453,12 +587,22 @@ class ANNTrainer(Trainer):
         for batch_id, batch in enumerate(self.train_dataloader):
             if self.pin_memory:
                 batch = [item.to(self.device, non_blocking=True) for item in batch]
-            data_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=self.device))
-            log = self.master and self.cfg.log_every > 0 and batch_id % self.cfg.log_every == 0
+            data_time.update(
+                torch.tensor(
+                    time.time() - start_time, dtype=torch.float32, device=self.device
+                )
+            )
+            log = (
+                self.master
+                and self.cfg.log_every > 0
+                and batch_id % self.cfg.log_every == 0
+            )
             curr_iter = (epoch * max_batches) + batch_id
 
             # Get logits and compute loss
-            output = self.process_batch(batch, curr_iter=curr_iter, log=log, split="train")
+            output = self.process_batch(
+                batch, curr_iter=curr_iter, log=log, split="train"
+            )
             loss, batch_result = output
             # Learn
             self.optimizer.zero_grad()
@@ -467,21 +611,33 @@ class ANNTrainer(Trainer):
                 norm = self.get_grad_norm()
                 self.writer.add_scalar("grad_norm", norm, curr_iter)
             if self.cfg.clip_grad > 0:
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.clip_grad,
-                                               norm_type=self.cfg.norm_type)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(),
+                    self.cfg.clip_grad,
+                    norm_type=self.cfg.norm_type,
+                )
                 if log:
                     norm = self.get_grad_norm(self.model)
                     self.writer.add_scalar("grad_norm_clipped", norm, curr_iter)
             self.optimizer.step()
             result = torch.cat((result, batch_result), dim=1)
             losses.update(loss.detach(), batch_result.shape[0])
-            batch_time.update(torch.tensor(time.time() - start_time, dtype=torch.float32, device=self.device))
+            batch_time.update(
+                torch.tensor(
+                    time.time() - start_time, dtype=torch.float32, device=self.device
+                )
+            )
             start_time = time.time()
 
         result = result.T
         if self.cfg.distributed:
-            result = aggregate_distributed_stats(self.master, losses=losses, data_time=data_time,
-                                                 batch_time=batch_time, result=result)
+            result = aggregate_distributed_stats(
+                self.master,
+                losses=losses,
+                data_time=data_time,
+                batch_time=batch_time,
+                result=result,
+            )
         result = result.cpu().numpy()
         stats = get_stats(losses, data_time, batch_time, result)
 
@@ -491,8 +647,16 @@ class ANNTrainer(Trainer):
         print()
         print("Training in progress...")
         if self.master:
-            print("Train samples: {}, Val samples {}".format(len(self.train_dataset), len(self.val_dataset)))
-            print("Train loader: {}, Val loader {}".format(len(self.train_dataloader), len(self.val_dataloader)))
+            print(
+                "Train samples: {}, Val samples {}".format(
+                    len(self.train_dataset), len(self.val_dataset)
+                )
+            )
+            print(
+                "Train loader: {}, Val loader {}".format(
+                    len(self.train_dataloader), len(self.val_dataloader)
+                )
+            )
 
         for epoch in range(self.start_epoch, self.cfg.epochs):
             if self.cfg.distributed:
@@ -502,10 +666,18 @@ class ANNTrainer(Trainer):
             start_time = time.time()
             stats, result = self.train_step(epoch)
             epoch_time = time.time() - start_time
-            epoch_time = reduce_epoch_time(epoch_time, self.device) if self.cfg.distributed else epoch_time
+            epoch_time = (
+                reduce_epoch_time(epoch_time, self.device)
+                if self.cfg.distributed
+                else epoch_time
+            )
 
             if self.master:
-                epoch_time = float(epoch_time.cpu().numpy()) if self.cfg.distributed else epoch_time
+                epoch_time = (
+                    float(epoch_time.cpu().numpy())
+                    if self.cfg.distributed
+                    else epoch_time
+                )
                 stats.update({"epoch_time": epoch_time, "epoch": epoch + 1})
                 self.train_stats.append(stats)
                 # print("Result shape: ", result.shape)
@@ -516,41 +688,65 @@ class ANNTrainer(Trainer):
                 stats = {"epoch": epoch + 1}
                 for split in self.cfg.validate_on_split:
                     start_time = time.time()
-                    new_stats, result = self.validate(epoch, split, getattr(self, f"{split}_dataloader"))
+                    new_stats, result = self.validate(
+                        epoch, split, getattr(self, f"{split}_dataloader")
+                    )
                     epoch_time = time.time() - start_time
-                    epoch_time = reduce_epoch_time(epoch_time, self.device) \
-                        if self.cfg.distributed and not self.cfg.validate_on_master \
+                    epoch_time = (
+                        reduce_epoch_time(epoch_time, self.device)
+                        if self.cfg.distributed and not self.cfg.validate_on_master
                         else epoch_time
+                    )
 
                     if self.master:
                         # new_stats = dict2cpu(new_stats) if "cpu" not in str(device) else new_stats
-                        epoch_time = float(epoch_time.cpu().numpy()) \
-                            if self.cfg.distributed and not self.cfg.validate_on_master \
+                        epoch_time = (
+                            float(epoch_time.cpu().numpy())
+                            if self.cfg.distributed and not self.cfg.validate_on_master
                             else epoch_time
+                        )
                         new_stats.update({"epoch_time": epoch_time})
 
                         prefix = "tr_" if split == "train" else ""
-                        new_stats = {prefix + k: v for k, v in new_stats.items()} if split == "train" else new_stats
+                        new_stats = (
+                            {prefix + k: v for k, v in new_stats.items()}
+                            if split == "train"
+                            else new_stats
+                        )
                         stats.update(new_stats)
 
                         # print("Result shape: ", result.shape)
                         self.print_stats("val", stats, prefix=prefix)
                         if split == "val" and stats["f1"] > self.best_f1:
                             self.best_f1 = stats["f1"]
-                            self.save_model_and_opt(epoch, self.ckpt_path, best_model=True,
-                                                    model=(self.model.module.state_dict() if self.cfg.distributed else
-                                                           self.model.state_dict()),
-                                                    optimizer=self.optimizer.state_dict())
+                            self.save_model_and_opt(
+                                epoch,
+                                self.ckpt_path,
+                                best_model=True,
+                                model=(
+                                    self.model.module.state_dict()
+                                    if self.cfg.distributed
+                                    else self.model.state_dict()
+                                ),
+                                optimizer=self.optimizer.state_dict(),
+                            )
                             self.save_stats(self.ckpt_path)
                             print("** Best F1: {} **".format(self.best_f1))
 
                 self.val_stats.append(stats)
 
             if self.master and (epoch + 1) % self.cfg.save_every == 0:
-                self.save_model_and_opt(epoch, self.ckpt_path, best_model=False,
-                                        model=(self.model.module.state_dict() if self.cfg.distributed else
-                                               self.model.state_dict()),
-                                        optimizer=self.optimizer.state_dict())
+                self.save_model_and_opt(
+                    epoch,
+                    self.ckpt_path,
+                    best_model=False,
+                    model=(
+                        self.model.module.state_dict()
+                        if self.cfg.distributed
+                        else self.model.state_dict()
+                    ),
+                    optimizer=self.optimizer.state_dict(),
+                )
                 self.save_stats(self.ckpt_path)
 
             print("--------------------------\n") if self.master else None
@@ -598,22 +794,26 @@ class TransformerTrainer(ANNTrainer):
 
     def set_model(self):
         if self.cfg.model.type == "gtf":
-            from morbdd.model.psp import GTFParetoStatePredictor
-            self.model = GTFParetoStatePredictor(n_node_feat=self.cfg.model.n_node_feat,
-                                                 n_edge_type=self.cfg.model.n_edge_type,
-                                                 d_emb=self.cfg.model.d_emb,
-                                                 top_k=self.cfg.model.top_k,
-                                                 n_layers=self.cfg.model.n_layers,
-                                                 n_heads=self.cfg.model.n_heads,
-                                                 dropout_token=self.cfg.model.dropout_token,
-                                                 dropout_attn=self.cfg.model.dropout_attn,
-                                                 dropout_proj=self.cfg.model.dropout_proj,
-                                                 dropout_mlp=self.cfg.model.dropout_mlp,
-                                                 bias_mha=self.cfg.model.bias_mha,
-                                                 bias_mlp=self.cfg.model.bias_mlp,
-                                                 h2i_ratio=self.cfg.model.h2i_ratio)
+            from morbdd.model.base import GTFParetoStatePredictor
+
+            self.model = GTFParetoStatePredictor(
+                n_node_feat=self.cfg.model.n_node_feat,
+                n_edge_type=self.cfg.model.n_edge_type,
+                d_emb=self.cfg.model.d_emb,
+                top_k=self.cfg.model.top_k,
+                n_layers=self.cfg.model.n_layers,
+                n_heads=self.cfg.model.n_heads,
+                dropout_token=self.cfg.model.dropout_token,
+                dropout_attn=self.cfg.model.dropout_attn,
+                dropout_proj=self.cfg.model.dropout_proj,
+                dropout_mlp=self.cfg.model.dropout_mlp,
+                bias_mha=self.cfg.model.bias_mha,
+                bias_mlp=self.cfg.model.bias_mlp,
+                h2i_ratio=self.cfg.model.h2i_ratio,
+            )
         elif self.cfg.model.type == "tf":
-            from morbdd.model.psp import TFParetoStatePredictor
+            from morbdd.model.base import TFParetoStatePredictor
+
             self.model = TFParetoStatePredictor()
         assert self.model is not None, "Invalid model type"
 
@@ -663,7 +863,9 @@ class TransformerTrainer(ANNTrainer):
         logits = logits.detach()
         scores = F.softmax(logits, dim=-1)
         preds = torch.argmax(scores, dim=-1)
-        batch_result = torch.stack((labels, lids, logits[:, 0], logits[:, 1], scores[:, 1], preds))
+        batch_result = torch.stack(
+            (labels, lids, logits[:, 0], logits[:, 1], scores[:, 1], preds)
+        )
 
         return loss, batch_result
 

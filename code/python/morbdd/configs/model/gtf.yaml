@@ -1,10 +1,10 @@
 # Graph transformer config
 type: gtf
 version: 1
-n_node_feat: 2
+n_node_feat: ${prob.n_node_feat}
+n_edge_feat: ${prob.n_edge_feat}
 n_edge_type: 2
 d_emb: 32
-top_k: 5
 n_layers: 4
 n_heads: 8
 act: relu
@@ -17,3 +17,4 @@ bias_mha: false
 bias_mlp: false
 h2i_ratio: 2
 concat_emb: false
+top_k: 5

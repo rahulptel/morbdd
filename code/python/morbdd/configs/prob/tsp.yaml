@@ -7,6 +7,9 @@ size: ${prob.n_objs}_${prob.n_vars}
 grid_size: 1000
 time_limit: 1800
 
+n_node_feat: 7
+n_edge_feat: 1
+
 problem_type: 6
 # 3: coupled
 pf_enum_method: 3
