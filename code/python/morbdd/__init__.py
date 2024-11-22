@@ -22,6 +22,7 @@ class ResourcePaths:
     order = resource / "orders"
     dataset = resource / "datasets"
     checkpoint = resource / "checkpoint"
+    pretrained = resource / "pretrained"
     bin = resource / "bin"
 
 
