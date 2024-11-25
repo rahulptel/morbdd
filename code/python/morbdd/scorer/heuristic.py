@@ -1,5 +1,4 @@
 from .scorer import NodeScorer
-import numpy as np
 
 
 class HeuristicNodeScorer(NodeScorer):

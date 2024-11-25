@@ -39,7 +39,7 @@ class TSPHeuristicNodeScorer(NodeScorer):
         else:
             raise ValueError("Method must be either 'mean'/'max'/'min'")
 
-    def score_nodes(self, layer):
+    def get_score(self, layer):
         scores = []
         for nid, node in enumerate(layer):
             last_visit = node[-1]
@@ -75,7 +75,7 @@ class GTNodeScorer(NodeScorer):
         from morbdd.model.tsp import ParetoNodePredictor
 
         self.model = ParetoNodePredictor(exp_cfg.model)
-        self.model.load_state_dict(torch.load(model_path))
+        self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
         self.model.eval()
 
     @torch.no_grad()
