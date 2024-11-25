@@ -19,6 +19,7 @@ class ResourcePaths:
     inst = resource / "instances"
     bdd = resource / "bdds"
     sol = resource / "sols"
+    restricted_sol = resource / "restricted_sols"
     order = resource / "orders"
     dataset = resource / "datasets"
     checkpoint = resource / "checkpoint"
