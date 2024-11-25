@@ -7,14 +7,14 @@ import torch
 from morbdd.deployer.deployer import Deployer
 from morbdd.trainer.ann import TransformerTrainer
 from morbdd.utils import get_instance_data
-from morbdd import CONST
+from morbdd.utils.const import *
 import torch.nn.functional as F
 
 
 def get_state_tensor(layer, n_vars):
     states = torch.zeros((len(layer), n_vars))
     for node_id, node in enumerate(layer):
-        states[node_id][torch.tensor(node['s']).int()] = 1
+        states[node_id][torch.tensor(node["s"]).int()] = 1
     states = states.float()
 
     return states
@@ -110,21 +110,68 @@ class IndepsetDeployer(Deployer):
         self.trainer.setup_predict()
         print(self.trainer.ckpt_path)
 
-    def save_result(self, pid, data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time):
-        total_time = data_preprocess_time + node_emb_time + inst_emb_time + build_time + pareto_time
+    def save_result(
+        self,
+        pid,
+        data_preprocess_time,
+        node_emb_time,
+        inst_emb_time,
+        build_time,
+        pareto_time,
+    ):
+        total_time = (
+            data_preprocess_time
+            + node_emb_time
+            + inst_emb_time
+            + build_time
+            + pareto_time
+        )
         n_pred_pf, pred_precision = -1, -1
         if self.pred_pf is not None:
             n_pred_pf = len(self.pred_pf)
             if n_pred_pf > 0:
                 pred_precision = self.cardinality_raw / n_pred_pf
 
-        df = pd.DataFrame([[self.cfg.prob.size, self.cfg.deploy.split, pid, total_time, self.size_ratio, self.orig_size,
-                            self.rest_size, self.cardinality, self.cardinality_raw, pred_precision, n_pred_pf,
-                            data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time]],
-                          columns=["size", "split", "pid", "total_time", "size", "orig_size", "rest_size",
-                                   "cardinality", "cardinality_raw", "pred_precision", "n_pred_pf",
-                                   "data_preprocess_time", "node_emb_time",
-                                   "inst_emb_time", "build_time", "pareto_time"])
+        df = pd.DataFrame(
+            [
+                [
+                    self.cfg.prob.size,
+                    self.cfg.deploy.split,
+                    pid,
+                    total_time,
+                    self.size_ratio,
+                    self.orig_size,
+                    self.rest_size,
+                    self.cardinality,
+                    self.cardinality_raw,
+                    pred_precision,
+                    n_pred_pf,
+                    data_preprocess_time,
+                    node_emb_time,
+                    inst_emb_time,
+                    build_time,
+                    pareto_time,
+                ]
+            ],
+            columns=[
+                "size",
+                "split",
+                "pid",
+                "total_time",
+                "size",
+                "orig_size",
+                "rest_size",
+                "cardinality",
+                "cardinality_raw",
+                "pred_precision",
+                "n_pred_pf",
+                "data_preprocess_time",
+                "node_emb_time",
+                "inst_emb_time",
+                "build_time",
+                "pareto_time",
+            ],
+        )
         print(df)
 
         pid = str(pid) + ".csv"
@@ -137,10 +184,16 @@ class IndepsetDeployer(Deployer):
         self.set_trainer()
         self.set_alpha_beta_lid()
         print(self.trainer.model.training)
-        for pid in range(self.cfg.deploy.from_pid, self.cfg.deploy.to_pid, self.cfg.deploy.n_processes):
+        for pid in range(
+            self.cfg.deploy.from_pid,
+            self.cfg.deploy.to_pid,
+            self.cfg.deploy.n_processes,
+        ):
 
             # Load instance data
-            data = get_instance_data(self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid)
+            data = get_instance_data(
+                self.cfg.prob.name, self.cfg.prob.size, self.cfg.deploy.split, pid
+            )
 
             start = time.time()
             # Preprocess data for ML model
@@ -160,16 +213,24 @@ class IndepsetDeployer(Deployer):
             # Set BDD Manager
             order = []
             env = self.get_env()
-            env.reset(self.cfg.prob.problem_type,
-                      self.cfg.prob.preprocess,
-                      self.cfg.prob.pf_enum_method,
-                      self.cfg.prob.maximization,
-                      self.cfg.prob.dominance,
-                      self.cfg.prob.bdd_type,
-                      self.cfg.prob.maxwidth,
-                      order)
-            env.set_inst(self.cfg.prob.n_vars, data["n_cons"], self.cfg.prob.n_objs, data["obj_coeffs"],
-                         data["cons_coeffs"], data["rhs"])
+            env.reset(
+                self.cfg.prob.problem_type,
+                self.cfg.prob.preprocess,
+                self.cfg.prob.pf_enum_method,
+                self.cfg.prob.maximization,
+                self.cfg.prob.dominance,
+                self.cfg.prob.bdd_type,
+                self.cfg.prob.maxwidth,
+                order,
+            )
+            env.set_inst(
+                self.cfg.prob.n_vars,
+                data["n_cons"],
+                self.cfg.prob.n_objs,
+                data["obj_coeffs"],
+                data["cons_coeffs"],
+                data["rhs"],
+            )
 
             # Initializes BDD with the root node
             env.initialize_dd_constructor()
@@ -189,7 +250,9 @@ class IndepsetDeployer(Deployer):
                 states = get_state_tensor(layer, self.cfg.prob.n_vars)
                 vid = torch.tensor(env.get_var_layer()[lid + 1]).int()
 
-                scores = get_node_scores(self.trainer.model, v_emb, inst_emb, lid, vid, states)
+                scores = get_node_scores(
+                    self.trainer.model, v_emb, inst_emb, lid, vid, states
+                )
                 lid += 1
 
                 if self.alpha_lid < lid < self.beta_lid:
@@ -200,7 +263,7 @@ class IndepsetDeployer(Deployer):
                         print("Disconnected at layer: ", {lid})
                     # Restrict if necessary
                     if len(removed_idx):
-                        env.approximate_layer(lid, CONST.RESTRICT, 1, removed_idx)
+                        env.approximate_layer(lid, RESTRICT, 1, removed_idx)
 
             # Generate terminal layer
             env.generate_next_layer()
@@ -216,4 +279,11 @@ class IndepsetDeployer(Deployer):
                 self.pred_pf = None
 
             self.post_process(env, pid)
-            self.save_result(pid, data_preprocess_time, node_emb_time, inst_emb_time, build_time, pareto_time)
+            self.save_result(
+                pid,
+                data_preprocess_time,
+                node_emb_time,
+                inst_emb_time,
+                build_time,
+                pareto_time,
+            )
