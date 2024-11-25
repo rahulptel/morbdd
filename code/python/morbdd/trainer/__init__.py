@@ -1,18 +1,15 @@
+from morbdd.utils.const import *
+
+
 def trainer_factory(cfg):
-    # Transformer
-    if cfg.model.type == "tf":
-        from .ann import TransformerTrainer
-        return TransformerTrainer(cfg)
+    if cfg.prob.prefix == KNAPSACK:
+        if cfg.model.type == GRADIENT_BOOSTED_TREE:
+            from .kp import XGBTrainer
 
-    # Graph Transformer
-    elif cfg.model.type == "gtf":
-        from .ann import TransformerTrainer
-        return TransformerTrainer(cfg)
+            return XGBTrainer(cfg)
 
-    elif cfg.model.type == "gbt":
-        from .xgb import XGBTrainer
-        return XGBTrainer(cfg)
+    if cfg.prob.prefix == TSP:
+        if cfg.model.type == GRAPH_TRANSFORMER:
+            from .tsp import GTTrainer
 
-    elif cfg.model.type == "gbt_rank":
-        from .xgb import XGBRankTrainer
-        return XGBRankTrainer(cfg)
+            return GTTrainer(cfg)
