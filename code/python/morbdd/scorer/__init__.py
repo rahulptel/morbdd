@@ -15,7 +15,7 @@ def scorer_factory(cfg):
         raise ValueError("Unknown scorer {}".format(cfg.scorer))
     elif cfg.prob.prefix == MIS:
         if cfg.scorer == HEURISTIC_STATE_SCORER:
-            from .mis import MISHeuristicNodeScorer
+            from .ind import MISHeuristicNodeScorer
 
             return MISHeuristicNodeScorer(cfg)
         raise ValueError("Unknown scorer {}".format(cfg.scorer))
