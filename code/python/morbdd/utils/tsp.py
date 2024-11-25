@@ -5,10 +5,12 @@ import zipfile
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset, TensorDataset
 
 from morbdd import ResourcePaths as path
+from morbdd.utils import Result
 
 
 class TSPNodeDataset:
@@ -167,6 +169,13 @@ class TSPNodeDataset:
         return len(self.epoch_ids)
 
 
+class TSPResult(Result):
+    def __init__(self):
+        super().__init__()
+        self.edge_agg = None
+        self.next_node = None
+
+
 class FocalLoss(nn.Module):
     def __init__(self, focal=True, gamma=2):
         super(FocalLoss, self).__init__()
@@ -187,26 +196,6 @@ class FocalLoss(nn.Module):
             loss *= alpha  # Class weighted focal loss
 
         return loss.mean()
-
-
-class Result:
-    def __init__(self):
-        self.total_time = None
-        self.orig_size = None
-        self.restricted_size = None
-        self.reduced_size = None
-        self.orig_width = None
-        self.reduced_width = None
-        self.restricted_width = None
-        self.cardinality = None
-        self.cardinality_raw = None
-        self.precision = None
-        self.pred_pf = None
-        self.n_pred_pf = None
-        self.build_time = None
-        self.pareto_time = None
-        self.edge_agg = None
-        self.next_node = None
 
 
 def get_env(n_objs=3):

@@ -71,6 +71,25 @@ class MetricCalculator:
     #     return {'hv_approx': hv_approx}
 
 
+class Result:
+    def __init__(self):
+        self.total_time = None
+        self.orig_size = None
+        self.restricted_size = None
+        self.reduced_size = None
+        self.orig_width = None
+        self.reduced_width = None
+        self.restricted_width = None
+        self.cardinality = None
+        self.cardinality_raw = None
+        self.precision = None
+        self.pred_pf = None
+        self.pred_sol = None
+        self.n_pred_pf = None
+        self.build_time = None
+        self.pareto_time = None
+
+
 def zipdir(path, ziph):
     # Iterate over all the files in the directory
     for root, dirs, files in os.walk(path):
