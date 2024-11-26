@@ -11,11 +11,9 @@ root_path_dict = {
 machine = os.environ.get("machine")
 assert machine is not None
 
-resource_path = root_path_dict[machine]
-
 
 class ResourcePaths:
-    resource = root_path_dict[machine]
+    resource = root_path_dict.get(machine)
     inst = resource / "instances"
     bdd = resource / "bdds"
     sol = resource / "sols"
@@ -28,12 +26,3 @@ class ResourcePaths:
 
 
 sys.path.append(str(ResourcePaths.bin))
-
-
-class CONST:
-    TIME_COMPILE = 1
-    TIME_PARETO = 2
-    ONE_ARC = 1
-    ZERO_ARC = -1
-    RESTRICT = 1
-    RELAX = 2
