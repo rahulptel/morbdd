@@ -18,15 +18,15 @@ from morbdd.utils.tsp import get_model_str, get_optimizer_str, get_exp_str
 
 class MLP(nn.Module):
     def __init__(
-        self,
-        d_in,
-        d_hid,
-        d_out,
-        bias=True,
-        ln_eps=1e-5,
-        act="relu",
-        dropout=0.0,
-        normalize=False,
+            self,
+            d_in,
+            d_hid,
+            d_out,
+            bias=True,
+            ln_eps=1e-5,
+            act="relu",
+            dropout=0.0,
+            normalize=False,
     ):
         super(MLP, self).__init__()
         self.d_in = d_in
@@ -423,10 +423,10 @@ def test(cfg, model, dataset, dataloader, loss_fn):
 
 def is_better(prev_best, new_result, metric):
     if (
-        metric == "f1"
-        or metric == "accuracy"
-        or metric == "precision"
-        or metric == "recall"
+            metric == "f1"
+            or metric == "accuracy"
+            or metric == "precision"
+            or metric == "recall"
     ):
         if new_result > prev_best:
             return True
@@ -440,10 +440,10 @@ def is_better(prev_best, new_result, metric):
 
 def initialize_eval_metric(metric):
     if (
-        metric == "f1"
-        or metric == "accuracy"
-        or metric == "precision"
-        or metric == "recall"
+            metric == "f1"
+            or metric == "accuracy"
+            or metric == "precision"
+            or metric == "recall"
     ):
         return 0
 
@@ -488,15 +488,15 @@ def print_eval_result(split, ep, max_epochs, global_step, max_steps, result):
 
 
 def training_loop(
-    cfg,
-    model,
-    optimizer,
-    loss_fn,
-    train_dataset,
-    val_dataset,
-    train_loader=None,
-    val_loader=None,
-    metric_type="f1",
+        cfg,
+        model,
+        optimizer,
+        loss_fn,
+        train_dataset,
+        val_dataset,
+        train_loader=None,
+        val_loader=None,
+        metric_type="f1",
 ):
     print("----------------- Training loop -----------------")
     print("N samples: train: {} val: {}".format(len(train_dataset), len(val_dataset)))
@@ -624,6 +624,7 @@ def main(cfg):
         device,
         resample=cfg.resample,
         subsample=cfg.subsample.train,
+        n_insts=cfg.n_insts.train,
     )
     train_loader = get_dataloader(
         train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
@@ -636,6 +637,7 @@ def main(cfg):
         device,
         resample=False,
         subsample=cfg.subsample.val,
+        n_insts=cfg.n_insts.val,
     )
     val_loader = get_dataloader(
         val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False

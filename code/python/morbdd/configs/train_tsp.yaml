@@ -29,6 +29,9 @@ resample: false
 subsample:
   train: 1
   val: 1
+n_insts:
+  train: 50
+  val: 100
 
 hydra:
   output_subdir: null

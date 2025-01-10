@@ -12,21 +12,22 @@ from morbdd import ResourcePaths as path
 
 class TSPNodeDataset:
     GRID_DIM = 1000
-    MAX_DIST_ON_GRID = ((GRID_DIM**2) + (GRID_DIM**2)) ** (1 / 2)
-    INSTS_PER_SPLIT = {"train": 1000, "val": 100, "test": 100}
+    MAX_DIST_ON_GRID = ((GRID_DIM ** 2) + (GRID_DIM ** 2)) ** (1 / 2)
+    MAX_INSTS_PER_SPLIT = {"train": 1000, "val": 100, "test": 100}
     PID_OFFSET = {"train": 0, "val": 1000, "test": 1100}
     COORD_DIM = 2
     generator = torch.Generator()
     generator.manual_seed(1337)
 
     def __init__(
-        self,
-        n_objs,
-        n_vars,
-        split,
-        device,
-        resample,
-        subsample,
+            self,
+            n_objs,
+            n_vars,
+            split,
+            device,
+            resample=False,
+            subsample=0,
+            n_insts=None,
     ):
         self.n_objs = n_objs
         self.n_vars = n_vars
@@ -34,9 +35,11 @@ class TSPNodeDataset:
         self.device = device
         self.resample = resample
         self.subsample = subsample
+        self.n_insts = self.MAX_INSTS_PER_SPLIT.get(split) if n_insts is None else n_insts
 
         self.size = f"{n_objs}_{n_vars}"
         self.split = split
+        self.pid_offset = self.PID_OFFSET[split]
         self.inst_path = path.inst / f"tsp/{self.size}/{split}"
         self.dataset_path = path.dataset / f"tsp/{self.size}"
 
@@ -56,6 +59,8 @@ class TSPNodeDataset:
 
         # Node data
         node_np = np.load(self.dataset_path / f"{split}.npz")["arr_0"]
+        # Filter node data for the instances currently active
+        node_np = node_np[node_np[:, 0] < self.pid_offset + self.n_insts]
         self.node_data = torch.from_numpy(node_np).float().to(device)
         n_nodes = self.node_data.shape[0]
         self.ids = torch.arange(n_nodes).to(device)
@@ -113,14 +118,12 @@ class TSPNodeDataset:
 
     def set_instance_data(self):
         # Load coordinates and distance matrix to GPU
-        n_samples = self.INSTS_PER_SPLIT.get(self.split, None)
-        assert n_samples is not None
-        self.coords = torch.zeros((n_samples, self.n_objs, self.n_vars, self.COORD_DIM))
-        self.dists = torch.zeros((n_samples, self.n_objs, self.n_vars, self.n_vars))
-        for p in self.inst_path.rglob("*.npz"):
-            pid = int(p.stem.split("_")[-1])
-            d = np.load(p)
-            idx = pid - self.PID_OFFSET[self.split]
+        # n_samples = self.INSTS_PER_SPLIT.get(self.split, None)
+        # assert n_samples is not None
+        self.coords = torch.zeros((self.n_insts, self.n_objs, self.n_vars, self.COORD_DIM))
+        self.dists = torch.zeros((self.n_insts, self.n_objs, self.n_vars, self.n_vars))
+        for idx, pid in enumerate(range(self.pid_offset, self.pid_offset + self.n_insts)):
+            d = np.load(self.inst_path / f"tsp_7_{self.size}_{pid}.npz")
             self.coords[idx] = torch.from_numpy(d["coords"])
             self.dists[idx] = torch.from_numpy(d["dists"])
         self.dists = self.dists.float().to(self.device) / self.MAX_DIST_ON_GRID
@@ -130,7 +133,7 @@ class TSPNodeDataset:
         )
 
     def get_instance_data(self, pids):
-        idxs = pids - self.PID_OFFSET[self.split]
+        idxs = pids - self.pid_offset
         return self.coords[idxs], self.dists[idxs]
 
     def set_epoch_node_ids(self):
