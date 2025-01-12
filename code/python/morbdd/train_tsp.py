@@ -594,6 +594,7 @@ def training_loop(
                         prefix, best_epoch, best_step, metric_type, best_metric
                     )
                 )
+                print()
 
         # Resample training dataset by modifying the negative samples
         if cfg.resample and cfg.subsample.train > 0:
@@ -617,6 +618,8 @@ def main(cfg):
         cfg.optimizer.min_lr = cfg.optimizer.lr / 10
 
     # Construct dataset
+    generator = torch.Generator()
+    generator.manual_seed(1337)
     train_dataset = TSPNodeDataset(
         cfg.prob.n_objs,
         cfg.prob.n_vars,
@@ -624,12 +627,16 @@ def main(cfg):
         device,
         resample=cfg.resample,
         subsample=cfg.subsample.train,
+        neg_to_pos_ratio=cfg.neg_to_pos_ratio,
         n_insts=cfg.n_insts.train,
+        generator=generator
     )
     train_loader = get_dataloader(
         train_dataset, batch_size=cfg.batch_size, shuffle=True, drop_last=True
     )
 
+    generator = torch.Generator()
+    generator.manual_seed(4584)
     val_dataset = TSPNodeDataset(
         cfg.prob.n_objs,
         cfg.prob.n_vars,
@@ -637,7 +644,9 @@ def main(cfg):
         device,
         resample=False,
         subsample=cfg.subsample.val,
+        neg_to_pos_ratio=cfg.neg_to_pos_ratio,
         n_insts=cfg.n_insts.val,
+        generator=generator
     )
     val_loader = get_dataloader(
         val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False

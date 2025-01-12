@@ -22,16 +22,21 @@ grad_clip: 0.0
 eval_every: 150
 weighted_loss: false
 
-# Resample negative class for each epoch
-resample: false
-# 0: Do not subsample
-# k: Samples k negative data points for one positive data point
+# Number of instances to use to create the dataset
+# Train max: 1000
+# Val/Test max: 100
+n_insts:
+  train: 100
+  val: 100
+# Number of negative samples per positive sample
+neg_to_pos_ratio: 1
+# Fraction of positive samples to use to create the dataset
 subsample:
   train: 1
   val: 1
-n_insts:
-  train: 50
-  val: 100
+# Resample train dataset for each epoch. Useful when
+resample: false
+
 
 hydra:
   output_subdir: null

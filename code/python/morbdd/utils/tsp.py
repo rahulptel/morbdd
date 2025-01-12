@@ -16,8 +16,6 @@ class TSPNodeDataset:
     MAX_INSTS_PER_SPLIT = {"train": 1000, "val": 100, "test": 100}
     PID_OFFSET = {"train": 0, "val": 1000, "test": 1100}
     COORD_DIM = 2
-    generator = torch.Generator()
-    generator.manual_seed(1337)
 
     def __init__(
             self,
@@ -25,17 +23,24 @@ class TSPNodeDataset:
             n_vars,
             split,
             device,
-            resample=False,
-            subsample=0,
             n_insts=None,
+            subsample=1,
+            neg_to_pos_ratio=1,
+            resample=False,
+            generator=None,
+
     ):
         self.n_objs = n_objs
         self.n_vars = n_vars
         self.split = split
         self.device = device
-        self.resample = resample
-        self.subsample = subsample
         self.n_insts = self.MAX_INSTS_PER_SPLIT.get(split) if n_insts is None else n_insts
+        self.subsample = subsample
+        self.neg_to_pos_ratio = neg_to_pos_ratio
+        self.resample = resample
+        self.generator = generator
+
+        self.n_samples_pos, self.n_samples_neg = None, None
 
         self.size = f"{n_objs}_{n_vars}"
         self.split = split
@@ -61,11 +66,35 @@ class TSPNodeDataset:
         node_np = np.load(self.dataset_path / f"{split}.npz")["arr_0"]
         # Filter node data for the instances currently active
         node_np = node_np[node_np[:, 0] < self.pid_offset + self.n_insts]
+        n_nodes = node_np.shape[0]
+
         self.node_data = torch.from_numpy(node_np).float().to(device)
-        n_nodes = self.node_data.shape[0]
         self.ids = torch.arange(n_nodes).to(device)
+        # Index of positive and negative samples
         self.pos_ids = self.ids[self.node_data[:, -1] == 1]
         self.neg_ids = self.ids[self.node_data[:, -1] != 1]
+        # Shuffle neg ids
+        self.neg_ids = self.neg_ids[torch.randperm(self.neg_ids.shape[0], generator=self.generator)]
+        # Select neg_to_pos_ratio * pos_ids.shape[0] many negative samples
+        # If there are not enough negative samples, use the maximum available samples: neg_ids.shape[0]
+        self.neg_ids = self.neg_ids[: min(self.pos_ids.shape[0] * self.neg_to_pos_ratio,
+                                          self.neg_ids.shape[0])]
+
+        # Create node id datasets
+        self.pos_ids_dataset, self.neg_ids_dataset = TensorDataset(self.pos_ids.long().to(self.device)), TensorDataset(
+            self.neg_ids.long().to(self.device))
+        # Number of positive and negatives samples
+        self.n_samples_pos, self.n_samples_neg = int(self.pos_ids.shape[0] * subsample), int(
+            self.neg_ids.shape[0] * subsample)
+        self.pos_ids_loader = DataLoader(self.pos_ids_dataset, batch_size=self.n_samples_pos, shuffle=True,
+                                         drop_last=True)
+        self.pos_ids_iter = iter(self.pos_ids_loader)
+
+        self.neg_ids_loader = DataLoader(self.neg_ids_dataset, batch_size=self.n_samples_neg, shuffle=True,
+                                         drop_last=True)
+        self.neg_ids_iter = iter(self.neg_ids_loader)
+        self.set_epoch_node_ids()
+
         # Index 0: negative class weight
         # Index 1: positive class weight
         self.sample_weight = (
@@ -81,13 +110,11 @@ class TSPNodeDataset:
             .to(device)
         )
 
-        self.epoch_ids = None
         print("Pos ids: ", self.pos_ids.shape)
         print("Neg ids: ", self.neg_ids.shape)
         self.node_dataset = TensorDataset(
             self.node_data[:, 0:-1], self.node_data[:, -1]
         )
-        self.set_epoch_node_ids()
 
         # Compute layer weights
         # self.lw = self.get_layer_weights_exponential(self.node_data[:, 1]).to(device)
@@ -137,36 +164,32 @@ class TSPNodeDataset:
         return self.coords[idxs], self.dists[idxs]
 
     def set_epoch_node_ids(self):
-        pos = self.pos_ids
-        # Set neg ids
-        neg = self.neg_ids[
-            torch.randperm(self.neg_ids.shape[0], generator=self.generator)
-        ]
-        if self.subsample == 0:
-            neg_idx = self.neg_ids.shape[0]
-        else:
-            neg_idx = self.subsample * self.pos_ids.shape[0]
-        neg = neg[:neg_idx]
+        try:
+            pos = next(self.pos_ids_iter)
+        except StopIteration:
+            self.pos_ids_iter = iter(self.pos_ids_loader)
+            pos = next(self.pos_ids_iter)
+
+        try:
+            neg = next(self.neg_ids_iter)
+        except StopIteration:
+            self.neg_ids_iter = iter(self.neg_ids_loader)
+            neg = next(self.neg_ids_iter)
+
         # Set epoch ids
-        self.epoch_ids = torch.cat((pos, neg))
+        self.epoch_ids = torch.cat((pos[0], neg[0]))
         self.epoch_ids = self.epoch_ids[
             torch.randperm(self.epoch_ids.shape[0], generator=self.generator)
         ]
 
     def get_epoch_node_dataset(self):
-        if self.resample and self.subsample > 0:
+        if self.resample:
             print(f"Sampling new {self.split} dataset")
             self.set_epoch_node_ids()
-            return Subset(self.node_dataset, self.epoch_ids)
-        elif not self.resample and self.subsample > 0:
-            return Subset(self.node_dataset, self.epoch_ids)
-        elif self.subsample == 0:
-            return self.node_dataset
-        else:
-            raise ValueError("Subsample must be greater than 0")
+        return Subset(self.node_dataset, self.epoch_ids)
 
     def __len__(self):
-        return len(self.epoch_ids)
+        return self.n_samples_pos + self.n_samples_neg
 
 
 class Result:
@@ -262,6 +285,9 @@ def get_exp_str(cfg):
     if cfg.weighted_loss:
         exp_str += f"-wl-"
     exp_str += f"-gcl-{cfg.grad_clip}"
+    exp_str += f"-nitr-{cfg.n_insts.train}"
+    exp_str += f"-nivl-{cfg.n_insts.val}"
+    exp_str += f"-npr-{cfg.neg_to_pos_ratio}"
     exp_str += f"-rs-{str(cfg.resample)}"
     exp_str += f"-sst-{str(cfg.subsample.train)}"
     exp_str += f"-ssv-{str(cfg.subsample.val)}"
