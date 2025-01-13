@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from omegaconf import OmegaConf
 from sklearn.metrics import confusion_matrix
+from torch.nn import TransformerEncoder, TransformerEncoderLayer
 
 from morbdd import ResourcePaths as path
 from morbdd.utils.tsp import TSPNodeDataset
@@ -219,6 +220,27 @@ class TokenEmbedGraph(nn.Module):
         return n, e
 
 
+class PositionalEncoding(nn.Module):
+    """Implement the PE function.
+    Reference: https://nlp.seas.harvard.edu/annotated-transformer/#positional-encoding
+    """
+
+    def __init__(self, d_emb, max_len=25):
+        super(PositionalEncoding, self).__init__()
+
+        # Compute the positional encodings once in log space.
+        pe = torch.zeros(max_len, d_emb)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_emb, 2) * -(math.log(10000.0) / d_emb))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer("pe", pe)
+
+    def forward(self, x):
+        return x + self.pe[:, : x.size(1)].requires_grad_(False)
+
+
 class ParetoNodePredictor(nn.Module):
     # NOT_VISITED = 0
     # VISITED = 1
@@ -282,6 +304,174 @@ class ParetoNodePredictor(nn.Module):
             )
         else:
             return self.pareto_predictor(node_visit + customer_enc + l_enc)
+
+    def configure_optimizer(self, cfg):
+        if cfg.wd > 0:
+            # Ref: https://github.com/karpathy/nanoGPT/blob/master/model.py
+            # start with all of the candidate parameters
+            param_dict = {pn: p for pn, p in self.named_parameters()}
+            # filter out those that do not require grad
+            param_dict = {pn: p for pn, p in param_dict.items() if p.requires_grad}
+            # create optim groups. Any parameters that is 2D will be weight decayed, otherwise no.
+            # i.e. all weight tensors in matmuls + embeddings decay, all biases and layernorms don't.
+            decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+            nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+            optim_groups = [
+                {"params": decay_params, "weight_decay": cfg.wd},
+                {"params": nodecay_params, "weight_decay": 0.0},
+            ]
+            num_decay_params = sum(p.numel() for p in decay_params)
+            num_nodecay_params = sum(p.numel() for p in nodecay_params)
+            print(
+                f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters"
+            )
+            print(
+                f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters"
+            )
+            optimizer_cls = getattr(torch.optim, cfg.type)
+            optimizer = optimizer_cls(
+                optim_groups,
+                lr=cfg.lr,
+                betas=(cfg.beta1, cfg.beta2),
+            )
+        else:
+            optimizer_cls = getattr(torch.optim, cfg.type)
+            optimizer = optimizer_cls(
+                self.parameters(),
+                lr=cfg.lr,
+                betas=(cfg.beta1, cfg.beta2),
+            )
+        print(f"using optimizer: {cfg.type}")
+        print()
+
+        return optimizer
+
+
+class ParetoNodePredictorTF(nn.Module):
+    # NOT_VISITED = 0
+    # VISITED = 1
+    # LAST_VISITED = 2
+    NODE_VISIT_TYPES = 3
+    N_LAYER_INDEX = 1
+    N_CLASSES = 2
+
+    def __init__(self, cfg):
+        super(ParetoNodePredictorTF, self).__init__()
+        self.concat_emb = cfg.concat_emb
+        self.n_heads = cfg.n_heads
+
+        self.act = nn.ReLU() if cfg.act == "relu" else nn.GELU()
+
+        self.node_projector = nn.Linear(7, cfg.d_emb)
+        self.node_token = nn.Parameter(torch.randn(1, 1, cfg.d_emb))
+        self.pos_encoder = PositionalEncoding(cfg.d_emb, max_len=10)
+        # Wq, Wk, Wv
+        self.layer_norm = nn.LayerNorm(cfg.d_emb)
+        self.W_qkv = nn.Linear(cfg.d_emb, 3 * cfg.d_emb, bias=cfg.bias_mha)
+        self.d_k = cfg.d_emb // cfg.n_heads
+        self.node_tokenizer = TransformerEncoderLayer(d_model=cfg.d_emb,
+                                                      nhead=cfg.n_heads,
+                                                      dim_feedforward=cfg.h2i_ratio * cfg.d_emb,
+                                                      dropout=cfg.dropout,
+                                                      batch_first=True,
+                                                      norm_first=True,
+                                                      bias=False)
+        self.W_o = nn.Linear(cfg.d_emb, cfg.d_emb, bias=cfg.bias_mlp)
+        self.graph_encoder = TransformerEncoder(TransformerEncoderLayer(d_model=cfg.d_emb,
+                                                                        nhead=cfg.n_heads,
+                                                                        dim_feedforward=cfg.h2i_ratio * cfg.d_emb,
+                                                                        dropout=cfg.dropout,
+                                                                        batch_first=True,
+                                                                        norm_first=True,
+                                                                        bias=False),
+                                                cfg.n_layers)
+        self.visit_encoder = nn.Embedding(self.NODE_VISIT_TYPES, cfg.d_emb)
+        self.node_visit_encoder1 = nn.Sequential(
+            nn.Linear(cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
+            self.act,
+        )
+        self.node_visit_encoder2 = nn.Sequential(
+            nn.Linear(cfg.h2i_ratio * cfg.d_emb, cfg.d_emb),
+            self.act,
+        )
+        self.layer_encoder = nn.Sequential(
+            nn.Linear(self.N_LAYER_INDEX, cfg.d_emb),
+            self.act,
+        )
+        if self.concat_emb:
+            self.pareto_predictor = nn.Sequential(
+                nn.Linear(3 * cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
+                self.act,
+                nn.Linear(cfg.h2i_ratio * cfg.d_emb, self.N_CLASSES),
+            )
+        else:
+            self.pareto_predictor = nn.Sequential(
+                nn.Linear(cfg.d_emb, cfg.h2i_ratio * cfg.d_emb),
+                self.act,
+                nn.Linear(cfg.h2i_ratio * cfg.d_emb, self.N_CLASSES),
+            )
+
+    def forward(self, n, _, l, s):
+        # B x n_objs x n_vars x n_node_feat -> B x n_vars x d_emb
+        n = self.tokenize_node(n)
+        n = self.graph_encoder(n)  # B x n_vars x d_emb
+        B, n_vars, d_emb = n.shape
+
+        last_visit = s[:, -1]
+        visit_mask = s[:, :-1]
+        visit_mask[torch.arange(B), last_visit.long()] = 2
+        visit_enc = self.visit_encoder(visit_mask.long())
+
+        # B x d_emb
+        node_visit = self.node_visit_encoder2(
+            self.node_visit_encoder1((n + visit_enc)).sum(1)
+        )
+        customer_enc = n[torch.arange(B), last_visit.long()]
+        l_enc = self.layer_encoder(((n_vars - l) / n_vars).unsqueeze(-1))
+
+        if self.concat_emb:
+            return self.pareto_predictor(
+                torch.cat((node_visit, customer_enc, l_enc), dim=-1)
+            )
+        else:
+            return self.pareto_predictor(node_visit + customer_enc + l_enc)
+
+    def tokenize_node(self, n):
+        B, n_objs, n_vars, n_node_feat = n.shape
+
+        # Input embedding + positional encoding
+        # Linear projection of node features
+        # B x n_objs x n_vars x n_node_feat -> B x n_obj x n_vars x d_emb
+        n = self.node_projector(n)
+        n = n.transpose(1, 2).reshape(B * n_vars, n_objs, -1)  # (B x n_vars) x n_objs x d_emb
+
+        # Prepend special node token
+        node_token = self.node_token.expand(B * n_vars, -1, -1)
+        n = torch.cat([node_token, n], dim=1)  # (B x n_vars) x n_objs+1 x d_emb
+
+        # Add positional information to node seq
+        n_init = self.pos_encoder(n)  # (B x n_vars) x n_objs+1 x d_emb
+
+        # Multi-head Self Attention
+        # 3 x (B x n_vars) x n_heads x n_objs+1 x d_k
+        QKV = (
+            self.W_qkv(self.layer_norm(n_init))
+            .reshape(B * n_vars, -1, 3, self.n_heads, self.d_k)
+            .permute(2, 0, 3, 1, 4)
+        )
+        # (B x n_vars) x n_heads x n_objs+1 x d_k
+        Q, K, V = QKV[0], QKV[1], QKV[2]
+        # (B x n_vars) x n_heads x 1 x d_k
+        # Interested in attention vector corresponding to the node_token
+        q_node_token = Q[:, :, 0, :].unsqueeze(2)
+        # (B x n_vars) x n_heads x 1 x n_objs+1
+        scores = torch.einsum("ijkl,ijlm->ijkm", [q_node_token, K.transpose(-2, -1)]) / math.sqrt(self.d_k)
+        attn = torch.softmax(scores, dim=-1)
+        # (B x n_vars) x n_heads x 1 x d_k -> B x n_vars x d_emb
+        n_new = self.W_o((attn @ V).reshape(B, n_vars, -1))
+
+        # Residual connection
+        return n_init[:, 0, :].reshape(B, n_vars, -1) + n_new
 
     def configure_optimizer(self, cfg):
         if cfg.wd > 0:
@@ -652,7 +842,11 @@ def main(cfg):
         val_dataset, batch_size=cfg.batch_size, shuffle=False, drop_last=False
     )
 
-    model = ParetoNodePredictor(cfg.model).to(device)
+    if cfg.model.type == "gtf":
+        model = ParetoNodePredictor(cfg.model).to(device)
+    else:
+        print("TF")
+        model = ParetoNodePredictorTF(cfg.model).to(device)
     optimizer = model.configure_optimizer(cfg.optimizer)
     loss_fn = F.cross_entropy
 
